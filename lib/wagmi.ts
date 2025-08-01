@@ -1,6 +1,8 @@
 // lib/wagmi.ts
 import { createConfig, WagmiConfig } from 'wagmi'
-import { InjectedConnector } from 'wagmi/connectors/injected'
+-import { InjectedConnector } from 'wagmi/connectors/injected'
++import { InjectedConnector } from '@wagmi/connectors'
+
 import { createPublicClient, http } from 'viem'
 
 // Base mainnet definition
@@ -23,7 +25,8 @@ export const publicClient = createPublicClient({
 // Build the Wagmi config
 export const wagmiConfig = createConfig({
   autoConnect: true,
-  connectors: [new InjectedConnector({ chains: [baseChain] })],
+-  connectors: [new InjectedConnector({ chains: [baseChain] })],
++  connectors: [new InjectedConnector({ chains: [baseChain] })],
   publicClient,
 })
 
