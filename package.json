@@ -8,10 +8,12 @@
     "start": "next start"
   },
   "dependencies": {
-    "ethers": "^6.0.0",
     "next": "13.5.6",
     "react": "18.2.0",
     "react-dom": "18.2.0",
-    "wagmi": "^1.5.8"
+    "ethers": "^6.1.0",
+    "wagmi": "^2.16.1",
+    "viem": "^2.18.0",
+    "@tanstack/react-query": "^4.34.1"
   }
 }
