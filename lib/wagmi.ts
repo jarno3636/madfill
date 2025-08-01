@@ -3,7 +3,7 @@ import { createConfig, WagmiConfig } from 'wagmi'
 import { InjectedConnector } from 'wagmi/connectors/injected'
 import { createPublicClient, http } from 'viem'
 
-// Define Base network
+// Base mainnet definition
 export const baseChain = {
   id: 8453,
   name: 'Base',
@@ -20,12 +20,14 @@ export const publicClient = createPublicClient({
   transport: http(),
 })
 
+// Build the Wagmi config
 export const wagmiConfig = createConfig({
   autoConnect: true,
   connectors: [new InjectedConnector({ chains: [baseChain] })],
   publicClient,
 })
 
+// Wrap your app
 export function WagmiProvider({ children }: { children: React.ReactNode }) {
   return <WagmiConfig config={wagmiConfig}>{children}</WagmiConfig>
 }
