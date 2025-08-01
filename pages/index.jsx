@@ -14,13 +14,31 @@ export default function Home() {
 
   // ——— Templates ———
   const templates = [
-    { id: 0, name: 'Once upon a time, I __X__ to the __Y__.', blanks: 2 },
-    { id: 1, name: 'The quick brown __X__ jumps over the lazy __Y__.', blanks: 2 },
-    // add more here...
+    {
+      id: 0,
+      name: 'Adventure',
+      parts: [
+        'Once upon a time, I ',
+        ' to the ',
+        '.'
+      ],
+      blanks: 2
+    },
+    {
+      id: 1,
+      name: 'Quick Fox',
+      parts: [
+        'The quick brown ',
+        ' jumps over the lazy ',
+        '.'
+      ],
+      blanks: 2
+    },
+    // …add more templates here…
   ]
   const [templateId, setTemplateId] = useState(templates[0].id)
 
-  // ——— Duration (days) ———
+  // ——— Duration ———
   const durations = [
     { label: '1 Day', value: 1 },
     { label: '2 Days', value: 2 },
@@ -32,14 +50,14 @@ export default function Home() {
   ]
   const [duration, setDuration] = useState(durations[0].value)
 
-  // ——— Fee (fixed) ———
-  const ENTRY_FEE = '0.001'  // in BASE
+  // ——— Fixed Entry Fee ———
+  const ENTRY_FEE = '0.001' // in BASE
 
-  // ——— Entry Flow ———
-  const [roundId, setRoundId]     = useState('0')
+  // ——— Submission state ———
+  const [roundId, setRoundId]       = useState('0')
   const [blankIndex, setBlankIndex] = useState('0')
-  const [word, setWord]           = useState('')
-  const [mode, setMode]           = useState('paid')  // 'paid' or 'free'
+  const [word, setWord]             = useState('')
+  const [mode, setMode]             = useState('paid') // 'paid' or 'free'
   const [entryStatus, setEntryStatus] = useState('')
 
   // ——— Connect Wallet ———
@@ -53,7 +71,13 @@ export default function Home() {
             rpc: { 8453: 'https://mainnet.base.org' },
             chainId: 8453,
             qrcodeModalOptions: {
-              mobileLinks: ['metamask','trust','rainbow','argent','imtoken']
+              mobileLinks: [
+                'metamask',
+                'trust',
+                'rainbow',
+                'argent',
+                'imtoken'
+              ]
             }
           }
         }
@@ -87,7 +111,7 @@ export default function Home() {
       const tx = await contract.start(
         tpl.blanks,
         ethers.parseEther(ENTRY_FEE),
-        BigInt(duration * 24 * 60 * 60)  // days → seconds
+        BigInt(duration * 24 * 60 * 60)
       )
       setStatus('⏳ Waiting confirmation…')
       await tx.wait()
@@ -138,31 +162,50 @@ export default function Home() {
     }
   }
 
+  // ——— Paper-style template display ———
+  const paperStyle = {
+    border: '1px solid #ccc',
+    background: '#fafafa',
+    padding: '1rem',
+    fontFamily: 'monospace',
+    whiteSpace: 'pre-wrap',
+    margin: '1rem 0'
+  }
+  const blankStyle = {
+    display: 'inline-block',
+    width: '1.5ch',
+    textAlign: 'center',
+    background: '#fff',
+    border: '1px dashed #888',
+    margin: '0 0.25ch',
+    cursor: 'pointer'
+  }
+
+  const tpl = templates.find((t) => t.id === Number(templateId))
+
   return (
     <>
       <Head><title>MadFill</title></Head>
       <main style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
         <h1>MadFill</h1>
 
-        {/* Connect Wallet */}
+        {/* Connect */}
         <button onClick={connectWallet} disabled={!!signer}>
           {signer ? `👛 ${address}` : 'Connect Wallet'}
         </button>
 
-        {/* SECTION 1: Start a New Round */}
-        <section style={{ border: '1px solid #ddd', padding: '1rem', margin: '2rem 0' }}>
-          <h2>1. Pick a Template & Start Round</h2>
+        {/* 1. Start Round */}
+        <section style={{ margin: '2rem 0', padding: '1rem', border: '1px solid #ddd' }}>
+          <h2>1. Choose Template & Start Round</h2>
           <label>
             Template:
             <select
               value={templateId}
-              onChange={(e) => setTemplateId(e.target.value)}
+              onChange={(e) => { setTemplateId(e.target.value); setBlankIndex('0') }}
               disabled={busy}
             >
               {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
+                <option key={t.id} value={t.id}>{t.name}</option>
               ))}
             </select>
           </label>
@@ -175,9 +218,7 @@ export default function Home() {
               disabled={busy}
             >
               {durations.map((d) => (
-                <option key={d.value} value={d.value}>
-                  {d.label}
-                </option>
+                <option key={d.value} value={d.value}>{d.label}</option>
               ))}
             </select>
           </label>
@@ -188,24 +229,37 @@ export default function Home() {
           {status && <p>{status}</p>}
         </section>
 
-        {/* SECTION 2: Submit Your Entry */}
-        <section style={{ border: '1px solid #ddd', padding: '1rem', margin: '2rem 0' }}>
+        {/* 2. Fill in a Blank */}
+        <section style={{ margin: '2rem 0', padding: '1rem', border: '1px solid #ddd' }}>
           <h2>2. Fill in the Blanks</h2>
-          <p><strong>Round ID:</strong></p>
-          <input
-            type="number"
-            value={roundId}
-            onChange={(e) => setRoundId(e.target.value)}
-            disabled={busy}
-          />
-          &nbsp;
+          {/* Paper-style template */}
+          <div style={paperStyle}>
+            {tpl.parts.map((part, i) => (
+              <span key={i}>
+                {part}
+                {i < tpl.blanks && (
+                  <span
+                    style={{
+                      ...blankStyle,
+                      borderColor: i === Number(blankIndex) ? '#000' : '#888',
+                      background: i === Number(blankIndex) ? '#e0e0e0' : '#fff'
+                    }}
+                    onClick={() => setBlankIndex(String(i))}
+                  >
+                    {i}
+                  </span>
+                )}
+              </span>
+            ))}
+          </div>
+          <p>Selected blank: <strong>{blankIndex}</strong></p>
+
           <label>
-            Blank #:
+            Round ID:
             <input
               type="number"
-              min={0}
-              value={blankIndex}
-              onChange={(e) => setBlankIndex(e.target.value)}
+              value={roundId}
+              onChange={(e) => setRoundId(e.target.value)}
               disabled={busy}
             />
           </label>
