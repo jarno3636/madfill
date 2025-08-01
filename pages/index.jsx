@@ -24,35 +24,43 @@ export default function Home() {
 
   // Connect wallet (injected or deep-link via WalletConnect)
   async function connectWallet() {
-    try {
-      let provider
-      if (window.ethereum) {
-        // injected (MetaMask desktop or in-app)
-        await window.ethereum.request({ method: 'eth_requestAccounts' })
-        provider = new ethers.BrowserProvider(window.ethereum)
-      } else {
-        // mobile/browser fallback: deep-link
-        const wcProvider = new WalletConnectProvider({
-          rpc: { 8453: 'https://mainnet.base.org' },
-          chainId: 8453,
-          qrcode: false,
-          qrcodeModalOptions: {
-            mobileLinks: ['metamask', 'trust', 'rainbow', 'argent', 'imtoken']
-          }
-        })
-        await wcProvider.enable()
-        provider = new ethers.BrowserProvider(wcProvider)
-      }
-
-      const _signer = await provider.getSigner()
-      const _address = await _signer.getAddress()
-      setSigner(_signer)
-      setAddress(_address)
-    } catch (err) {
-      console.error(err)
-      alert('Wallet connection failed: ' + (err.message || err))
+  try {
+    let provider;
+    // 1) Injected (MetaMask desktop or in-app)
+    if (window.ethereum) {
+      await window.ethereum.request({ method: 'eth_requestAccounts' });
+      provider = new ethers.BrowserProvider(window.ethereum);
+    } else {
+      // 2) WalletConnect fallback: QR on desktop, deep-link on mobile
+      const isMobile = /Mobi|Android|iPhone|iPad|iPod/.test(navigator.userAgent);
+      const wcProvider = new WalletConnectProvider({
+        rpc: { 8453: 'https://mainnet.base.org' },
+        chainId: 8453,
+        qrcode: !isMobile,               // show QR on desktop
+        qrcodeModalOptions: {
+          mobileLinks: [
+            'metamask',
+            'trust',
+            'rainbow',
+            'argent',
+            'imtoken'
+          ]
+        }
+      });
+      await wcProvider.enable();
+      provider = new ethers.BrowserProvider(wcProvider);
     }
+
+    // common signer/address setup
+    const _signer = await provider.getSigner();
+    const _address = await _signer.getAddress();
+    setSigner(_signer);
+    setAddress(_address);
+  } catch (err) {
+    console.error(err);
+    alert('Wallet connection failed: ' + (err.message || err));
   }
+}
 
   // start(...)
   async function startRound() {
