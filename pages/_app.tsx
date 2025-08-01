@@ -1,8 +1,8 @@
+// pages/_app.jsx
 import '../styles/globals.css'
-import type { AppProps } from 'next/app'
 import { WagmiProvider } from '../lib/wagmi'
 
-export default function MyApp({ Component, pageProps }: AppProps) {
+export default function MyApp({ Component, pageProps }) {
   return (
     <WagmiProvider>
       <Component {...pageProps} />
