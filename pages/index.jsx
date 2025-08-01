@@ -9,54 +9,61 @@ import abi from '../abi/FillInStoryFull.json'
 export default function Home() {
   const [address, setAddress] = useState(null)
   const [signer, setSigner]   = useState(null)
+  const [busy, setBusy]       = useState(false)
   const [status, setStatus]   = useState('')
 
-  // Start‐round state
-  const [blanks, setBlanks]     = useState('3')
-  const [startFee, setStartFee] = useState('1000000000000000')
-  const [windowSec, setWindowSec] = useState('300')
+  // ----- Round Setup -----
+  const [blanks, setBlanks]       = useState('3')
+  const [fee, setFee]             = useState('0.001')   // BASE
+  const [windowMin, setWindowMin] = useState('5')       // minutes
+  const [startStatus, setStartStatus] = useState('')
 
-  // Paid‐entry state
-  const [paidRoundId, setPaidRoundId]     = useState('0')
-  const [paidIndex, setPaidIndex]         = useState('0')
-  const [paidSubmission, setPaidSubmission] = useState('')
-  const [paidFee, setPaidFee]             = useState('1000000000000000')
-  const [paidStatus, setPaidStatus]       = useState('')
+  // ----- Entry Submission -----
+  const [roundId, setRoundId]       = useState('0')
+  const [blankIndex, setBlankIndex] = useState('0')
+  const [word, setWord]             = useState('')
+  const [mode, setMode]             = useState('paid')  // 'paid' or 'free'
+  const [entryStatus, setEntryStatus] = useState('')
 
-  // Unified connect: injected → Web3Modal
+  // A placeholder story template – replace with real one later:
+  const storyTemplate = 'Once upon a time, I __X__ to the __Y__.' 
+  // where X and Y are blanks 0 and 1
+
+  // Connect (injected or WalletConnect)
   async function connectWallet() {
-    try {
-      const modal = new Web3Modal({
-        cacheProvider: false,
-        providerOptions: {
-          walletconnect: {
-            package: WalletConnectProvider,
-            options: {
-              rpc: { 8453: 'https://mainnet.base.org' },
-              chainId: 8453,
-              qrcodeModalOptions: {
-                mobileLinks: ['metamask','trust','rainbow','argent','imtoken']
-              }
+    const modal = new Web3Modal({
+      cacheProvider: false,
+      providerOptions: {
+        walletconnect: {
+          package: WalletConnectProvider,
+          options: {
+            rpc: { 8453: 'https://mainnet.base.org' },
+            chainId: 8453,
+            qrcodeModalOptions: {
+              mobileLinks: ['metamask','trust','rainbow','argent','imtoken']
             }
           }
         }
-      })
+      }
+    })
+    try {
       const instance = await modal.connect()
       const provider = new ethers.BrowserProvider(instance)
       const _signer  = await provider.getSigner()
       const _address = await _signer.getAddress()
       setSigner(_signer)
       setAddress(_address)
-    } catch (err) {
-      console.error(err)
-      alert('Wallet connection failed: ' + (err.message || err))
+    } catch (e) {
+      console.error(e)
+      alert('Wallet connection failed: ' + (e.message || e))
     }
   }
 
-  // start(...)
+  // Start a new round
   async function startRound() {
     if (!signer) return connectWallet()
-    setStatus('⏳ Sending start tx…')
+    setBusy(true)
+    setStartStatus('⏳ Creating round…')
     try {
       const contract = new ethers.Contract(
         process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
@@ -65,41 +72,55 @@ export default function Home() {
       )
       const tx = await contract.start(
         Number(blanks),
-        BigInt(startFee),
-        BigInt(windowSec)
+        ethers.parseEther(fee),
+        BigInt(Number(windowMin) * 60)
       )
-      setStatus('⏳ Waiting confirmation…')
+      setStartStatus('⏳ Waiting confirmation…')
       await tx.wait()
-      setStatus('✅ Round started: ' + tx.hash)
+      setStartStatus('✅ Round created! Tx: ' + tx.hash)
     } catch (e) {
       console.error(e)
-      setStatus('❌ ' + (e.message || e))
+      setStartStatus('❌ ' + (e.message || e))
+    } finally {
+      setBusy(false)
     }
   }
 
-  // submitPaid(...)
-  async function submitPaidEntry() {
+  // Submit an entry (paid or free)
+  async function submitEntry() {
     if (!signer) return connectWallet()
-    setPaidStatus('⏳ Sending entry…')
+    setBusy(true)
+    setEntryStatus('⏳ Sending your entry…')
     try {
       const contract = new ethers.Contract(
         process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
         abi,
         signer
       )
-      const data = ethers.formatBytes32String(paidSubmission)
-      const tx = await contract.submitPaid(
-        BigInt(paidRoundId),
-        Number(paidIndex),
-        data,
-        { value: BigInt(paidFee) }
-      )
-      setPaidStatus('⏳ Waiting confirmation…')
+      let tx
+      const data = ethers.formatBytes32String(word)
+      if (mode === 'paid') {
+        tx = await contract.submitPaid(
+          BigInt(roundId),
+          Number(blankIndex),
+          data,
+          { value: ethers.parseEther(fee) }
+        )
+      } else {
+        tx = await contract.submitFree(
+          BigInt(roundId),
+          Number(blankIndex),
+          data
+        )
+      }
+      setEntryStatus('⏳ Waiting confirmation…')
       await tx.wait()
-      setPaidStatus('✅ Entry sent: ' + tx.hash)
+      setEntryStatus(`✅ ${mode === 'paid' ? 'Paid' : 'Free'} entry sent! Tx: ${tx.hash}`)
     } catch (e) {
       console.error(e)
-      setPaidStatus('❌ ' + (e.message || e))
+      setEntryStatus('❌ ' + (e.message || e))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -110,92 +131,114 @@ export default function Home() {
         <h1>MadFill</h1>
 
         {/* CONNECT WALLET */}
-        <button onClick={connectWallet} style={{ marginBottom: '1rem' }}>
+        <button onClick={connectWallet} disabled={!!signer} style={{ marginBottom: '1rem' }}>
           {signer ? `👛 ${address}` : 'Connect Wallet'}
         </button>
 
-        {/* START ROUND */}
+        {/* SECTION 1: Start Round */}
         <section style={{ margin: '2rem 0', padding: '1rem', border: '1px solid #ddd' }}>
-          <h2>Start Round</h2>
+          <h2>1. Start a New Round</h2>
+          <p><em>Tell MadFill how many blanks, the entry fee, and how long submissions run.</em></p>
           <label>
-            # Blanks:
+            Blanks (1–10):
             <input
-              type="number"
-              min={1}
-              max={10}
+              type="number" min={1} max={10}
               value={blanks}
               onChange={(e) => setBlanks(e.target.value)}
+              disabled={busy}
             />
           </label>
           &nbsp;
           <label>
-            Entry Fee (wei):
+            Entry Fee (BASE):
             <input
               type="text"
-              value={startFee}
-              onChange={(e) => setStartFee(e.target.value)}
+              value={fee}
+              onChange={(e) => setFee(e.target.value)}
+              disabled={busy}
             />
           </label>
           &nbsp;
           <label>
-            Window (sec):
+            Window (minutes):
             <input
               type="text"
-              value={windowSec}
-              onChange={(e) => setWindowSec(e.target.value)}
+              value={windowMin}
+              onChange={(e) => setWindowMin(e.target.value)}
+              disabled={busy}
             />
           </label>
           <br /><br />
-          <button onClick={startRound} disabled={!signer}>
-            Start Round
+          <button onClick={startRound} disabled={!signer || busy}>
+            Create Round
           </button>
-          {status && <p>{status}</p>}
+          {startStatus && <p>{startStatus}</p>}
         </section>
 
-        {/* SUBMIT PAID ENTRY */}
+        {/* SECTION 2: Submit Entry */}
         <section style={{ margin: '2rem 0', padding: '1rem', border: '1px solid #ddd' }}>
-          <h2>Submit Paid Entry</h2>
+          <h2>2. Fill in the Blanks</h2>
+          <p><strong>Story:</strong> {storyTemplate}</p>
           <label>
             Round ID:
             <input
               type="number"
-              value={paidRoundId}
-              onChange={(e) => setPaidRoundId(e.target.value)}
+              value={roundId}
+              onChange={(e) => setRoundId(e.target.value)}
+              disabled={busy}
             />
           </label>
           &nbsp;
           <label>
-            Blank Index:
+            Blank # (0–{Number(blanks) - 1}):
             <input
               type="number"
               min={0}
-              value={paidIndex}
-              onChange={(e) => setPaidIndex(e.target.value)}
+              max={Number(blanks) - 1}
+              value={blankIndex}
+              onChange={(e) => setBlankIndex(e.target.value)}
+              disabled={busy}
             />
           </label>
           &nbsp;
           <label>
-            Your Word:
+            Your word:
             <input
               type="text"
-              value={paidSubmission}
-              onChange={(e) => setPaidSubmission(e.target.value)}
-            />
-          </label>
-          &nbsp;
-          <label>
-            Fee (wei):
-            <input
-              type="text"
-              value={paidFee}
-              onChange={(e) => setPaidFee(e.target.value)}
+              value={word}
+              onChange={(e) => setWord(e.target.value)}
+              disabled={busy}
             />
           </label>
           <br /><br />
-          <button onClick={submitPaidEntry} disabled={!signer}>
-            Submit Paid Entry
+
+          <label>
+            <input
+              type="radio"
+              name="mode"
+              value="paid"
+              checked={mode === 'paid'}
+              onChange={() => setMode('paid')}
+              disabled={busy}
+            /> Paid (Fee: {fee} BASE)
+          </label>
+          &nbsp;
+          <label>
+            <input
+              type="radio"
+              name="mode"
+              value="free"
+              checked={mode === 'free'}
+              onChange={() => setMode('free')}
+              disabled={busy}
+            /> Free
+          </label>
+          <br /><br />
+
+          <button onClick={submitEntry} disabled={!signer || busy}>
+            {mode === 'paid' ? 'Submit Paid Entry' : 'Submit Free Entry'}
           </button>
-          {paidStatus && <p>{paidStatus}</p>}
+          {entryStatus && <p>{entryStatus}</p>}
         </section>
       </main>
     </>
