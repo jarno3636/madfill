@@ -2,65 +2,48 @@
 import { useState } from 'react'
 import { ethers } from 'ethers'
 import Head from 'next/head'
-import Web3Modal from 'web3modal'
-import WalletConnectProvider from '@walletconnect/web3-provider'
+import { useAccount, useConnect } from 'wagmi'
 import abi from '../abi/FillInStoryFull.json'
 
 export default function Home() {
-  const [address, setAddress] = useState(null)
-  const [signer, setSigner] = useState(null)
-  const [status, setStatus] = useState('')
+  // 1) Wagmi hooks for connection
+  const { address, isConnected } = useAccount()
+  const {
+    connect,
+    connectors,
+    error: connectError,
+    isLoading: connectLoading,
+  } = useConnect()
 
-  // Start‐round state
+  // 2) State for "Start Round"
   const [blanks, setBlanks] = useState('3')
-  const [startFee, setStartFee] = useState('1000000000000000')
-  const [windowSec, setWindowSec] = useState('300')
+  const [startFee, setStartFee] = useState('1000000000000000')  // 0.001 BASE
+  const [windowSec, setWindowSec] = useState('300')             // 5 minutes
+  const [startStatus, setStartStatus] = useState('')
 
-  // Paid‐entry state
+  // 3) State for "Submit Paid Entry"
   const [paidRoundId, setPaidRoundId] = useState('0')
   const [paidIndex, setPaidIndex] = useState('0')
   const [paidSubmission, setPaidSubmission] = useState('')
   const [paidFee, setPaidFee] = useState('1000000000000000')
   const [paidStatus, setPaidStatus] = useState('')
 
-  // Unified connect: injected → Web3Modal
-  async function connectWallet() {
-    try {
-      // Web3Modal config
-      const modal = new Web3Modal({
-        cacheProvider: false,
-        providerOptions: {
-          walletconnect: {
-            package: WalletConnectProvider,
-            options: {
-              rpc: { 8453: 'https://mainnet.base.org' },
-              chainId: 8453,
-              qrcodeModalOptions: {
-                mobileLinks: ['metamask','trust','rainbow','argent','imtoken']
-              }
-            }
-          }
-        }
-      })
-
-      // If injected, modal.connect() will pick window.ethereum automatically
-      const instance = await modal.connect()
-      const provider = new ethers.BrowserProvider(instance)
-      const _signer = await provider.getSigner()
-      const _address = await _signer.getAddress()
-
-      setSigner(_signer)
-      setAddress(_address)
-    } catch (err) {
-      console.error(err)
-      alert('Wallet connection failed: ' + (err.message || err))
-    }
+  // Helper to get a signer
+  async function getSigner() {
+    // Wagmi’s connectors will have injected or WalletConnect provider
+    const provider = new ethers.BrowserProvider(window.ethereum || window.farcaster) 
+    return provider.getSigner()
   }
 
-  // start(...)
+  // 4) Start Round: calls contract.start(...)
   async function startRound() {
-    if (!signer) return connectWallet()
-    setStatus('⏳ Sending start transaction...')
+    const signer = await getSigner().catch(() => {
+      // if no injected, prompt Wagmi connect flow
+      connect({ connector: connectors[0] })
+      return
+    })
+    if (!signer) return
+    setStartStatus('⏳ Sending start tx…')
     try {
       const contract = new ethers.Contract(
         process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
@@ -72,19 +55,23 @@ export default function Home() {
         BigInt(startFee),
         BigInt(windowSec)
       )
-      setStatus('⏳ Waiting for confirmation...')
+      setStartStatus('⏳ Waiting confirmation…')
       await tx.wait()
-      setStatus('✅ Round started! Tx: ' + tx.hash)
-    } catch (err) {
-      console.error(err)
-      setStatus('❌ Error: ' + (err.message || err))
+      setStartStatus('✅ Round started: ' + tx.hash)
+    } catch (e) {
+      console.error(e)
+      setStartStatus('❌ ' + (e.message||e))
     }
   }
 
-  // submitPaid(...)
+  // 5) Submit Paid Entry: calls contract.submitPaid(...)
   async function submitPaidEntry() {
-    if (!signer) return connectWallet()
-    setPaidStatus('⏳ Sending paid entry...')
+    const signer = await getSigner().catch(() => {
+      connect({ connector: connectors[0] })
+      return
+    })
+    if (!signer) return
+    setPaidStatus('⏳ Sending entry…')
     try {
       const contract = new ethers.Contract(
         process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
@@ -98,36 +85,52 @@ export default function Home() {
         data,
         { value: BigInt(paidFee) }
       )
-      setPaidStatus('⏳ Waiting for confirmation...')
+      setPaidStatus('⏳ Waiting confirmation…')
       await tx.wait()
-      setPaidStatus('✅ Entry submitted! Tx: ' + tx.hash)
-    } catch (err) {
-      console.error(err)
-      setPaidStatus('❌ Error: ' + (err.message || err))
+      setPaidStatus('✅ Entry sent: ' + tx.hash)
+    } catch (e) {
+      console.error(e)
+      setPaidStatus('❌ ' + (e.message||e))
     }
   }
 
   return (
     <>
-      <Head><title>MadFill</title></Head>
+      <Head>
+        <title>MadFill</title>
+      </Head>
       <main style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
         <h1>MadFill</h1>
 
-        {/* CONNECT WALLET */}
-        <button onClick={connectWallet} style={{ marginBottom: '1rem' }}>
-          {signer ? `👛 ${address}` : 'Connect Wallet'}
-        </button>
+        {/* ==== CONNECT UI ==== */}
+        {!isConnected ? (
+          <>
+            {connectors.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => connect({ connector: c })}
+                disabled={connectLoading}
+                style={{ marginRight: '1rem' }}
+              >
+                Connect with {c.name}
+              </button>
+            ))}
+            {connectError && <p style={{ color: 'red' }}>{connectError.message}</p>}
+          </>
+        ) : (
+          <p>👛 {address}</p>
+        )}
 
-        {/* START ROUND */}
+        {/* ==== START ROUND ==== */}
         <section style={{ margin: '2rem 0', padding: '1rem', border: '1px solid #ddd' }}>
           <h2>Start Round</h2>
           <label>
             # Blanks:
             <input
               type="number"
-              value={blanks}
               min={1}
               max={10}
+              value={blanks}
               onChange={(e) => setBlanks(e.target.value)}
             />
           </label>
@@ -150,11 +153,13 @@ export default function Home() {
             />
           </label>
           <br /><br />
-          <button onClick={startRound}>Start Round</button>
-          {status && <p>{status}</p>}
+          <button onClick={startRound} disabled={!isConnected}>
+            Start Round
+          </button>
+          {startStatus && <p>{startStatus}</p>}
         </section>
 
-        {/* SUBMIT PAID ENTRY */}
+        {/* ==== SUBMIT PAID ENTRY ==== */}
         <section style={{ margin: '2rem 0', padding: '1rem', border: '1px solid #ddd' }}>
           <h2>Submit Paid Entry</h2>
           <label>
@@ -170,9 +175,9 @@ export default function Home() {
             Blank Index:
             <input
               type="number"
+              min={0}
               value={paidIndex}
               onChange={(e) => setPaidIndex(e.target.value)}
-              min={0}
             />
           </label>
           &nbsp;
@@ -194,7 +199,9 @@ export default function Home() {
             />
           </label>
           <br /><br />
-          <button onClick={submitPaidEntry}>Submit Paid Entry</button>
+          <button onClick={submitPaidEntry} disabled={!isConnected}>
+            Submit Paid Entry
+          </button>
           {paidStatus && <p>{paidStatus}</p>}
         </section>
       </main>
