@@ -13,7 +13,7 @@
     "react-dom": "18.2.0",
     "ethers": "^6.1.0",
     "@walletconnect/web3-provider": "^1.8.0",
-    "@farcaster/miniapp-wagmi-connector": "^0.1.0",   // or latest
+    "@farcaster/miniapp-wagmi-connector": "^0.1.0",
     "web3modal": "^1.9.12"
   }
 }
