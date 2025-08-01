@@ -1,0 +1,13 @@
+[
+  {
+    "inputs": [
+      { "internalType": "uint16", "name": "b", "type": "uint16" },
+      { "internalType": "uint256", "name": "fee", "type": "uint256" },
+      { "internalType": "uint256", "name": "w", "type": "uint256" }
+    ],
+    "name": "start",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]
