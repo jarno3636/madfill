@@ -1,3 +1,4 @@
+// pages/index.tsx
 import { useState } from 'react'
 import { useAccount, usePrepareContractWrite, useContractWrite } from 'wagmi'
 import FillInAbi from '../abi/FillInStoryFull.json'
@@ -5,8 +6,8 @@ import FillInAbi from '../abi/FillInStoryFull.json'
 export default function Home() {
   const { address, isConnected } = useAccount()
   const [blanks, setBlanks] = useState(3)
-  const [fee, setFee] = useState('1000000000000000')
-  const [windowSec, setWindowSec] = useState('300')
+  const [fee, setFee] = useState('1000000000000000')   // default 0.001 BASE
+  const [windowSec, setWindowSec] = useState('300')    // default 5 minutes
 
   const { config } = usePrepareContractWrite({
     address: process.env.NEXT_PUBLIC_FILLIN_ADDRESS as `0x${string}`,
@@ -39,15 +40,26 @@ export default function Home() {
           <br />
           <label>
             Entry Fee (wei):
-            <input type="text" value={fee} onChange={(e) => setFee(e.target.value)} />
+            <input
+              type="text"
+              value={fee}
+              onChange={(e) => setFee(e.target.value)}
+            />
           </label>
           <br />
           <label>
             Window (sec):
-            <input type="text" value={windowSec} onChange={(e) => setWindowSec(e.target.value)} />
+            <input
+              type="text"
+              value={windowSec}
+              onChange={(e) => setWindowSec(e.target.value)}
+            />
           </label>
           <br />
-          <button disabled={!write || isLoading} onClick={() => write?.()}>
+          <button
+            disabled={!write || isLoading}
+            onClick={() => write?.()}
+          >
             {isLoading ? 'Starting...' : 'Start Round'}
           </button>
           {isSuccess && <p>✅ Transaction sent!</p>}
