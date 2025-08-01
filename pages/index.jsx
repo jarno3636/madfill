@@ -2,48 +2,61 @@
 import { useState } from 'react'
 import { ethers } from 'ethers'
 import Head from 'next/head'
-import { useAccount, useConnect } from 'wagmi'
+import Web3Modal from 'web3modal'
+import WalletConnectProvider from '@walletconnect/web3-provider'
 import abi from '../abi/FillInStoryFull.json'
 
 export default function Home() {
-  // 1) Wagmi hooks for connection
-  const { address, isConnected } = useAccount()
-  const {
-    connect,
-    connectors,
-    error: connectError,
-    isLoading: connectLoading,
-  } = useConnect()
+  const [address, setAddress] = useState(null)
+  const [signer, setSigner]   = useState(null)
+  const [status, setStatus]   = useState('')
 
-  // 2) State for "Start Round"
-  const [blanks, setBlanks] = useState('3')
-  const [startFee, setStartFee] = useState('1000000000000000')  // 0.001 BASE
-  const [windowSec, setWindowSec] = useState('300')             // 5 minutes
-  const [startStatus, setStartStatus] = useState('')
+  // Start‐round state
+  const [blanks, setBlanks]     = useState('3')
+  const [startFee, setStartFee] = useState('1000000000000000')
+  const [windowSec, setWindowSec] = useState('300')
 
-  // 3) State for "Submit Paid Entry"
-  const [paidRoundId, setPaidRoundId] = useState('0')
-  const [paidIndex, setPaidIndex] = useState('0')
+  // Paid‐entry state
+  const [paidRoundId, setPaidRoundId]     = useState('0')
+  const [paidIndex, setPaidIndex]         = useState('0')
   const [paidSubmission, setPaidSubmission] = useState('')
-  const [paidFee, setPaidFee] = useState('1000000000000000')
-  const [paidStatus, setPaidStatus] = useState('')
+  const [paidFee, setPaidFee]             = useState('1000000000000000')
+  const [paidStatus, setPaidStatus]       = useState('')
 
-  // Helper to get a signer
-  async function getSigner() {
-    // Wagmi’s connectors will have injected or WalletConnect provider
-    const provider = new ethers.BrowserProvider(window.ethereum || window.farcaster) 
-    return provider.getSigner()
+  // Unified connect: injected → Web3Modal
+  async function connectWallet() {
+    try {
+      const modal = new Web3Modal({
+        cacheProvider: false,
+        providerOptions: {
+          walletconnect: {
+            package: WalletConnectProvider,
+            options: {
+              rpc: { 8453: 'https://mainnet.base.org' },
+              chainId: 8453,
+              qrcodeModalOptions: {
+                mobileLinks: ['metamask','trust','rainbow','argent','imtoken']
+              }
+            }
+          }
+        }
+      })
+      const instance = await modal.connect()
+      const provider = new ethers.BrowserProvider(instance)
+      const _signer  = await provider.getSigner()
+      const _address = await _signer.getAddress()
+      setSigner(_signer)
+      setAddress(_address)
+    } catch (err) {
+      console.error(err)
+      alert('Wallet connection failed: ' + (err.message || err))
+    }
   }
 
-  // 4) Start Round: calls contract.start(...)
+  // start(...)
   async function startRound() {
-    const signer = await getSigner().catch(() => {
-      // if no injected, prompt Wagmi connect flow
-      connect({ connector: connectors[0] })
-      return
-    })
-    if (!signer) return
-    setStartStatus('⏳ Sending start tx…')
+    if (!signer) return connectWallet()
+    setStatus('⏳ Sending start tx…')
     try {
       const contract = new ethers.Contract(
         process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
@@ -55,22 +68,18 @@ export default function Home() {
         BigInt(startFee),
         BigInt(windowSec)
       )
-      setStartStatus('⏳ Waiting confirmation…')
+      setStatus('⏳ Waiting confirmation…')
       await tx.wait()
-      setStartStatus('✅ Round started: ' + tx.hash)
+      setStatus('✅ Round started: ' + tx.hash)
     } catch (e) {
       console.error(e)
-      setStartStatus('❌ ' + (e.message||e))
+      setStatus('❌ ' + (e.message || e))
     }
   }
 
-  // 5) Submit Paid Entry: calls contract.submitPaid(...)
+  // submitPaid(...)
   async function submitPaidEntry() {
-    const signer = await getSigner().catch(() => {
-      connect({ connector: connectors[0] })
-      return
-    })
-    if (!signer) return
+    if (!signer) return connectWallet()
     setPaidStatus('⏳ Sending entry…')
     try {
       const contract = new ethers.Contract(
@@ -90,38 +99,22 @@ export default function Home() {
       setPaidStatus('✅ Entry sent: ' + tx.hash)
     } catch (e) {
       console.error(e)
-      setPaidStatus('❌ ' + (e.message||e))
+      setPaidStatus('❌ ' + (e.message || e))
     }
   }
 
   return (
     <>
-      <Head>
-        <title>MadFill</title>
-      </Head>
+      <Head><title>MadFill</title></Head>
       <main style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
         <h1>MadFill</h1>
 
-        {/* ==== CONNECT UI ==== */}
-        {!isConnected ? (
-          <>
-            {connectors.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => connect({ connector: c })}
-                disabled={connectLoading}
-                style={{ marginRight: '1rem' }}
-              >
-                Connect with {c.name}
-              </button>
-            ))}
-            {connectError && <p style={{ color: 'red' }}>{connectError.message}</p>}
-          </>
-        ) : (
-          <p>👛 {address}</p>
-        )}
+        {/* CONNECT WALLET */}
+        <button onClick={connectWallet} style={{ marginBottom: '1rem' }}>
+          {signer ? `👛 ${address}` : 'Connect Wallet'}
+        </button>
 
-        {/* ==== START ROUND ==== */}
+        {/* START ROUND */}
         <section style={{ margin: '2rem 0', padding: '1rem', border: '1px solid #ddd' }}>
           <h2>Start Round</h2>
           <label>
@@ -153,13 +146,13 @@ export default function Home() {
             />
           </label>
           <br /><br />
-          <button onClick={startRound} disabled={!isConnected}>
+          <button onClick={startRound} disabled={!signer}>
             Start Round
           </button>
-          {startStatus && <p>{startStatus}</p>}
+          {status && <p>{status}</p>}
         </section>
 
-        {/* ==== SUBMIT PAID ENTRY ==== */}
+        {/* SUBMIT PAID ENTRY */}
         <section style={{ margin: '2rem 0', padding: '1rem', border: '1px solid #ddd' }}>
           <h2>Submit Paid Entry</h2>
           <label>
@@ -199,7 +192,7 @@ export default function Home() {
             />
           </label>
           <br /><br />
-          <button onClick={submitPaidEntry} disabled={!isConnected}>
+          <button onClick={submitPaidEntry} disabled={!signer}>
             Submit Paid Entry
           </button>
           {paidStatus && <p>{paidStatus}</p>}
