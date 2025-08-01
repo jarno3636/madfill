@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { ethers } from 'ethers'
 import Head from 'next/head'
+import Web3Modal from 'web3modal'
 import WalletConnectProvider from '@walletconnect/web3-provider'
 import abi from '../abi/FillInStoryFull.json'
 
@@ -10,57 +11,51 @@ export default function Home() {
   const [signer, setSigner] = useState(null)
   const [status, setStatus] = useState('')
 
-  // Start-round state
+  // Start‐round state
   const [blanks, setBlanks] = useState('3')
-  const [startFee, setStartFee] = useState('1000000000000000') // 0.001 BASE
-  const [windowSec, setWindowSec] = useState('300')            // 5 min
+  const [startFee, setStartFee] = useState('1000000000000000')
+  const [windowSec, setWindowSec] = useState('300')
 
-  // Paid-entry state
+  // Paid‐entry state
   const [paidRoundId, setPaidRoundId] = useState('0')
   const [paidIndex, setPaidIndex] = useState('0')
   const [paidSubmission, setPaidSubmission] = useState('')
   const [paidFee, setPaidFee] = useState('1000000000000000')
   const [paidStatus, setPaidStatus] = useState('')
 
-  // Connect wallet (injected or deep-link via WalletConnect)
+  // Unified connect: injected → Web3Modal
   async function connectWallet() {
-  try {
-    let provider;
-    // 1) Injected (MetaMask desktop or in-app)
-    if (window.ethereum) {
-      await window.ethereum.request({ method: 'eth_requestAccounts' });
-      provider = new ethers.BrowserProvider(window.ethereum);
-    } else {
-      // 2) WalletConnect fallback: QR on desktop, deep-link on mobile
-      const isMobile = /Mobi|Android|iPhone|iPad|iPod/.test(navigator.userAgent);
-      const wcProvider = new WalletConnectProvider({
-        rpc: { 8453: 'https://mainnet.base.org' },
-        chainId: 8453,
-        qrcode: !isMobile,               // show QR on desktop
-        qrcodeModalOptions: {
-          mobileLinks: [
-            'metamask',
-            'trust',
-            'rainbow',
-            'argent',
-            'imtoken'
-          ]
+    try {
+      // Web3Modal config
+      const modal = new Web3Modal({
+        cacheProvider: false,
+        providerOptions: {
+          walletconnect: {
+            package: WalletConnectProvider,
+            options: {
+              rpc: { 8453: 'https://mainnet.base.org' },
+              chainId: 8453,
+              qrcodeModalOptions: {
+                mobileLinks: ['metamask','trust','rainbow','argent','imtoken']
+              }
+            }
+          }
         }
-      });
-      await wcProvider.enable();
-      provider = new ethers.BrowserProvider(wcProvider);
-    }
+      })
 
-    // common signer/address setup
-    const _signer = await provider.getSigner();
-    const _address = await _signer.getAddress();
-    setSigner(_signer);
-    setAddress(_address);
-  } catch (err) {
-    console.error(err);
-    alert('Wallet connection failed: ' + (err.message || err));
+      // If injected, modal.connect() will pick window.ethereum automatically
+      const instance = await modal.connect()
+      const provider = new ethers.BrowserProvider(instance)
+      const _signer = await provider.getSigner()
+      const _address = await _signer.getAddress()
+
+      setSigner(_signer)
+      setAddress(_address)
+    } catch (err) {
+      console.error(err)
+      alert('Wallet connection failed: ' + (err.message || err))
+    }
   }
-}
 
   // start(...)
   async function startRound() {
@@ -114,13 +109,11 @@ export default function Home() {
 
   return (
     <>
-      <Head>
-        <title>MadFill</title>
-      </Head>
+      <Head><title>MadFill</title></Head>
       <main style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
         <h1>MadFill</h1>
 
-        {/* CONNECT / ADDRESS */}
+        {/* CONNECT WALLET */}
         <button onClick={connectWallet} style={{ marginBottom: '1rem' }}>
           {signer ? `👛 ${address}` : 'Connect Wallet'}
         </button>
