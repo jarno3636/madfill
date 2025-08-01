@@ -1,7 +1,7 @@
 // lib/wagmi.ts
-import { createConfig, WagmiConfig, configureChains } from 'wagmi'
-import { viemPublicProvider } from 'wagmi/providers/viem'
+import { createConfig, WagmiConfig } from 'wagmi'
 import { InjectedConnector } from 'wagmi/connectors/injected'
+import { createPublicClient, http } from 'viem'
 
 // Define Base network
 export const baseChain = {
@@ -14,16 +14,16 @@ export const baseChain = {
   testnet: false,
 }
 
-const { publicClient, webSocketPublicClient } = configureChains(
-  [baseChain],
-  [viemPublicProvider()]
-)
+// Create a Viem public client for Base
+export const publicClient = createPublicClient({
+  chain: baseChain,
+  transport: http(),
+})
 
 export const wagmiConfig = createConfig({
   autoConnect: true,
   connectors: [new InjectedConnector({ chains: [baseChain] })],
   publicClient,
-  webSocketPublicClient,
 })
 
 export function WagmiProvider({ children }: { children: React.ReactNode }) {
