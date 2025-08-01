@@ -12,24 +12,37 @@ export default function Home() {
   const [busy, setBusy]       = useState(false)
   const [status, setStatus]   = useState('')
 
-  // ----- Round Setup -----
-  const [blanks, setBlanks]       = useState('3')
-  const [fee, setFee]             = useState('0.001')   // BASE
-  const [windowMin, setWindowMin] = useState('5')       // minutes
-  const [startStatus, setStartStatus] = useState('')
+  // ——— Templates ———
+  const templates = [
+    { id: 0, name: 'Once upon a time, I __X__ to the __Y__.', blanks: 2 },
+    { id: 1, name: 'The quick brown __X__ jumps over the lazy __Y__.', blanks: 2 },
+    // add more here...
+  ]
+  const [templateId, setTemplateId] = useState(templates[0].id)
 
-  // ----- Entry Submission -----
-  const [roundId, setRoundId]       = useState('0')
+  // ——— Duration (days) ———
+  const durations = [
+    { label: '1 Day', value: 1 },
+    { label: '2 Days', value: 2 },
+    { label: '3 Days', value: 3 },
+    { label: '4 Days', value: 4 },
+    { label: '5 Days', value: 5 },
+    { label: '6 Days', value: 6 },
+    { label: '1 Week', value: 7 },
+  ]
+  const [duration, setDuration] = useState(durations[0].value)
+
+  // ——— Fee (fixed) ———
+  const ENTRY_FEE = '0.001'  // in BASE
+
+  // ——— Entry Flow ———
+  const [roundId, setRoundId]     = useState('0')
   const [blankIndex, setBlankIndex] = useState('0')
-  const [word, setWord]             = useState('')
-  const [mode, setMode]             = useState('paid')  // 'paid' or 'free'
+  const [word, setWord]           = useState('')
+  const [mode, setMode]           = useState('paid')  // 'paid' or 'free'
   const [entryStatus, setEntryStatus] = useState('')
 
-  // A placeholder story template – replace with real one later:
-  const storyTemplate = 'Once upon a time, I __X__ to the __Y__.' 
-  // where X and Y are blanks 0 and 1
-
-  // Connect (injected or WalletConnect)
+  // ——— Connect Wallet ———
   async function connectWallet() {
     const modal = new Web3Modal({
       cacheProvider: false,
@@ -59,52 +72,53 @@ export default function Home() {
     }
   }
 
-  // Start a new round
+  // ——— Start Round ———
   async function startRound() {
     if (!signer) return connectWallet()
     setBusy(true)
-    setStartStatus('⏳ Creating round…')
+    setStatus('⏳ Creating round…')
     try {
+      const tpl = templates.find((t) => t.id === Number(templateId))
       const contract = new ethers.Contract(
         process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
         abi,
         signer
       )
       const tx = await contract.start(
-        Number(blanks),
-        ethers.parseEther(fee),
-        BigInt(Number(windowMin) * 60)
+        tpl.blanks,
+        ethers.parseEther(ENTRY_FEE),
+        BigInt(duration * 24 * 60 * 60)  // days → seconds
       )
-      setStartStatus('⏳ Waiting confirmation…')
+      setStatus('⏳ Waiting confirmation…')
       await tx.wait()
-      setStartStatus('✅ Round created! Tx: ' + tx.hash)
+      setStatus('✅ Round created! Tx: ' + tx.hash)
     } catch (e) {
       console.error(e)
-      setStartStatus('❌ ' + (e.message || e))
+      setStatus('❌ ' + (e.message || e))
     } finally {
       setBusy(false)
     }
   }
 
-  // Submit an entry (paid or free)
+  // ——— Submit Entry ———
   async function submitEntry() {
     if (!signer) return connectWallet()
     setBusy(true)
-    setEntryStatus('⏳ Sending your entry…')
+    setEntryStatus('⏳ Sending entry…')
     try {
       const contract = new ethers.Contract(
         process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
         abi,
         signer
       )
-      let tx
       const data = ethers.formatBytes32String(word)
+      let tx
       if (mode === 'paid') {
         tx = await contract.submitPaid(
           BigInt(roundId),
           Number(blankIndex),
           data,
-          { value: ethers.parseEther(fee) }
+          { value: ethers.parseEther(ENTRY_FEE) }
         )
       } else {
         tx = await contract.submitFree(
@@ -115,7 +129,7 @@ export default function Home() {
       }
       setEntryStatus('⏳ Waiting confirmation…')
       await tx.wait()
-      setEntryStatus(`✅ ${mode === 'paid' ? 'Paid' : 'Free'} entry sent! Tx: ${tx.hash}`)
+      setEntryStatus('✅ Entry submitted! Tx: ' + tx.hash)
     } catch (e) {
       console.error(e)
       setEntryStatus('❌ ' + (e.message || e))
@@ -130,77 +144,72 @@ export default function Home() {
       <main style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
         <h1>MadFill</h1>
 
-        {/* CONNECT WALLET */}
-        <button onClick={connectWallet} disabled={!!signer} style={{ marginBottom: '1rem' }}>
+        {/* Connect Wallet */}
+        <button onClick={connectWallet} disabled={!!signer}>
           {signer ? `👛 ${address}` : 'Connect Wallet'}
         </button>
 
-        {/* SECTION 1: Start Round */}
-        <section style={{ margin: '2rem 0', padding: '1rem', border: '1px solid #ddd' }}>
-          <h2>1. Start a New Round</h2>
-          <p><em>Tell MadFill how many blanks, the entry fee, and how long submissions run.</em></p>
+        {/* SECTION 1: Start a New Round */}
+        <section style={{ border: '1px solid #ddd', padding: '1rem', margin: '2rem 0' }}>
+          <h2>1. Pick a Template & Start Round</h2>
           <label>
-            Blanks (1–10):
-            <input
-              type="number" min={1} max={10}
-              value={blanks}
-              onChange={(e) => setBlanks(e.target.value)}
+            Template:
+            <select
+              value={templateId}
+              onChange={(e) => setTemplateId(e.target.value)}
               disabled={busy}
-            />
+            >
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
           </label>
           &nbsp;
           <label>
-            Entry Fee (BASE):
-            <input
-              type="text"
-              value={fee}
-              onChange={(e) => setFee(e.target.value)}
+            Duration:
+            <select
+              value={duration}
+              onChange={(e) => setDuration(Number(e.target.value))}
               disabled={busy}
-            />
+            >
+              {durations.map((d) => (
+                <option key={d.value} value={d.value}>
+                  {d.label}
+                </option>
+              ))}
+            </select>
           </label>
-          &nbsp;
-          <label>
-            Window (minutes):
-            <input
-              type="text"
-              value={windowMin}
-              onChange={(e) => setWindowMin(e.target.value)}
-              disabled={busy}
-            />
-          </label>
-          <br /><br />
+          <p>Entry Fee: <strong>{ENTRY_FEE} BASE</strong></p>
           <button onClick={startRound} disabled={!signer || busy}>
             Create Round
           </button>
-          {startStatus && <p>{startStatus}</p>}
+          {status && <p>{status}</p>}
         </section>
 
-        {/* SECTION 2: Submit Entry */}
-        <section style={{ margin: '2rem 0', padding: '1rem', border: '1px solid #ddd' }}>
+        {/* SECTION 2: Submit Your Entry */}
+        <section style={{ border: '1px solid #ddd', padding: '1rem', margin: '2rem 0' }}>
           <h2>2. Fill in the Blanks</h2>
-          <p><strong>Story:</strong> {storyTemplate}</p>
-          <label>
-            Round ID:
-            <input
-              type="number"
-              value={roundId}
-              onChange={(e) => setRoundId(e.target.value)}
-              disabled={busy}
-            />
-          </label>
+          <p><strong>Round ID:</strong></p>
+          <input
+            type="number"
+            value={roundId}
+            onChange={(e) => setRoundId(e.target.value)}
+            disabled={busy}
+          />
           &nbsp;
           <label>
-            Blank # (0–{Number(blanks) - 1}):
+            Blank #:
             <input
               type="number"
               min={0}
-              max={Number(blanks) - 1}
               value={blankIndex}
               onChange={(e) => setBlankIndex(e.target.value)}
               disabled={busy}
             />
           </label>
-          &nbsp;
+          <br /><br />
           <label>
             Your word:
             <input
@@ -211,7 +220,6 @@ export default function Home() {
             />
           </label>
           <br /><br />
-
           <label>
             <input
               type="radio"
@@ -220,7 +228,7 @@ export default function Home() {
               checked={mode === 'paid'}
               onChange={() => setMode('paid')}
               disabled={busy}
-            /> Paid (Fee: {fee} BASE)
+            /> Paid (Fee: {ENTRY_FEE} BASE)
           </label>
           &nbsp;
           <label>
@@ -234,7 +242,6 @@ export default function Home() {
             /> Free
           </label>
           <br /><br />
-
           <button onClick={submitEntry} disabled={!signer || busy}>
             {mode === 'paid' ? 'Submit Paid Entry' : 'Submit Free Entry'}
           </button>
