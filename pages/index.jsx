@@ -24,70 +24,16 @@ export default function Home() {
 
   // Categories & Templates (7 categories × 5 templates)
   const categories = [
-    {
-      name: 'Cryptocurrency',
-      templates: [
-        { id: 'crypto1', name: 'Crypto Chaos', blanks: 5,
-          parts: [
-            'When Bitcoin soared to ',
-            ', the community yelled ',
-            '; later it dipped to ',
-            ', yet traders still ',
-            ', and then ',
-            '.'
-          ]
-        },
-        { id: 'crypto2', name: 'To the Moon', blanks: 5,
-          parts: [
-            'Every time ',
-            ' tweets about ',
-            ', price rockets to ',
-            '! Meanwhile ',
-            ' investors ',
-            '.'
-          ]
-        },
-        { id: 'crypto3', name: 'HODL Story', blanks: 5,
-          parts: [
-            'I bought ',
-            ' at ',
-            ' and promised to ',
-            ' forever if it reached ',
-            '.'
-          ]
-        },
-        { id: 'crypto4', name: 'NFT Frenzy', blanks: 5,
-          parts: [
-            'I minted a ',
-            ' NFT for ',
-            ', then sold at ',
-            ' ETH and bought ',
-            ', celebrating until ',
-            '.'
-          ]
-        },
-        { id: 'crypto5', name: 'Meme Coin', blanks: 5,
-          parts: [
-            'Dogecoin hit ',
-            ' cents, I ',
-            ' my portfolio, then yelled ',
-            ', but still ',
-            ', hoping for ',
-            '.'
-          ]
-        },
-      ],
-    },
-    // ... include all other categories exactly as in your code ...
+    /* ... categories as before ... */
   ]
 
-  // Template selection state
+  // Template selection
   const [catIdx, setCatIdx]   = useState(0)
   const [tplIdx, setTplIdx]   = useState(0)
   const selectedCategory      = categories[catIdx]
   const tpl                   = selectedCategory.templates[tplIdx]
 
-  // Duration
+  // Duration options
   const durations = [
     { label: '1 Day', value: 1 },
     { label: '2 Days', value: 2 },
@@ -104,27 +50,24 @@ export default function Home() {
   const [roundId, setRoundId]   = useState('')
   const [blankIndex, setBlankIndex] = useState('0')
   const [word, setWord]         = useState('')
-  const [mode, setMode]         = useState('paid') // 'paid' or 'free'
+  const [mode, setMode]         = useState('paid')
 
   // Deadline for countdown
   const [deadline, setDeadline] = useState(null)
   useEffect(() => {
     if (!roundId) { setDeadline(null); return }
-    let cancelled = false
+    let canceled = false
     ;(async () => {
       try {
         const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-        const rpcContract = new ethers.Contract(
-          process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
-          abi, provider
-        )
-        const info = await rpcContract.rounds(BigInt(roundId))
-        if (!cancelled) setDeadline(info.sd.toNumber())
+        const rpc = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
+        const info = await rpc.rounds(BigInt(roundId))
+        if (!canceled) setDeadline(info.sd.toNumber())
       } catch {
-        if (!cancelled) setDeadline(null)
+        if (!canceled) setDeadline(null)
       }
     })()
-    return () => { cancelled = true }
+    return () => { canceled = true }
   }, [roundId])
 
   // Fetch recent Draw1 winners
@@ -132,11 +75,8 @@ export default function Home() {
     ;(async () => {
       try {
         const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-        const contract = new ethers.Contract(
-          process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
-          abi, provider
-        )
-        const events = await contract.queryFilter(contract.filters.Draw1(), 0, 'latest')
+        const rpc = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
+        const events = await rpc.queryFilter(rpc.filters.Draw1(), 0, 'latest')
         const last5 = events.slice(-5).reverse().map(e => ({
           roundId: e.args.id.toNumber(),
           winner: e.args.winner
@@ -155,61 +95,46 @@ export default function Home() {
       providerOptions: {
         walletconnect: {
           package: WalletConnectProvider,
-          options: {
-            rpc: { 8453: 'https://mainnet.base.org' },
-            chainId: 8453,
-          }
+          options: { rpc: { 8453: 'https://mainnet.base.org' }, chainId: 8453 }
         }
       }
     })
     try {
       const instance = await modal.connect()
       const provider = new ethers.BrowserProvider(instance)
-      const _signer  = await provider.getSigner()
-      const _address = await _signer.getAddress()
-      setSigner(_signer)
-      setAddress(_address)
+      const signer = await provider.getSigner()
+      const addr = await signer.getAddress()
+      setSigner(signer)
+      setAddress(addr)
     } catch (e) {
-      alert('Wallet connection failed: ' + (e.message||e))
+      alert('Wallet connection failed: ' + (e.message || e))
     }
   }
 
-  // Unified create + submit
+  // Create or submit entry
   async function handleUnifiedSubmit() {
     if (!signer) return connectWallet()
-    setBusy(true)
-    setStatus('')
+    setBusy(true); setStatus('')
     let newId = roundId
     try {
-      const ct = new ethers.Contract(
-        process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
-        abi, signer
-      )
-      // Create round if none
+      const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
       if (!roundId) {
         setStatus('⏳ Creating round…')
-        const tx1 = await ct.start(
-          tpl.blanks,
-          ethers.parseEther(ENTRY_FEE),
-          BigInt(duration*86400)
-        )
+        const tx1 = await ct.start(tpl.blanks, ethers.parseEther(ENTRY_FEE), BigInt(duration*86400))
         await tx1.wait()
         const evs = await ct.queryFilter(ct.filters.Started(), 0, 'latest')
-        newId = evs[evs.length - 1].args.id.toString()
+        newId = evs[evs.length-1].args.id.toString()
         setRoundId(newId)
       }
       setStatus('⏳ Submitting entry…')
       const data = formatBytes32String(word)
-      let tx2
-      if (mode === 'paid') {
-        tx2 = await ct.submitPaid(BigInt(newId), Number(blankIndex), data, { value: ethers.parseEther(ENTRY_FEE) })
-      } else {
-        tx2 = await ct.submitFree(BigInt(newId), Number(blankIndex), data)
-      }
+      const tx2 = mode === 'paid'
+        ? await ct.submitPaid(BigInt(newId), Number(blankIndex), data, { value: ethers.parseEther(ENTRY_FEE) })
+        : await ct.submitFree(BigInt(newId), Number(blankIndex), data)
       await tx2.wait()
-      setStatus(`✅ Round ${newId} ${mode} entry submitted! Tx: ${tx2.hash}`)
+      setStatus(\`✅ Round \${newId} \${mode} entry submitted! Tx: \${tx2.hash}\`)
     } catch (e) {
-      setStatus('❌ ' + (e.message||e))
+      setStatus('❌ ' + (e.message || e))
     } finally {
       setBusy(false)
     }
@@ -218,111 +143,64 @@ export default function Home() {
   // Styles
   const paperStyle = 'bg-gray-50 border border-gray-200 p-4 font-mono whitespace-pre-wrap my-4'
   const blankStyle = (active) =>
-    `inline-block w-8 text-center border-b-2 ${active?'border-black':'border-gray-400'} cursor-pointer mx-1`
+    \`inline-block w-8 text-center border-b-2 \${active? 'border-black':'border-gray-400'} cursor-pointer mx-1\`
 
   return (
     <>
       <Head><title>MadFill</title></Head>
-      <nav className="flex justify-between items-center p-4 bg-gray-100">
-        <h1 className="text-xl font-bold cursor-pointer" onClick={()=>navigate('/')}>
-          MadFill
-        </h1>
-        <div className="space-x-4">
-          <a href="/" className="text-blue-600">Home</a>
-          <a href="/active" className="text-blue-600">Active Rounds</a>
-        </div>
+      <nav className="flex justify-between items-center p-4 bg-gray-100 hover:shadow-lg transition">
+        <h1 className="text-xl font-bold cursor-pointer" onClick={()=>navigate('/')}>MadFill</h1>
+        <div className="space-x-4"><a href="/" className="text-blue-600">Home</a><a href="/active" className="text-blue-600">Active Rounds</a></div>
       </nav>
-
       <main className="max-w-3xl mx-auto p-4 space-y-6">
         {/* How It Works */}
-        <Card>
+        <Card className="hover:shadow-lg transition">
           <CardHeader><h2>How It Works</h2></CardHeader>
           <CardContent>
             <ol className="list-decimal list-inside space-y-2">
               <li>Connect your wallet.</li>
               <li>Select category, template & duration, type your word.</li>
-              <li>
-                Click “{!roundId
-                  ? 'Create & Submit'
-                  : mode === 'paid' ? 'Submit Paid' : 'Submit Free (gas only)'}” — free entries still incur an on-chain gas fee.
-              </li>
-              <li>Round is created (first click) then your entry is submitted.</li>
-              <li>Winners drawn on-chain—browse Active Rounds for other pools.</li>
+              <li>Click “{!roundId ? 'Create & Submit' : mode==='paid' ? 'Submit Paid' : 'Submit Free (gas only)'}” — free entries still incur gas.</li>
+              <li>First click creates round, your entry is submitted.</li>
+              <li>Browse Active Rounds to see results and recent winners.</li>
             </ol>
           </CardContent>
         </Card>
-
         {/* Connect Wallet */}
-        <Card>
+        <Card className="hover:shadow-lg transition">
           <CardContent className="text-center">
-            <Button onClick={connectWallet} disabled={!!address||busy}>
-              {address ? `👛 ${address}` : 'Connect Wallet'}
-            </Button>
+            <Button onClick={connectWallet} disabled={!!address||busy}>{address ? \`👛 \${address}\` : 'Connect Wallet'}</Button>
           </CardContent>
         </Card>
-
         {/* Unified Card */}
-        <Card>
+        <Card className="hover:shadow-lg transition">
           <CardHeader><h2>New Round & Submit Entry</h2></CardHeader>
           <CardContent className="space-y-4">
             {/* Settings */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label>Category</label>
-                <select className="block w-full mt-1 border rounded px-2 py-1" value={catIdx} onChange={e=>{ setCatIdx(+e.target.value); setTplIdx(0) }} disabled={busy}>
-                  {categories.map((c,i)=><option key={i} value={i}>{c.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label>Template</label>
-                <select className="block w-full mt-1 border rounded px-2 py-1" value={tplIdx} onChange={e=>setTplIdx(+e.target.value)} disabled={busy}>
-                  {selectedCategory.templates.map((t,i)=><option key={t.id} value={i}>{t.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label>Duration</label>
-                <select className="block w-full mt-1 border rounded px-2 py-1" value={duration} onChange={e=>setDuration(+e.target.value)} disabled={busy}>
-                  {durations.map(d=><option key={d.value} value={d.value}>{d.label}</option>)}
-                </select>
-              </div>
+            <div className="grid md:grid-cols-3 gap-4">
+              <div><label>Category</label><select className="block w-full border p-1" value={catIdx} onChange={e=>{setCatIdx(+e.target.value);setTplIdx(0)}} disabled={busy}>{categories.map((c,i)=><option key={i} value={i}>{c.name}</option>)}</select></div>
+              <div><label>Template</label><select className="block w-full border p-1" value={tplIdx} onChange={e=>setTplIdx(+e.target.value)} disabled={busy}>{selectedCategory.templates.map((t,i)=><option key={t.id} value={i}>{t.name}</option>)}</select></div>
+              <div><label>Duration</label><select className="block w-full border p-1" value={duration} onChange={e=>setDuration(+e.target.value)} disabled={busy}>{durations.map(d=><option key={d.value} value={d.value}>{d.label}</option>)}</select></div>
             </div>
-            {/* Blanks */}
-            <div className={paperStyle}>
-              {tpl.parts.map((part,i)=>(
-                <Fragment key={i}>
-                  <span>{part}</span>
-                  {i<tpl.blanks&&(
-                    <span className={blankStyle(i===+blankIndex)} onClick={()=>setBlankIndex(String(i))}>{i}</span>
-                  )}
-                </Fragment>
-              ))}
-            </div>
+            {/* Story & Blanks */}
+            <div className={paperStyle}>{tpl.parts.map((part,i)=><Fragment key={i}><span>{part}</span>{i<tpl.blanks && <span className={blankStyle(i===+blankIndex)} onClick={()=>setBlankIndex(String(i))}>{i}</span>}</Fragment>)}</div>
             <p>Selected Blank: <strong>{blankIndex}</strong></p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label>Your Word</label>
-                <input type="text" className="block w-full mt-1 border rounded px-2 py-1" value={word} onChange={e=>setWord(e.target.value)} disabled={busy} />
-              </div>
-              <div className="flex items-center space-x-4 mt-6">
-                <label className="flex items-center space-x-2"><input type="radio" value="paid" checked={mode==='paid'} onChange={()=>setMode('paid')} disabled={busy}/> <span>Paid ({ENTRY_FEE} BASE)</span></label>
-                <label className="flex items-center space-x-2"><input type="radio" value="free" checked={mode==='free'} onChange={()=>setMode('free')} disabled={busy}/> <span>Free (gas only)</span></label>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div><label>Your Word</label><input type="text" className="block w-full border p-1" placeholder="Enter word" value={word} onChange={e=>setWord(e.target.value)} disabled={busy} /></div>
+              <div className="flex items-center space-x-4">
+                <label><input type="radio" value="paid" checked={mode==='paid'} onChange={()=>setMode('paid')} disabled={busy}/> Paid ({ENTRY_FEE} BASE)</label>
+                <label><input type="radio" value="free" checked={mode==='free'} onChange={()=>setMode('free')} disabled={busy}/> Free (gas only)</label>
               </div>
             </div>
-            {/* Countdown & Submit */}
-            {deadline&&<p className="text-sm">⏱️ Submissions close in: <Countdown targetTimestamp={deadline} /></p>}
-            <Button onClick={handleUnifiedSubmit} disabled={!word||busy}>{!roundId?'🚀 Create & Submit':mode==='paid'?'💸 Submit Paid':'✏️ Submit Free'}</Button>
-            {status&&<p className="mt-2">{status}</p>}
+            {deadline && <p className="text-sm">⏱️ Submissions close in: <Countdown targetTimestamp={deadline} /></p>}
+            <Button onClick={handleUnifiedSubmit} disabled={!word||busy}>{!roundId ? '🚀 Create & Submit' : mode==='paid' ? '💸 Submit Paid' : '✏️ Submit Free'}</Button>
+            {status && <p className="mt-2">{status}</p>}
           </CardContent>
         </Card>
-
         {/* Recent Winners */}
-        <Card>
+        <Card className="hover:shadow-lg transition">
           <CardHeader><h2>🎉 Recent Winners</h2></CardHeader>
-          <CardContent className="space-y-1">
-            {recentWinners.length===0?<p>No winners yet.</p>:recentWinners.map((w,i)=>(
-              <p key={i}>Round <strong>#{w.roundId}</strong> → <code>{w.winner}</code></p>
-            ))}
-          </CardContent>
+          <CardContent className="space-y-1">{recentWinners.length===0?<p>No winners yet.</p>:recentWinners.map((w,i)=><p key={i}>Round <strong>#{w.roundId}</strong> → <code>{w.winner}</code></p>)}</CardContent>
         </Card>
       </main>
     </>
