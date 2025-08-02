@@ -1,7 +1,7 @@
 // pages/index.jsx
 import { useState, useEffect, Fragment } from 'react'
 import Head from 'next/head'
-import { ethers } from 'ethers'
+import { ethers, formatBytes32String } from 'ethers'
 import Web3Modal from 'web3modal'
 import WalletConnectProvider from '@walletconnect/web3-provider'
 import abi from '../abi/FillInStoryFull.json'
@@ -16,10 +16,13 @@ export default function Home() {
   const [busy, setBusy]       = useState(false)
   const [status, setStatus]   = useState('')
 
+  // Recent winners
+  const [recentWinners, setRecentWinners] = useState([])
+
   // Nav helper
   const navigate = (path) => (window.location.href = path)
 
-  // — Categories & Templates (7 categories, 5 each) —
+  // Categories & Templates (7 categories × 5 templates)
   const categories = [
     {
       name: 'Cryptocurrency',
@@ -57,7 +60,7 @@ export default function Home() {
           parts: [
             'I minted a ',
             ' NFT for ',
-            ' then sold at ',
+            ', then sold at ',
             ' ETH and bought ',
             ', celebrating until ',
             '.'
@@ -315,8 +318,8 @@ export default function Home() {
           parts: [
             'Diving into ',
             ', I saw ',
-            ', grabbed ',
-            ', then ',
+            ', grabbed ',  
+            ', then ',  
             '.'
           ]
         },
@@ -384,12 +387,13 @@ export default function Home() {
     },
   ]
 
+  // Template selection state
   const [catIdx, setCatIdx]   = useState(0)
   const [tplIdx, setTplIdx]   = useState(0)
   const selectedCategory      = categories[catIdx]
   const tpl                   = selectedCategory.templates[tplIdx]
 
-  // — Duration options —
+  // Duration
   const durations = [
     { label: '1 Day', value: 1 },
     { label: '2 Days', value: 2 },
@@ -399,43 +403,59 @@ export default function Home() {
     { label: '6 Days', value: 6 },
     { label: '1 Week', value: 7 },
   ]
-  const [duration, setDuration] = useState(durations[0].value)
+  const [duration, setDuration] = useState(1)
 
-  // — Submission state —
+  // Submission state
   const ENTRY_FEE               = '0.001'
   const [roundId, setRoundId]   = useState('')
   const [blankIndex, setBlankIndex] = useState('0')
   const [word, setWord]         = useState('')
-  const [mode, setMode]         = useState('paid')
+  const [mode, setMode]         = useState('paid') // 'paid' or 'free'
 
-  // — Countdown deadline —
+  // Deadline for countdown
   const [deadline, setDeadline] = useState(null)
   useEffect(() => {
-    if (!roundId) {
-      setDeadline(null)
-      return
-    }
+    if (!roundId) { setDeadline(null); return }
     let cancelled = false
     ;(async () => {
       try {
         const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
         const rpcContract = new ethers.Contract(
           process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
-          abi,
-          provider
+          abi, provider
         )
         const info = await rpcContract.rounds(BigInt(roundId))
         const dl = info.sd.toNumber()
         if (!cancelled) setDeadline(dl)
-      } catch (e) {
-        console.error('Error fetching deadline', e)
+      } catch {
         if (!cancelled) setDeadline(null)
       }
     })()
     return () => { cancelled = true }
   }, [roundId])
 
-  // — Connect Wallet —
+  // Fetch recent Draw1 winners
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
+        const contract = new ethers.Contract(
+          process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
+          abi, provider
+        )
+        const events = await contract.queryFilter(contract.filters.Draw1(), 0, 'latest')
+        const last5 = events.slice(-5).reverse().map(e => ({
+          roundId: e.args.id.toNumber(),
+          winner: e.args.winner
+        }))
+        setRecentWinners(last5)
+      } catch (e) {
+        console.error('Failed to load recent winners', e)
+      }
+    })()
+  }, [])
+
+  // Connect wallet
   async function connectWallet() {
     const modal = new Web3Modal({
       cacheProvider: false,
@@ -445,9 +465,6 @@ export default function Home() {
           options: {
             rpc: { 8453: 'https://mainnet.base.org' },
             chainId: 8453,
-            qrcodeModalOptions: {
-              mobileLinks: ['metamask','trust','rainbow','argent','imtoken']
-            }
           }
         }
       }
@@ -460,93 +477,68 @@ export default function Home() {
       setSigner(_signer)
       setAddress(_address)
     } catch (e) {
-      console.error(e)
-      alert('Wallet connection failed: ' + (e.message || e))
+      alert('Wallet connection failed: ' + (e.message||e))
     }
   }
 
-  // — Start Round —
-  async function startRound() {
+  // Unified create + submit
+  async function handleUnifiedSubmit() {
     if (!signer) return connectWallet()
     setBusy(true)
-    setStatus('⏳ Creating round…')
-    try {
-      const tx = await new ethers.Contract(
-        process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
-        abi,
-        signer
-      ).start(
-        tpl.blanks,
-        ethers.parseEther(ENTRY_FEE),
-        BigInt(duration * 24 * 60 * 60)
-      )
-      setStatus('⏳ Waiting confirmation…')
-      await tx.wait()
-      setStatus('✅ Round created! Tx: ' + tx.hash)
-    } catch (e) {
-      console.error(e)
-      setStatus('❌ ' + (e.message || e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  // — Submit Entry —
-  async function submitEntry() {
-    if (!signer) return connectWallet()
-    setBusy(true)
-    setStatus('⏳ Submitting entry…')
+    setStatus('')
+    let newId = roundId
     try {
       const ct = new ethers.Contract(
         process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
-        abi,
-        signer
+        abi, signer
       )
-      const data = ethers.formatBytes32String(word)
-      let tx
-      if (mode === 'paid') {
-        tx = await ct.submitPaid(
-          BigInt(roundId),
-          Number(blankIndex),
-          data,
+      // Create round if none
+      if (!roundId) {
+        setStatus('⏳ Creating round…')
+        const tx1 = await ct.start(
+          tpl.blanks,
+          ethers.parseEther(ENTRY_FEE),
+          BigInt(duration*24*60*60)
+        )
+        await tx1.wait()
+        // find last Started event
+        const evs = await ct.queryFilter(ct.filters.Started(), 0, 'latest')
+        newId = evs[evs.length-1].args.id.toString()
+        setRoundId(newId)
+        const info = await ct.rounds(BigInt(newId))
+        setDeadline(info.sd.toNumber())
+      }
+      // Submit entry
+      setStatus('⏳ Submitting entry…')
+      const data = formatBytes32String(word)
+      let tx2
+      if (mode==='paid') {
+        tx2 = await ct.submitPaid(
+          BigInt(newId), Number(blankIndex), data,
           { value: ethers.parseEther(ENTRY_FEE) }
         )
       } else {
-        tx = await ct.submitFree(
-          BigInt(roundId),
-          Number(blankIndex),
-          data
-        )
+        tx2 = await ct.submitFree(BigInt(newId), Number(blankIndex), data)
       }
-      setStatus('⏳ Waiting confirmation…')
-      await tx.wait()
-      setStatus('✅ Entry submitted! Tx: ' + tx.hash)
+      await tx2.wait()
+      setStatus(`✅ Round ${newId} ${mode} entry submitted! Tx: ${tx2.hash}`)
     } catch (e) {
-      console.error(e)
-      setStatus('❌ ' + (e.message || e))
+      setStatus('❌ ' + (e.message||e))
     } finally {
       setBusy(false)
     }
   }
 
-  // — Styles —
+  // Styles
   const paperStyle = 'bg-gray-50 border border-gray-200 p-4 font-mono whitespace-pre-wrap my-4'
   const blankStyle = (active) =>
-    `inline-block w-8 text-center border-b-2 ${
-      active ? 'border-black' : 'border-gray-400'
-    } cursor-pointer mx-1`
+    `inline-block w-8 text-center border-b-2 ${active?'border-black':'border-gray-400'} cursor-pointer mx-1`
 
   return (
     <>
-      <Head>
-        <title>MadFill</title>
-      </Head>
-
+      <Head><title>MadFill</title></Head>
       <nav className="flex justify-between items-center p-4 bg-gray-100">
-        <h1
-          className="text-xl font-bold cursor-pointer"
-          onClick={() => navigate('/')}
-        >
+        <h1 className="text-xl font-bold cursor-pointer" onClick={()=>navigate('/')}>
           MadFill
         </h1>
         <div className="space-x-4">
@@ -556,30 +548,16 @@ export default function Home() {
       </nav>
 
       <main className="max-w-3xl mx-auto p-4 space-y-6">
-
         {/* How It Works */}
         <Card>
-          <CardHeader>
-            <h2>How It Works</h2>
-          </CardHeader>
+          <CardHeader><h2>How It Works</h2></CardHeader>
           <CardContent>
             <ol className="list-decimal list-inside space-y-2">
-              <li><strong>Connect</strong> your wallet using the button below.</li>
-              <li>
-                <strong>Create a round:</strong> pick a <em>Category</em>, choose a template,
-                set how long submissions run, then click ▶️ <em>Create Round</em>.
-              </li>
-              <li>
-                Your round goes on-chain—note the <strong>Round ID</strong> from the status.
-              </li>
-              <li>
-                <strong>Submit an entry:</strong> click a blank, type your word, select “Paid”
-                or “Free,” enter the Round ID, then click <em>Submit</em>.
-              </li>
-              <li>
-                Watch the <em>Active Rounds</em> page for pools you want to join.
-                Winners are drawn automatically when submission time ends.
-              </li>
+              <li>Connect your wallet.</li>
+              <li>Select category, template & duration, type your word.</li>
+              <li>Click “{!roundId ? 'Create & Submit' : (mode==='paid'? 'Submit Paid' : 'Submit Free')}”.</li>
+              <li>Round is created (first click) then your entry is submitted.</li>
+              <li>Winners drawn on-chain—browse Active Rounds for other pools.</li>
             </ol>
           </CardContent>
         </Card>
@@ -587,162 +565,118 @@ export default function Home() {
         {/* Connect Wallet */}
         <Card>
           <CardContent className="text-center">
-            <Button onClick={connectWallet} disabled={!!address || busy}>
+            <Button onClick={connectWallet} disabled={!!address||busy}>
               {address ? `👛 ${address}` : 'Connect Wallet'}
             </Button>
           </CardContent>
         </Card>
 
-        {/* 1. Create Round */}
+        {/* Unified Card */}
         <Card>
-          <CardHeader><h2>1. Create a New Round</h2></CardHeader>
+          <CardHeader><h2>New Round & Submit Entry</h2></CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex flex-wrap gap-4">
-              {/* Category */}
+            {/* Settings */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label>Category</label>
                 <select
-                  className="block mt-1 border rounded px-2 py-1"
+                  className="block w-full mt-1 border rounded px-2 py-1"
                   value={catIdx}
-                  onChange={(e) => { setCatIdx(Number(e.target.value)); setTplIdx(0) }}
+                  onChange={e=>{ setCatIdx(+e.target.value); setTplIdx(0) }}
                   disabled={busy}
                 >
-                  {categories.map((c, i) => (
-                    <option key={i} value={i}>{c.name}</option>
-                  ))}
+                  {categories.map((c,i)=><option key={i} value={i}>{c.name}</option>)}
                 </select>
               </div>
-              {/* Template */}
               <div>
                 <label>Template</label>
                 <select
-                  className="block mt-1 border rounded px-2 py-1"
+                  className="block w-full mt-1 border rounded px-2 py-1"
                   value={tplIdx}
-                  onChange={(e) => setTplIdx(Number(e.target.value))}
+                  onChange={e=>setTplIdx(+e.target.value)}
                   disabled={busy}
                 >
-                  {selectedCategory.templates.map((t, i) => (
+                  {selectedCategory.templates.map((t,i)=>
                     <option key={t.id} value={i}>{t.name}</option>
-                  ))}
+                  )}
                 </select>
               </div>
-              {/* Duration */}
               <div>
                 <label>Duration</label>
                 <select
-                  className="block mt-1 border rounded px-2 py-1"
+                  className="block w-full mt-1 border rounded px-2 py-1"
                   value={duration}
-                  onChange={(e) => setDuration(Number(e.target.value))}
+                  onChange={e=>setDuration(+e.target.value)}
                   disabled={busy}
                 >
-                  {durations.map((d) => (
-                    <option key={d.value} value={d.value}>{d.label}</option>
-                  ))}
+                  {durations.map(d=><option key={d.value} value={d.value}>{d.label}</option>)}
                 </select>
               </div>
             </div>
-            <p>Entry Fee: <strong>{ENTRY_FEE} BASE</strong></p>
-            <Button onClick={startRound} disabled={!address || busy}>
-              ▶️ Create Round
-            </Button>
-            {status && <p className="mt-2">{status}</p>}
-          </CardContent>
-        </Card>
-
-        {/* 2. Fill in the Blanks */}
-        <Card>
-          <CardHeader><h2>2. Fill in the Blanks</h2></CardHeader>
-          <CardContent className="space-y-4">
-            {/* Countdown */}
-            {deadline && (
-              <p className="text-sm">
-                ⏱️ Submission closes in: <Countdown targetTimestamp={deadline} />
-              </p>
-            )}
-
-            {/* Template display */}
+            {/* Blanks */}
             <div className={paperStyle}>
-              {tpl.parts.map((part, i) => (
+              {tpl.parts.map((part,i)=>(
                 <Fragment key={i}>
                   <span>{part}</span>
-                  {i < tpl.blanks && (
+                  {i<tpl.blanks && (
                     <span
-                      className={blankStyle(i === Number(blankIndex))}
-                      onClick={() => setBlankIndex(String(i))}
-                    >
-                      {i}
-                    </span>
+                      className={blankStyle(i===+blankIndex)}
+                      onClick={()=>setBlankIndex(String(i))}
+                    >{i}</span>
                   )}
                 </Fragment>
               ))}
             </div>
-
             <p>Selected Blank: <strong>{blankIndex}</strong></p>
-            <div className="flex flex-wrap gap-4">
-              {/* Round ID */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label>Round ID</label>
-                <input
-                  type="number"
-                  className="block mt-1 border rounded px-2 py-1"
-                  value={roundId}
-                  onChange={(e) => setRoundId(e.target.value)}
-                  disabled={busy}
-                />
-              </div>
-              {/* Your Word */}
-              <div className="flex-1">
                 <label>Your Word</label>
                 <input
                   type="text"
                   className="block w-full mt-1 border rounded px-2 py-1"
                   value={word}
-                  onChange={(e) => setWord(e.target.value)}
+                  onChange={e=>setWord(e.target.value)}
                   disabled={busy}
                 />
               </div>
+              <div className="flex items-center space-x-4 mt-6">
+                <label className="flex items-center space-x-2">
+                  <input type="radio" value="paid" checked={mode==='paid'}
+                    onChange={()=>setMode('paid')} disabled={busy} />
+                  <span>Paid ({ENTRY_FEE} BASE)</span>
+                </label>
+                <label className="flex items-center space-x-2">
+                  <input type="radio" value="free" checked={mode==='free'}
+                    onChange={()=>setMode('free')} disabled={busy} />
+                  <span>Free (no fee)</span>
+                </label>
+              </div>
             </div>
-
-            {/* Paid / Free */}
-            <div className="flex items-center space-x-6">
-              <label className="flex items-center space-x-2">
-                <input
-                  type="radio"
-                  value="paid"
-                  checked={mode === 'paid'}
-                  onChange={() => setMode('paid')}
-                  disabled={busy}
-                />
-                <span>Paid ({ENTRY_FEE} BASE)</span>
-              </label>
-              <label className="flex items-center space-x-2">
-                <input
-                  type="radio"
-                  value="free"
-                  checked={mode === 'free'}
-                  onChange={() => setMode('free')}
-                  disabled={busy}
-                />
-                <span>Free</span>
-              </label>
-            </div>
-
-            {/* Submit */}
-            <Button
-              onClick={submitEntry}
-              disabled={
-                !address ||
-                busy ||
-                (deadline !== null && Math.floor(Date.now() / 1000) >= deadline)
-              }
-            >
-              {mode === 'paid' ? 'Submit Paid Entry' : 'Submit Free Entry'}
+            {/* Countdown & Submit */}
+            {deadline && (
+              <p className="text-sm">⏱️ Submissions close in: <Countdown targetTimestamp={deadline} /></p>
+            )}
+            <Button onClick={handleUnifiedSubmit} disabled={!word||busy}>
+              {!roundId ? '🚀 Create & Submit' : (mode==='paid' ? '💸 Submit Paid' : '✏️ Submit Free')}
             </Button>
             {status && <p className="mt-2">{status}</p>}
           </CardContent>
         </Card>
 
-        {/* Future: Custom Template UI will go here */}
+        {/* Recent Winners */}
+        <Card>
+          <CardHeader><h2>🎉 Recent Winners</h2></CardHeader>
+          <CardContent className="space-y-1">
+            {recentWinners.length === 0
+              ? <p>No winners yet.</p>
+              : recentWinners.map((w,i)=>(
+                  <p key={i}>
+                    Round <strong>#{w.roundId}</strong> → <code>{w.winner}</code>
+                  </p>
+                ))
+            }
+          </CardContent>
+        </Card>
       </main>
     </>
   )
