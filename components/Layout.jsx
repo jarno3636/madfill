@@ -1,4 +1,3 @@
-// components/Layout.jsx
 import Link from 'next/link'
 import { useState, useEffect } from 'react'
 import { ethers } from 'ethers'
@@ -48,24 +47,33 @@ export default function Layout({ children }) {
   const truncate = (addr) => addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : ''
 
   return (
-    <div className="bg-gradient-to-br from-slate-950 via-indigo-900 to-purple-950 min-h-screen text-white">
+    <div className="bg-gradient-to-br from-slate-950 via-indigo-900 to-purple-950 min-h-screen text-white relative">
+      {/* Floating Free Game Button */}
+      <Link
+        href="/free"
+        className="fixed top-4 right-4 z-50 px-4 py-2 rounded-full text-white bg-pink-600 hover:bg-pink-500 shadow-lg text-sm transition-all"
+      >
+        🎁 Free Game
+      </Link>
+
       <nav className="flex justify-between items-center p-6 shadow-xl bg-slate-950 border-b border-indigo-700">
         <h1 className="text-2xl font-extrabold tracking-tight cursor-pointer hover:text-indigo-300 transition drop-shadow-md">
           <Link href="/">🧠 MadFill</Link>
         </h1>
-        <div className="flex items-center space-x-6 text-sm font-medium">
+        <div className="flex items-center space-x-6 text-sm font-medium overflow-x-auto">
           <Link href="/" className="hover:text-indigo-300">Home</Link>
           <Link href="/active" className="hover:text-indigo-300">Active Rounds</Link>
           <Link href="/vote" className="hover:text-indigo-300">Community Vote</Link>
           <Link href="/events" className="hover:text-indigo-300">Special Events</Link>
           <button
             onClick={connectWallet}
-            className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-white shadow"
+            className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-white shadow whitespace-nowrap"
           >
             {address ? `👛 ${truncate(address)}` : 'Connect Wallet'}
           </button>
         </div>
       </nav>
+
       <main className="max-w-3xl mx-auto p-6 space-y-8">
         {children}
       </main>
