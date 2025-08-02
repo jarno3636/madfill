@@ -26,7 +26,6 @@ export default function FreeGame() {
   const handleSubmit = () => {
     setSubmitted(true)
     setCopied(false)
-    setTimeout(() => setSubmitted(false), 5000)
   }
 
   const handleRemix = () => {
@@ -63,6 +62,7 @@ export default function FreeGame() {
           <p className="text-sm text-indigo-200">Fill in the blanks for fun — no wallet needed!</p>
         </CardHeader>
         <CardContent className="space-y-6">
+
           {/* Selectors */}
           {!submitted && (
             <>
@@ -100,6 +100,7 @@ export default function FreeGame() {
                 </div>
               </div>
 
+              {/* Word Inputs */}
               <div className="space-y-2">
                 {Array.from({ length: template.blanks }).map((_, i) => (
                   <input
@@ -113,9 +114,15 @@ export default function FreeGame() {
                 ))}
               </div>
 
+              {/* Live Preview */}
+              <div className="bg-slate-800 p-4 rounded border border-slate-600 text-white shadow-inner mt-4">
+                <h3 className="font-semibold mb-2">🪄 Live Preview:</h3>
+                <StyledCard parts={template.parts} blanks={template.blanks} words={words} />
+              </div>
+
               <Button
                 onClick={handleSubmit}
-                className="bg-pink-500 hover:bg-pink-400 w-full"
+                className="bg-pink-500 hover:bg-pink-400 w-full mt-4"
               >
                 🎉 Submit & View Your Card
               </Button>
