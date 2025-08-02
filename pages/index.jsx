@@ -555,7 +555,14 @@ export default function Home() {
             <ol className="list-decimal list-inside space-y-2">
               <li>Connect your wallet.</li>
               <li>Select category, template & duration, type your word.</li>
-              <li>Click “{!roundId ? 'Create & Submit' : (mode==='paid'? 'Submit Paid' : 'Submit Free')}”.</li>
+              <li>
+                Click “{!roundId
+                  ? 'Create & Submit'
+                  : mode === 'paid'
+                     ? 'Submit Paid'
+                     : 'Submit Free (gas only)'}”
+                — free entries still incur an on-chain gas fee.
+<             </li>
               <li>Round is created (first click) then your entry is submitted.</li>
               <li>Winners drawn on-chain—browse Active Rounds for other pools.</li>
             </ol>
@@ -646,9 +653,9 @@ export default function Home() {
                   <span>Paid ({ENTRY_FEE} BASE)</span>
                 </label>
                 <label className="flex items-center space-x-2">
-                  <input type="radio" value="free" checked={mode==='free'}
-                    onChange={()=>setMode('free')} disabled={busy} />
-                  <span>Free (no fee)</span>
+                  <input type="radio" value="free" checked={mode === 'free'}
+                    onChange={() => setMode('free')} disabled={busy} />
+                  <span>Free (gas only)</span>
                 </label>
               </div>
             </div>
