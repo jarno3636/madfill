@@ -1,3 +1,5 @@
+/** @jsxImportSource react */
+
 import { ImageResponse } from '@vercel/og'
 import { NextRequest } from 'next/server'
 
@@ -15,8 +17,8 @@ export default async function handler(req: NextRequest) {
         style={{
           fontSize: 36,
           background: 'linear-gradient(to bottom right, #0f172a, #4f46e5)',
-          width: '100%',
-          height: '100%',
+          width: 1200,
+          height: 630,
           padding: '40px',
           color: 'white',
           display: 'flex',
@@ -25,7 +27,14 @@ export default async function handler(req: NextRequest) {
           fontFamily: 'sans-serif',
         }}
       >
-        <div style={{ textAlign: 'center', lineHeight: 1.4, maxWidth: 700 }}>
+        <div
+          style={{
+            textAlign: 'center',
+            lineHeight: 1.4,
+            maxWidth: 700,
+            wordBreak: 'break-word',
+          }}
+        >
           {text}
         </div>
       </div>
