@@ -13,6 +13,7 @@ export default function FreeGame() {
   const [tplIdx, setTplIdx] = useState(0)
   const [words, setWords] = useState({})
   const [submitted, setSubmitted] = useState(false)
+  const [copied, setCopied] = useState(false)
   const { width, height } = useWindowSize()
 
   const category = categories[catIdx]
@@ -24,19 +25,32 @@ export default function FreeGame() {
 
   const handleSubmit = () => {
     setSubmitted(true)
+    setCopied(false)
     setTimeout(() => setSubmitted(false), 5000)
   }
 
+  const handleRemix = () => {
+    setSubmitted(false)
+  }
+
+  const filledText = template.parts
+    .map((part, i) =>
+      i < template.blanks ? `${part}${words[i] || '____'}` : part
+    )
+    .join('')
+
   const shareText = encodeURIComponent(
-    `I just played the Free 🧠 MadFill Game!\n\n${template.parts
-      .map((part, i) =>
-        i < template.blanks ? `${part}${words[i] || '____'}` : part
-      )
-      .join('')} \n\nPlay for free: https://madfill.vercel.app/free`
+    `I just played the Free 🧠 MadFill Game!\n\n${filledText}\n\nPlay for free: https://madfill.vercel.app/free`
   )
 
   const farcasterLink = `https://warpcast.com/~/compose?text=${shareText}`
   const twitterLink = `https://twitter.com/intent/tweet?text=${shareText}`
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(filledText)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
 
   return (
     <Layout>
@@ -49,72 +63,77 @@ export default function FreeGame() {
           <p className="text-sm text-indigo-200">Fill in the blanks for fun — no wallet needed!</p>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Dropdowns */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label>Category</label>
-              <select
-                className="w-full mt-1 bg-slate-900 border rounded px-2 py-1"
-                value={catIdx}
-                onChange={(e) => {
-                  setCatIdx(+e.target.value)
-                  setTplIdx(0)
-                  setWords({})
-                }}
-              >
-                {categories.map((c, i) => (
-                  <option key={i} value={i}>{c.name}</option>
+          {/* Selectors */}
+          {!submitted && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label>Category</label>
+                  <select
+                    className="w-full mt-1 bg-slate-900 border rounded px-2 py-1"
+                    value={catIdx}
+                    onChange={(e) => {
+                      setCatIdx(+e.target.value)
+                      setTplIdx(0)
+                      setWords({})
+                    }}
+                  >
+                    {categories.map((c, i) => (
+                      <option key={i} value={i}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label>Template</label>
+                  <select
+                    className="w-full mt-1 bg-slate-900 border rounded px-2 py-1"
+                    value={tplIdx}
+                    onChange={(e) => {
+                      setTplIdx(+e.target.value)
+                      setWords({})
+                    }}
+                  >
+                    {category.templates.map((t, i) => (
+                      <option key={i} value={i}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {Array.from({ length: template.blanks }).map((_, i) => (
+                  <input
+                    key={i}
+                    type="text"
+                    placeholder={`Word ${i + 1}`}
+                    className="w-full bg-slate-900 text-white border rounded px-2 py-1"
+                    value={words[i] || ''}
+                    onChange={(e) => handleWordChange(i, e.target.value)}
+                  />
                 ))}
-              </select>
-            </div>
-            <div>
-              <label>Template</label>
-              <select
-                className="w-full mt-1 bg-slate-900 border rounded px-2 py-1"
-                value={tplIdx}
-                onChange={(e) => {
-                  setTplIdx(+e.target.value)
-                  setWords({})
-                }}
+              </div>
+
+              <Button
+                onClick={handleSubmit}
+                className="bg-pink-500 hover:bg-pink-400 w-full"
               >
-                {category.templates.map((t, i) => (
-                  <option key={i} value={i}>{t.name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
+                🎉 Submit & View Your Card
+              </Button>
+            </>
+          )}
 
-          {/* Input fields */}
-          <div className="space-y-2">
-            {Array.from({ length: template.blanks }).map((_, i) => (
-              <input
-                key={i}
-                type="text"
-                placeholder={`Word ${i + 1}`}
-                className="w-full bg-slate-900 text-white border rounded px-2 py-1"
-                value={words[i] || ''}
-                onChange={(e) => handleWordChange(i, e.target.value)}
-              />
-            ))}
-          </div>
-
-          <Button
-            onClick={handleSubmit}
-            className="bg-pink-500 hover:bg-pink-400 w-full"
-          >
-            🎉 Submit & View Your Card
-          </Button>
-
+          {/* Completed Card */}
           {submitted && (
-            <div className="bg-slate-800 p-4 rounded mt-4 border border-pink-500 shadow-inner text-white space-y-4">
-              <h3 className="font-semibold">Your Completed Card:</h3>
+            <div className="bg-slate-800 p-4 rounded border border-pink-500 shadow-inner space-y-4 text-white">
+              <h3 className="font-semibold text-lg">🧾 Your Completed Card:</h3>
               <StyledCard parts={template.parts} blanks={template.blanks} words={words} />
-              <div className="flex flex-wrap gap-4">
+
+              <div className="flex flex-wrap gap-3 mt-4">
                 <a
                   href={twitterLink}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-white"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-white"
                 >
                   🐦 Share on Twitter
                 </a>
@@ -122,10 +141,22 @@ export default function FreeGame() {
                   href={farcasterLink}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded text-white"
+                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded text-white"
                 >
                   🌀 Share on Farcaster
                 </a>
+                <button
+                  onClick={handleCopy}
+                  className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded text-white"
+                >
+                  {copied ? '✅ Copied!' : '📋 Copy Text'}
+                </button>
+                <button
+                  onClick={handleRemix}
+                  className="px-4 py-2 bg-pink-500 hover:bg-pink-400 rounded text-white"
+                >
+                  🔁 Remix This Card
+                </button>
               </div>
             </div>
           )}
