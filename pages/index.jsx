@@ -4,6 +4,8 @@ import Head from 'next/head'
 import { ethers, formatBytes32String } from 'ethers'
 import Web3Modal from 'web3modal'
 import WalletConnectProvider from '@walletconnect/web3-provider'
+import Confetti from 'react-confetti'
+import { useWindowSize } from 'react-use'
 import abi from '../abi/FillInStoryFull.json'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -38,6 +40,8 @@ export default function Home() {
   const [word, setWord] = useState('')
   const [mode, setMode] = useState('paid')
   const [deadline, setDeadline] = useState(null)
+  const [showConfetti, setShowConfetti] = useState(false)
+  const { width, height } = useWindowSize()
 
   useEffect(() => {
     if (!roundId) return setDeadline(null)
@@ -110,6 +114,8 @@ export default function Home() {
         setRoundId(newId)
         const info = await ct.rounds(BigInt(newId))
         setDeadline(info.sd.toNumber())
+        setShowConfetti(true)
+        setTimeout(() => setShowConfetti(false), 5000)
       }
       setStatus('⏳ Submitting entry…')
       const data = formatBytes32String(word)
@@ -142,6 +148,8 @@ export default function Home() {
           </div>
         </nav>
 
+        {showConfetti && <Confetti width={width} height={height} />} 
+
         <main className="max-w-3xl mx-auto p-6 space-y-8">
           <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-2xl rounded-xl">
             <CardHeader><h2 className="text-xl font-bold">How It Works</h2></CardHeader>
@@ -156,7 +164,7 @@ export default function Home() {
             </CardContent>
           </Card>
 
-          <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
+          <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
             <CardContent className="text-center">
               <Button onClick={connectWallet} disabled={!!address || busy} className="bg-indigo-600 hover:bg-indigo-500">
                 {address ? `👛 ${address}` : 'Connect Wallet'}
@@ -198,13 +206,16 @@ export default function Home() {
                   <label>Your Word</label>
                   <input type="text" className="block w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1" value={word} onChange={e => setWord(e.target.value)} disabled={busy} />
                 </div>
-                <div className="flex items-center space-x-4 mt-6">
+                <div className="flex flex-col items-start space-y-1 mt-6">
                   {['paid', 'free'].map(m => (
                     <label key={m} className="flex items-center space-x-2">
                       <input type="radio" value={m} checked={mode === m} onChange={() => setMode(m)} disabled={busy} />
                       <span className="capitalize">{m} {m === 'paid' && `(${ENTRY_FEE} BASE)`}</span>
                     </label>
                   ))}
+                  {mode === 'free' && (
+                    <p className="text-xs text-indigo-300 ml-1">⛽ Even free entries require gas to submit on-chain.</p>
+                  )}
                 </div>
               </div>
 
@@ -217,7 +228,7 @@ export default function Home() {
             </CardContent>
           </Card>
 
-          <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
+          <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
             <CardHeader><h2 className="text-xl font-bold">🎉 Recent Winners</h2></CardHeader>
             <CardContent className="space-y-1 text-sm">
               {recentWinners.length === 0
