@@ -157,93 +157,23 @@ export default function Home() {
         {showConfetti && <Confetti width={width} height={height} />} 
 
         <main className="max-w-3xl mx-auto p-6 space-y-8">
-          <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-2xl rounded-xl">
-            <CardHeader><h2 className="text-xl font-bold">How It Works</h2></CardHeader>
-            <CardContent>
-              <ol className="list-decimal list-inside space-y-2 text-sm">
-                <li>Connect your wallet to begin.</li>
-                <li>Choose a category and template to play.</li>
-                <li>Pick a blank and fill it with your word.</li>
-                <li>Click to enter (free = gas only).</li>
-                <li>On-chain winners drawn. Check Active tab!</li>
-              </ol>
+
+          {/* Fee & Pool Breakdown Card */}
+          <Card className="bg-gradient-to-tr from-indigo-800 to-purple-800 text-white shadow-xl rounded-xl">
+            <CardHeader>
+              <h2 className="text-xl font-bold">💰 Fee & Pool Breakdown</h2>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm leading-relaxed">
+              <ul className="list-disc list-inside">
+                <li><strong>Paid Entry:</strong> Costs <code>{ENTRY_FEE} BASE</code> to join a round.</li>
+                <li><strong>Platform Fee:</strong> 0.5% of the total pool is sent to the developer wallet.</li>
+                <li><strong>Free Entry:</strong> No BASE cost, but you still pay a small gas fee to submit.</li>
+                <li><strong>Prize Pool:</strong> Collected fees (minus platform cut) are awarded to round winners.</li>
+              </ul>
+              <p className="text-xs text-indigo-200 mt-2">All transactions occur on Base Mainnet and are verified on-chain.</p>
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
-            <CardContent className="text-center">
-              <Button onClick={connectWallet} disabled={!!address || busy} className="bg-indigo-600 hover:bg-indigo-500">
-                {address ? `👛 ${truncateAddress(address)}` : 'Connect Wallet'}
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-gradient-to-tr from-slate-800 to-purple-800 text-white shadow-xl rounded-xl">
-            <CardHeader><h2 className="text-xl font-bold">New Round & Submit Entry</h2></CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {[['Category', catIdx, setCatIdx, categories.map((c, i) => ({ label: c.name, value: i }))],
-                  ['Template', tplIdx, setTplIdx, selectedCategory.templates.map((t, i) => ({ label: t.name, value: i }))],
-                  ['Duration', duration, setDuration, durations]].map(([label, val, setVal, options]) => (
-                  <div key={label}>
-                    <label>{label}</label>
-                    <select className="block w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1" value={val} onChange={e => setVal(+e.target.value)} disabled={busy}>
-                      {options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                    </select>
-                  </div>
-                ))}
-              </div>
-
-              <div className="bg-slate-900 border border-slate-700 rounded p-4 font-mono text-sm">
-                {tpl.parts.map((part, i) => (
-                  <Fragment key={i}>
-                    <span>{part}</span>
-                    {i < tpl.blanks && (
-                      <span className={blankStyle(i === +blankIndex)} onClick={() => setBlankIndex(String(i))}>{i}</span>
-                    )}
-                  </Fragment>
-                ))}
-              </div>
-
-              <p className="text-sm">Selected Blank: <strong>{blankIndex}</strong></p>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label>Your Word</label>
-                  <input type="text" className="block w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1" value={word} onChange={e => setWord(e.target.value)} disabled={busy} />
-                </div>
-                <div className="flex flex-col items-start space-y-1 mt-6">
-                  {['paid', 'free'].map(m => (
-                    <label key={m} className="flex items-center space-x-2">
-                      <input type="radio" value={m} checked={mode === m} onChange={() => setMode(m)} disabled={busy} />
-                      <span className="capitalize">{m} {m === 'paid' && `(${ENTRY_FEE} BASE)`}</span>
-                    </label>
-                  ))}
-                  {mode === 'free' && (
-                    <p className="text-xs text-indigo-300 ml-1">⛽ Even free entries require gas to submit on-chain.</p>
-                  )}
-                </div>
-              </div>
-
-              {deadline && <p className="text-sm">⏱️ Submissions close in: <Countdown targetTimestamp={deadline} /></p>}
-
-              <Button onClick={handleUnifiedSubmit} disabled={!word || busy} className="bg-indigo-600 hover:bg-indigo-500">
-                {!roundId ? '🚀 Create & Submit' : (mode === 'paid' ? '💸 Submit Paid' : '✏️ Submit Free')}
-              </Button>
-              {status && <p className="mt-2 text-sm">{status}</p>}
-            </CardContent>
-          </Card>
-
-          <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
-            <CardHeader><h2 className="text-xl font-bold">🎉 Recent Winners</h2></CardHeader>
-            <CardContent className="space-y-1 text-sm">
-              {recentWinners.length === 0
-                ? <p>No winners yet.</p>
-                : recentWinners.map((w, i) => (
-                    <p key={i}>Round <strong>#{w.roundId}</strong> → <code>{w.winner}</code></p>
-                ))}
-            </CardContent>
-          </Card>
         </main>
       </div>
     </>
