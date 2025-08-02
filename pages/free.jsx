@@ -6,7 +6,6 @@ import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { categories } from '@/data/templates'
-import { Twitter, Share2 } from 'lucide-react'
 
 export default function FreeGame() {
   const [catIdx, setCatIdx] = useState(0)
@@ -22,6 +21,11 @@ export default function FreeGame() {
     setWords({ ...words, [i]: val })
   }
 
+  const handleSubmit = () => {
+    setSubmitted(true)
+    setTimeout(() => setSubmitted(false), 5000)
+  }
+
   const renderFilledCard = () => {
     return template.parts.map((part, i) => (
       <span key={i}>
@@ -31,11 +35,6 @@ export default function FreeGame() {
         )}
       </span>
     ))
-  }
-
-  const handleSubmit = () => {
-    setSubmitted(true)
-    setTimeout(() => setSubmitted(false), 5000)
   }
 
   const shareText = encodeURIComponent(
@@ -48,8 +47,8 @@ export default function FreeGame() {
       .join('')} \n\nPlay for free: https://madfill.vercel.app/free`
   )
 
-  const farcasterLink = `https://warpcast.com/~/compose?text=${shareText}`
   const twitterLink = `https://twitter.com/intent/tweet?text=${shareText}`
+  const farcasterLink = `https://warpcast.com/~/compose?text=${shareText}`
 
   return (
     <Layout>
@@ -120,15 +119,14 @@ export default function FreeGame() {
             <div className="bg-slate-800 p-4 rounded mt-4 border border-pink-500 shadow-inner text-white">
               <h3 className="font-semibold mb-2">Your Completed Card:</h3>
               <p className="text-lg">{renderFilledCard()}</p>
-              <div className="mt-4 flex gap-4">
+              <div className="mt-4 flex gap-4 flex-wrap">
                 <a
                   href={twitterLink}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center px-3 py-1 bg-blue-500 hover:bg-blue-400 text-white rounded shadow"
                 >
-                  <Twitter size={16} className="mr-1" />
-                  Share on Twitter
+                  🐦 Share on Twitter
                 </a>
                 <a
                   href={farcasterLink}
@@ -136,8 +134,7 @@ export default function FreeGame() {
                   rel="noopener noreferrer"
                   className="inline-flex items-center px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded shadow"
                 >
-                  <Share2 size={16} className="mr-1" />
-                  Share on Farcaster
+                  💬 Share on Farcaster
                 </a>
               </div>
             </div>
