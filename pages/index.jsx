@@ -9,6 +9,9 @@ import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
 import { categories } from '../data/templates'
 import Layout from '@/components/Layout'
+import { motion } from 'framer-motion'
+import { Info } from 'lucide-react'
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
 
 export default function Home() {
   const [signer, setSigner] = useState(null)
@@ -95,7 +98,6 @@ export default function Home() {
         setDeadline(info.sd.toNumber())
         setShowConfetti(true)
         setTimeout(() => setShowConfetti(false), 5000)
-        // Store custom name in localStorage
         localStorage.setItem(`madfill-roundname-${newId}`, roundName || '')
       }
 
@@ -120,25 +122,45 @@ export default function Home() {
       {showConfetti && <Confetti width={width} height={height} />}
 
       <main className="max-w-3xl mx-auto p-6 space-y-8">
-        <Card className="bg-gradient-to-tr from-purple-800 to-indigo-900 text-white shadow-2xl rounded-xl">
-          <CardHeader><h2 className="text-xl font-bold">🎮 What Is MadFill?</h2></CardHeader>
-          <CardContent className="text-sm space-y-2">
-            <p>MadFill is an on-chain word game where you create hilarious sentence mashups by filling in the blanks on funny templates!</p>
-            <p>Each new round costs <strong>{ENTRY_FEE} BASE</strong> to create and submit your entry. Your entry goes into the prize pool.</p>
-            <p>After a few days, the round ends and a winner is drawn automatically. The winner takes home 99.5% of the pool.</p>
-            <p>You can start your own round, or find an active one to enter!</p>
-          </CardContent>
-        </Card>
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+          <Card className="bg-gradient-to-tr from-purple-800 to-indigo-900 text-white shadow-2xl rounded-xl">
+            <CardHeader><h2 className="text-xl font-bold">🎮 What Is MadFill?</h2></CardHeader>
+            <CardContent className="text-sm space-y-2">
+              <p>MadFill is an on-chain word game where you create hilarious sentence mashups by filling in the blanks on funny templates!</p>
+              <p>Each new round costs <strong>{ENTRY_FEE} BASE</strong> to create and submit your entry.</p>
+              <p>Once the round ends, a winner is drawn on-chain, and they take home the prize pool.</p>
+            </CardContent>
+          </Card>
+        </motion.div>
 
-        <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-2xl rounded-xl">
-          <CardHeader><h2 className="text-xl font-bold">💸 Fee & Pool Breakdown</h2></CardHeader>
-          <CardContent className="text-sm space-y-1">
-            <p>🎯 Paid Entry: <strong>{ENTRY_FEE} BASE</strong></p>
-            <p>📦 99.5% to prize pool</p>
-            <p>💼 0.5% creator fee (you!)</p>
-            <p>🧮 Winners drawn automatically on-chain</p>
-          </CardContent>
-        </Card>
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.5 }}>
+          <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-2xl rounded-xl">
+            <CardHeader className="flex items-center gap-2">
+              <h2 className="text-xl font-bold">💸 Fees & Winnings</h2>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger><Info size={16} className="text-slate-300" /></TooltipTrigger>
+                  <TooltipContent className="bg-slate-900 text-white border border-slate-600">
+                    <p>
+                      Entry: 0.001 BASE — 0.5% goes to devs, 99.5% to prize pool.
+                      <br />
+                      Claiming prize: winner pays 0.5% fee.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </CardHeader>
+            <CardContent className="text-sm space-y-2">
+              <p><strong>🎯 Entry Fee:</strong> 0.001 BASE</p>
+              <ul className="list-disc list-inside space-y-1 pl-4">
+                <li>🏆 99.5% goes to the prize pool</li>
+                <li>🛠️ 0.5% goes to support development</li>
+              </ul>
+              <p><strong>💰 Claiming Prize:</strong> 0.5% claim fee from the winner</p>
+              <p>⛓️ All actions are executed and verified on-chain.</p>
+            </CardContent>
+          </Card>
+        </motion.div>
 
         <Card className="bg-gradient-to-tr from-slate-800 to-purple-800 text-white shadow-xl rounded-xl">
           <CardHeader><h2 className="text-xl font-bold">Start New Round</h2></CardHeader>
