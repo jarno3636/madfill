@@ -1,3 +1,4 @@
+// pages/index.jsx
 import { useState, useEffect, Fragment } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -11,6 +12,7 @@ import { categories } from '../data/templates'
 import Layout from '@/components/Layout'
 import { motion } from 'framer-motion'
 import { Tooltip } from '@/components/ui/tooltip'
+import Link from 'next/link'
 
 export default function Home() {
   const [signer, setSigner] = useState(null)
@@ -29,6 +31,7 @@ export default function Home() {
   const [deadline, setDeadline] = useState(null)
   const [busy, setBusy] = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
+  const [shareText, setShareText] = useState('')
   const { width, height } = useWindowSize()
   const ENTRY_FEE = '0.001'
 
@@ -106,6 +109,15 @@ export default function Home() {
       const tx2 = await ct.submitPaid(BigInt(newId), Number(blankIndex), data, { value: ethers.parseEther(ENTRY_FEE) })
       await tx2.wait()
       setStatus(`✅ Round ${newId} entry submitted! Tx: ${tx2.hash}`)
+
+      // Generate share preview
+      const preview = tpl.parts.map((part, i) =>
+        i < tpl.blanks
+          ? `${part}${i === Number(blankIndex) ? word : '____'}`
+          : part
+      ).join('')
+      const share = encodeURIComponent(`I just entered a hilarious on-chain word game! 🧠\n\n${preview}\n\nPlay here: https://madfill.vercel.app`)
+      setShareText(share)
     } catch (e) {
       setStatus('❌ ' + (e.message || e))
     } finally {
@@ -122,6 +134,7 @@ export default function Home() {
       {showConfetti && <Confetti width={width} height={height} />}
 
       <main className="max-w-3xl mx-auto p-6 space-y-8">
+        {/* About */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
           <Card className="bg-gradient-to-tr from-purple-800 to-indigo-900 text-white shadow-2xl rounded-xl">
             <CardHeader><h2 className="text-xl font-bold">🎮 What Is MadFill?</h2></CardHeader>
@@ -133,6 +146,7 @@ export default function Home() {
           </Card>
         </motion.div>
 
+        {/* Fees */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.5 }}>
           <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-2xl rounded-xl">
             <CardHeader className="flex items-center gap-2">
@@ -151,9 +165,11 @@ export default function Home() {
           </Card>
         </motion.div>
 
+        {/* Game UI */}
         <Card className="bg-gradient-to-tr from-slate-800 to-purple-800 text-white shadow-xl rounded-xl">
           <CardHeader><h2 className="text-xl font-bold">Start New Round</h2></CardHeader>
           <CardContent className="space-y-4">
+            {/* Dropdowns */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {[['Category', catIdx, setCatIdx, categories.map((c, i) => ({ label: c.name, value: i }))],
                 ['Template', tplIdx, setTplIdx, selectedCategory.templates.map((t, i) => ({ label: t.name, value: i }))],
@@ -167,6 +183,7 @@ export default function Home() {
               ))}
             </div>
 
+            {/* Round name */}
             <div className="mt-2">
               <label>Card Name (max 10 chars)</label>
               <input
@@ -179,6 +196,7 @@ export default function Home() {
               />
             </div>
 
+            {/* Template preview */}
             <div className="bg-slate-900 border border-slate-700 rounded p-4 font-mono text-sm">
               {tpl.parts.map((part, i) => (
                 <Fragment key={i}>
@@ -202,10 +220,24 @@ export default function Home() {
             <Button onClick={handleUnifiedSubmit} disabled={!word || busy} className="bg-indigo-600 hover:bg-indigo-500">
               {!roundId ? '🚀 Create & Submit' : '✏️ Submit Entry'}
             </Button>
+
             {status && <p className="mt-2 text-sm">{status}</p>}
+
+            {/* Share + View */}
+            {roundId && shareText && (
+              <div className="mt-4 space-y-2">
+                <p className="font-semibold text-white">📣 Share your round:</p>
+                <div className="flex flex-wrap gap-2">
+                  <a href={`https://twitter.com/intent/tweet?text=${shareText}`} target="_blank" className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded">🐦 Share on Twitter</a>
+                  <a href={`https://warpcast.com/~/compose?text=${shareText}`} target="_blank" className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded">🌀 Share on Farcaster</a>
+                  <Link href={`/round/${roundId}`} className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded">📜 View Round</Link>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
+        {/* Winners */}
         <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
           <CardHeader><h2 className="text-xl font-bold">🎉 Recent Winners</h2></CardHeader>
           <CardContent className="space-y-1 text-sm">
