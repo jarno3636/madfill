@@ -125,17 +125,14 @@ export default function Home() {
     }
   }
 
-  const paperStyle = 'bg-gray-50 border border-gray-200 p-4 font-mono whitespace-pre-wrap my-4'
   const blankStyle = (active) =>
     `inline-block w-8 text-center border-b-2 ${active ? 'border-black' : 'border-gray-400'} cursor-pointer mx-1`
-
-  const navigate = (path) => (window.location.href = path)
 
   return (
     <>
       <Head><title>MadFill</title></Head>
-      <nav className="flex justify-between items-center p-4 bg-gray-100">
-        <h1 className="text-xl font-bold cursor-pointer" onClick={() => navigate('/')}>MadFill</h1>
+      <nav className="flex justify-between items-center p-4 bg-white border-b shadow-sm">
+        <h1 className="text-xl font-bold cursor-pointer" onClick={() => window.location.href = '/'}>MadFill</h1>
         <div className="space-x-4">
           <a href="/" className="text-blue-600">Home</a>
           <a href="/active" className="text-blue-600">Active Rounds</a>
@@ -143,21 +140,19 @@ export default function Home() {
       </nav>
 
       <main className="max-w-3xl mx-auto p-4 space-y-6">
-        {/* How It Works */}
         <Card>
           <CardHeader><h2>How It Works</h2></CardHeader>
           <CardContent>
-            <ol className="list-decimal list-inside space-y-2">
+            <ol className="list-decimal list-inside space-y-2 text-sm">
               <li>Connect your wallet.</li>
-              <li>Select category, template & duration, type your word.</li>
-              <li>Click “{!roundId ? 'Create & Submit' : mode === 'paid' ? 'Submit Paid' : 'Submit Free (gas only)'}” — free entries still incur an on-chain gas fee.</li>
-              <li>Round is created then your entry is submitted.</li>
-              <li>Winners are drawn on-chain — browse Active Rounds for more.</li>
+              <li>Choose a topic, template, and time period.</li>
+              <li>Pick a blank number and add your word.</li>
+              <li>Click “{!roundId ? 'Create & Submit' : mode === 'paid' ? 'Submit Paid' : 'Submit Free (gas only)'}” — gas is required even for free entries.</li>
+              <li>Winners are chosen on-chain — view open rounds on the Active tab.</li>
             </ol>
           </CardContent>
         </Card>
 
-        {/* Connect Wallet */}
         <Card>
           <CardContent className="text-center">
             <Button onClick={connectWallet} disabled={!!address || busy}>
@@ -166,11 +161,9 @@ export default function Home() {
           </CardContent>
         </Card>
 
-        {/* Unified Entry Card */}
         <Card>
           <CardHeader><h2>New Round & Submit Entry</h2></CardHeader>
           <CardContent className="space-y-4">
-            {/* Settings */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label>Category</label>
@@ -192,8 +185,7 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Story Blanks */}
-            <div className={paperStyle}>
+            <div className="bg-yellow-50 border border-yellow-200 rounded p-4 font-mono text-sm">
               {tpl.parts.map((part, i) => (
                 <Fragment key={i}>
                   <span>{part}</span>
@@ -204,7 +196,7 @@ export default function Home() {
               ))}
             </div>
 
-            <p>Selected Blank: <strong>{blankIndex}</strong></p>
+            <p className="text-sm">Selected Blank: <strong>{blankIndex}</strong></p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -228,14 +220,13 @@ export default function Home() {
             <Button onClick={handleUnifiedSubmit} disabled={!word || busy}>
               {!roundId ? '🚀 Create & Submit' : (mode === 'paid' ? '💸 Submit Paid' : '✏️ Submit Free')}
             </Button>
-            {status && <p className="mt-2">{status}</p>}
+            {status && <p className="mt-2 text-sm">{status}</p>}
           </CardContent>
         </Card>
 
-        {/* Recent Winners */}
         <Card>
           <CardHeader><h2>🎉 Recent Winners</h2></CardHeader>
-          <CardContent className="space-y-1">
+          <CardContent className="space-y-1 text-sm">
             {recentWinners.length === 0
               ? <p>No winners yet.</p>
               : recentWinners.map((w, i) => (
