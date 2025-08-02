@@ -32,7 +32,7 @@ export default function Layout({ children }) {
       const instance = await modal.connect()
       await instance.request({
         method: 'wallet_switchEthereumChain',
-        params: [{ chainId: '0x2105' }], // Base Mainnet
+        params: [{ chainId: '0x2105' }],
       })
       const provider = new ethers.BrowserProvider(instance)
       const _signer = await provider.getSigner()
@@ -48,32 +48,30 @@ export default function Layout({ children }) {
 
   return (
     <div className="bg-gradient-to-br from-slate-950 via-indigo-900 to-purple-950 min-h-screen text-white relative">
-      {/* Floating Free Game Button */}
-      <Link
-        href="/free"
-        className="fixed top-4 right-4 z-50 px-4 py-2 rounded-full text-white bg-pink-600 hover:bg-pink-500 shadow-lg text-sm transition-all"
+      {/* Floating Wallet Button */}
+      <button
+        onClick={connectWallet}
+        className="fixed top-4 right-4 z-50 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-full shadow-xl whitespace-nowrap"
       >
-        🎁 Free Game
-      </Link>
+        {address ? `👛 ${truncate(address)}` : 'Connect Wallet'}
+      </button>
 
-      <nav className="flex justify-between items-center p-6 shadow-xl bg-slate-950 border-b border-indigo-700">
+      {/* Navbar */}
+      <nav className="flex flex-wrap justify-between items-center p-6 shadow-xl bg-slate-950 border-b border-indigo-700 gap-y-2">
         <h1 className="text-2xl font-extrabold tracking-tight cursor-pointer hover:text-indigo-300 transition drop-shadow-md">
           <Link href="/">🧠 MadFill</Link>
         </h1>
-        <div className="flex items-center space-x-6 text-sm font-medium overflow-x-auto">
+
+        <div className="flex flex-wrap gap-4 items-center text-sm font-medium">
           <Link href="/" className="hover:text-indigo-300">Home</Link>
           <Link href="/active" className="hover:text-indigo-300">Active Rounds</Link>
           <Link href="/vote" className="hover:text-indigo-300">Community Vote</Link>
           <Link href="/events" className="hover:text-indigo-300">Special Events</Link>
-          <button
-            onClick={connectWallet}
-            className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-white shadow whitespace-nowrap"
-          >
-            {address ? `👛 ${truncate(address)}` : 'Connect Wallet'}
-          </button>
+          <Link href="/free" className="hover:text-pink-400 font-semibold">🎁 Free Game</Link>
         </div>
       </nav>
 
+      {/* Main Content */}
       <main className="max-w-3xl mx-auto p-6 space-y-8">
         {children}
       </main>
