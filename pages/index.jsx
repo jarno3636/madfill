@@ -130,13 +130,11 @@ export default function Home() {
 
   return (
     <>
-      <Head>
-        <title>MadFill</title>
-      </Head>
-      <div className="bg-gradient-to-br from-slate-950 to-indigo-900 min-h-screen text-white">
+      <Head><title>MadFill</title></Head>
+      <div className="bg-gradient-to-br from-slate-950 via-indigo-900 to-purple-950 min-h-screen text-white">
         <nav className="flex justify-between items-center p-6 shadow-xl bg-slate-950 border-b border-indigo-700">
-          <h1 className="text-2xl font-extrabold tracking-tight cursor-pointer hover:text-indigo-400 transition" onClick={() => window.location.href = '/'}>
-            🧠 MadFill
+          <h1 className="text-2xl font-extrabold tracking-tight cursor-pointer hover:text-indigo-300 transition drop-shadow-md" onClick={() => window.location.href = '/'}>
+            <span className="animate-pulse">🧠 MadFill</span>
           </h1>
           <div className="space-x-6 text-sm font-medium">
             <a href="/" className="hover:text-indigo-300">Home</a>
@@ -145,7 +143,7 @@ export default function Home() {
         </nav>
 
         <main className="max-w-3xl mx-auto p-6 space-y-8">
-          <Card className="bg-slate-800 text-white shadow-2xl rounded-xl">
+          <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-2xl rounded-xl">
             <CardHeader><h2 className="text-xl font-bold">How It Works</h2></CardHeader>
             <CardContent>
               <ol className="list-decimal list-inside space-y-2 text-sm">
@@ -166,7 +164,7 @@ export default function Home() {
             </CardContent>
           </Card>
 
-          <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
+          <Card className="bg-gradient-to-tr from-slate-800 to-purple-800 text-white shadow-xl rounded-xl">
             <CardHeader><h2 className="text-xl font-bold">New Round & Submit Entry</h2></CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
