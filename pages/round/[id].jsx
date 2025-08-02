@@ -2,13 +2,12 @@ import { useRouter } from 'next/router'
 import Head from 'next/head'
 import { useEffect, useState } from 'react'
 import { ethers } from 'ethers'
-import abi from '@/abi/FillInStoryFull.json'
-import Layout from '@/components/Layout'
-import { Card, CardHeader, CardContent } from '@/components/ui/card'
-import { Countdown } from '@/components/Countdown'
+import abi from '../../abi/FillInStoryFull.json'
+import Layout from '../../components/Layout'
+import { Card, CardHeader, CardContent } from '../../components/ui/card'
+import { Countdown } from '../../components/Countdown'
 import Link from 'next/link'
-import Confetti from 'react-confetti'
-import { useWindowSize } from 'react-use'
+import { categories } from '../../data/templates'
 
 export default function RoundPage() {
   const router = useRouter()
@@ -16,16 +15,12 @@ export default function RoundPage() {
 
   const [round, setRound] = useState(null)
   const [submissions, setSubmissions] = useState([])
+  const [winner, setWinner] = useState(null)
   const [tpl, setTpl] = useState(null)
   const [name, setName] = useState('')
-  const [winner, setWinner] = useState(null)
-  const [claimed, setClaimed] = useState(false)
-  const [status, setStatus] = useState('')
-  const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [showConfetti, setShowConfetti] = useState(false)
-  const [preview, setPreview] = useState('')
-  const { width, height } = useWindowSize()
+  const [claimStatus, setClaimStatus] = useState('')
+  const [isWinner, setIsWinner] = useState(false)
 
   useEffect(() => {
     if (!id) return
@@ -42,28 +37,23 @@ export default function RoundPage() {
         setName(localStorage.getItem(`madfill-roundname-${id}`) || `Round #${id}`)
 
         const allSubs = await ct.getSubmissions(BigInt(id))
-        const decoded = allSubs.map((bytes32, i) => ({
+        setSubmissions(allSubs.map((bytes32, i) => ({
           index: i,
           word: ethers.decodeBytes32String(bytes32),
-        }))
-        setSubmissions(decoded)
+        })))
 
-        const w = await ct.w1(BigInt(id))
-        setWinner(w)
-
-        const c = await ct.c1(BigInt(id))
-        setClaimed(c)
-
-        const pv = template.parts
-          .map((part, j) => (j < template.blanks ? `${part}${decoded.find(d => d.index === j)?.word || '____'}` : part))
-          .join('')
-        setPreview(pv)
-
-        if (window.ethereum) {
-          const provider = new ethers.BrowserProvider(window.ethereum)
-          const signer = await provider.getSigner()
-          const addr = await signer.getAddress()
-          setUser(addr.toLowerCase())
+        try {
+          const winEvent = await ct.queryFilter(ct.filters.Draw1(BigInt(id)), 0, 'latest')
+          if (winEvent.length) {
+            const addr = winEvent[0].args.winner
+            setWinner(addr)
+            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+            if (accounts[0].toLowerCase() === addr.toLowerCase()) {
+              setIsWinner(true)
+            }
+          }
+        } catch (err) {
+          console.warn('Draw event not found')
         }
 
       } catch (err) {
@@ -78,7 +68,7 @@ export default function RoundPage() {
 
   function getTemplate(templateIndex, blanks) {
     let flat = []
-    for (const c of require('@/data/templates').categories) {
+    for (const c of categories) {
       for (const t of c.templates) flat.push(t)
     }
     const t = flat[templateIndex] || flat[0]
@@ -88,22 +78,23 @@ export default function RoundPage() {
     return t
   }
 
-  async function handleClaimPrize() {
+  async function handleClaim() {
     try {
-      setStatus('⏳ Claiming prize...')
+      setClaimStatus('⏳ Claiming prize…')
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
       const tx = await ct.claim1(BigInt(id))
       await tx.wait()
-      setStatus('✅ Prize claimed successfully!')
-      setClaimed(true)
-      setShowConfetti(true)
-      setTimeout(() => setShowConfetti(false), 5000)
-    } catch (e) {
-      setStatus('❌ ' + (e.reason || e.message || 'Claim failed.'))
+      setClaimStatus(`✅ Claimed! Tx: ${tx.hash}`)
+    } catch (err) {
+      setClaimStatus('❌ ' + (err.message || err))
     }
   }
+
+  const deadline = round?.sd?.toNumber?.() || 0
+  const now = Math.floor(Date.now() / 1000)
+  const isOver = now > deadline
 
   if (loading || !round || !tpl) {
     return (
@@ -113,17 +104,9 @@ export default function RoundPage() {
     )
   }
 
-  const deadline = round.sd.toNumber()
-  const now = Math.floor(Date.now() / 1000)
-  const isOver = now > deadline
-  const canClaim = winner && user && winner.toLowerCase() === user && !claimed
-  const share = encodeURIComponent(`Check out this hilarious MadFill round 🧠\n\n${preview}\n\nhttps://madfill.vercel.app/round/${id}`)
-
   return (
     <Layout>
       <Head><title>{name} | MadFill</title></Head>
-      {showConfetti && <Confetti width={width} height={height} />}
-
       <main className="max-w-3xl mx-auto p-6 space-y-6 text-white">
         <Card className="bg-gradient-to-tr from-slate-800 to-purple-800 shadow-lg rounded-xl">
           <CardHeader>
@@ -142,15 +125,14 @@ export default function RoundPage() {
               )}
             </p>
             {winner && <p><strong>Winner:</strong> <code>{winner}</code></p>}
-            {canClaim && (
-              <button
-                onClick={handleClaimPrize}
-                className="mt-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded shadow"
-              >
-                🎉 Claim Prize
-              </button>
+            {isWinner && !round.c1 && (
+              <div className="mt-3 space-y-2">
+                <button onClick={handleClaim} className="bg-green-600 hover:bg-green-500 px-4 py-2 rounded text-white">
+                  🎉 Claim Prize
+                </button>
+                {claimStatus && <p className="text-sm">{claimStatus}</p>}
+              </div>
             )}
-            {status && <p className="text-sm mt-2">{status}</p>}
           </CardContent>
         </Card>
 
@@ -178,8 +160,8 @@ export default function RoundPage() {
         <div className="space-y-2">
           <p className="font-semibold text-white">📣 Share this round:</p>
           <div className="flex gap-3 flex-wrap">
-            <a href={`https://twitter.com/intent/tweet?text=${share}`} target="_blank" className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded">🐦 Twitter</a>
-            <a href={`https://warpcast.com/~/compose?text=${share}`} target="_blank" className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded">🌀 Farcaster</a>
+            <a href={`https://twitter.com/intent/tweet?text=Check out my MadFill Round! 🧠\n${name}\nhttps://madfill.vercel.app/round/${id}`} target="_blank" className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded">🐦 Share on Twitter</a>
+            <a href={`https://warpcast.com/~/compose?text=Check out my MadFill Round! 🧠\n${name}\nhttps://madfill.vercel.app/round/${id}`} target="_blank" className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded">🌀 Share on Farcaster</a>
             <Link href="/" className="bg-slate-600 hover:bg-slate-500 text-white px-4 py-2 rounded">⬅️ Back Home</Link>
           </div>
         </div>
