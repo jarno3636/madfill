@@ -10,7 +10,6 @@ import { Countdown } from '@/components/Countdown'
 import { categories } from '../data/templates'
 import Layout from '@/components/Layout'
 import { motion } from 'framer-motion'
-import { Info } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
 
 export default function Home() {
@@ -138,9 +137,7 @@ export default function Home() {
           <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-2xl rounded-xl">
             <CardHeader className="flex items-center gap-2">
               <h2 className="text-xl font-bold">💸 Fees & Winnings</h2>
-              <Tooltip text="Entry: 0.001 BASE — 0.5% goes to devs, 99.5% to prize pool. Claiming prize: winner pays 0.5% fee.">
-                <Info size={16} className="text-slate-300 cursor-help hover:text-white transition" />
-              </Tooltip>
+              <Tooltip text="Entry: 0.001 BASE — 0.5% goes to devs, 99.5% to prize pool. Claiming prize: winner pays 0.5% fee." />
             </CardHeader>
             <CardContent className="text-sm space-y-2">
               <p><strong>🎯 Entry Fee:</strong> 0.001 BASE</p>
