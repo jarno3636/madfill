@@ -133,61 +133,53 @@ export default function Home() {
       <Head>
         <title>MadFill</title>
       </Head>
-      <div className="bg-gradient-to-br from-slate-900 to-slate-800 min-h-screen text-white">
-        <nav className="flex justify-between items-center p-6 shadow-lg bg-slate-950">
-          <h1 className="text-2xl font-extrabold tracking-tight cursor-pointer" onClick={() => window.location.href = '/'}>
+      <div className="bg-gradient-to-br from-slate-950 to-indigo-900 min-h-screen text-white">
+        <nav className="flex justify-between items-center p-6 shadow-xl bg-slate-950 border-b border-indigo-700">
+          <h1 className="text-2xl font-extrabold tracking-tight cursor-pointer hover:text-indigo-400 transition" onClick={() => window.location.href = '/'}>
             🧠 MadFill
           </h1>
-          <div className="space-x-4">
-            <a href="/" className="text-blue-400 hover:underline">Home</a>
-            <a href="/active" className="text-blue-400 hover:underline">Active Rounds</a>
+          <div className="space-x-6 text-sm font-medium">
+            <a href="/" className="hover:text-indigo-300">Home</a>
+            <a href="/active" className="hover:text-indigo-300">Active Rounds</a>
           </div>
         </nav>
 
-        <main className="max-w-3xl mx-auto p-4 space-y-6">
-          <Card className="bg-slate-800 text-white shadow-xl rounded-2xl">
-            <CardHeader><h2 className="text-lg font-semibold">How It Works</h2></CardHeader>
+        <main className="max-w-3xl mx-auto p-6 space-y-8">
+          <Card className="bg-slate-800 text-white shadow-2xl rounded-xl">
+            <CardHeader><h2 className="text-xl font-bold">How It Works</h2></CardHeader>
             <CardContent>
               <ol className="list-decimal list-inside space-y-2 text-sm">
-                <li>Connect your wallet.</li>
-                <li>Choose a topic, template, and time period.</li>
-                <li>Pick a blank number and add your word.</li>
-                <li>Click “{!roundId ? 'Create & Submit' : mode === 'paid' ? 'Submit Paid' : 'Submit Free (gas only)'}”.</li>
-                <li>Winners are chosen on-chain — check Active tab for results.</li>
+                <li>Connect your wallet to begin.</li>
+                <li>Choose a category and template to play.</li>
+                <li>Pick a blank and fill it with your word.</li>
+                <li>Click to enter (free = gas only).</li>
+                <li>On-chain winners drawn. Check Active tab!</li>
               </ol>
             </CardContent>
           </Card>
 
-          <Card className="bg-slate-800 text-white shadow-xl rounded-2xl">
+          <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
             <CardContent className="text-center">
-              <Button onClick={connectWallet} disabled={!!address || busy}>
+              <Button onClick={connectWallet} disabled={!!address || busy} className="bg-indigo-600 hover:bg-indigo-500">
                 {address ? `👛 ${address}` : 'Connect Wallet'}
               </Button>
             </CardContent>
           </Card>
 
-          <Card className="bg-slate-800 text-white shadow-xl rounded-2xl">
-            <CardHeader><h2 className="text-lg font-semibold">New Round & Submit Entry</h2></CardHeader>
+          <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
+            <CardHeader><h2 className="text-xl font-bold">New Round & Submit Entry</h2></CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label>Category</label>
-                  <select className="block w-full mt-1 border rounded px-2 py-1 bg-slate-900 text-white" value={catIdx} onChange={e => { setCatIdx(+e.target.value); setTplIdx(0) }} disabled={busy}>
-                    {categories.map((c, i) => <option key={i} value={i}>{c.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label>Template</label>
-                  <select className="block w-full mt-1 border rounded px-2 py-1 bg-slate-900 text-white" value={tplIdx} onChange={e => setTplIdx(+e.target.value)} disabled={busy}>
-                    {selectedCategory.templates.map((t, i) => <option key={t.id} value={i}>{t.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label>Duration</label>
-                  <select className="block w-full mt-1 border rounded px-2 py-1 bg-slate-900 text-white" value={duration} onChange={e => setDuration(+e.target.value)} disabled={busy}>
-                    {durations.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
-                  </select>
-                </div>
+                {[['Category', catIdx, setCatIdx, categories.map((c, i) => ({ label: c.name, value: i }))],
+                  ['Template', tplIdx, setTplIdx, selectedCategory.templates.map((t, i) => ({ label: t.name, value: i }))],
+                  ['Duration', duration, setDuration, durations]].map(([label, val, setVal, options]) => (
+                  <div key={label}>
+                    <label>{label}</label>
+                    <select className="block w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1" value={val} onChange={e => setVal(+e.target.value)} disabled={busy}>
+                      {options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                    </select>
+                  </div>
+                ))}
               </div>
 
               <div className="bg-slate-900 border border-slate-700 rounded p-4 font-mono text-sm">
@@ -206,39 +198,35 @@ export default function Home() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label>Your Word</label>
-                  <input type="text" className="block w-full mt-1 border rounded px-2 py-1 bg-slate-900 text-white" value={word} onChange={e => setWord(e.target.value)} disabled={busy} />
+                  <input type="text" className="block w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1" value={word} onChange={e => setWord(e.target.value)} disabled={busy} />
                 </div>
                 <div className="flex items-center space-x-4 mt-6">
-                  <label className="flex items-center space-x-2">
-                    <input type="radio" value="paid" checked={mode === 'paid'} onChange={() => setMode('paid')} disabled={busy} />
-                    <span>Paid ({ENTRY_FEE} BASE)</span>
-                  </label>
-                  <label className="flex items-center space-x-2">
-                    <input type="radio" value="free" checked={mode === 'free'} onChange={() => setMode('free')} disabled={busy} />
-                    <span>Free (gas only)</span>
-                  </label>
+                  {['paid', 'free'].map(m => (
+                    <label key={m} className="flex items-center space-x-2">
+                      <input type="radio" value={m} checked={mode === m} onChange={() => setMode(m)} disabled={busy} />
+                      <span className="capitalize">{m} {m === 'paid' && `(${ENTRY_FEE} BASE)`}</span>
+                    </label>
+                  ))}
                 </div>
               </div>
 
               {deadline && <p className="text-sm">⏱️ Submissions close in: <Countdown targetTimestamp={deadline} /></p>}
 
-              <Button onClick={handleUnifiedSubmit} disabled={!word || busy}>
+              <Button onClick={handleUnifiedSubmit} disabled={!word || busy} className="bg-indigo-600 hover:bg-indigo-500">
                 {!roundId ? '🚀 Create & Submit' : (mode === 'paid' ? '💸 Submit Paid' : '✏️ Submit Free')}
               </Button>
               {status && <p className="mt-2 text-sm">{status}</p>}
             </CardContent>
           </Card>
 
-          <Card className="bg-slate-800 text-white shadow-xl rounded-2xl">
-            <CardHeader><h2 className="text-lg font-semibold">🎉 Recent Winners</h2></CardHeader>
+          <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
+            <CardHeader><h2 className="text-xl font-bold">🎉 Recent Winners</h2></CardHeader>
             <CardContent className="space-y-1 text-sm">
               {recentWinners.length === 0
                 ? <p>No winners yet.</p>
                 : recentWinners.map((w, i) => (
-                    <p key={i}>
-                      Round <strong>#{w.roundId}</strong> → <code>{w.winner}</code>
-                    </p>
-                  ))}
+                    <p key={i}>Round <strong>#{w.roundId}</strong> → <code>{w.winner}</code></p>
+                ))}
             </CardContent>
           </Card>
         </main>
