@@ -1,4 +1,3 @@
-// pages/index.jsx
 import { useState, useEffect, Fragment } from 'react'
 import Head from 'next/head'
 import { ethers, formatBytes32String } from 'ethers'
@@ -17,6 +16,7 @@ export default function Home() {
   const [recentWinners, setRecentWinners] = useState([])
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
+  const [roundName, setRoundName] = useState('')
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx]
   const [duration, setDuration] = useState(1)
@@ -95,6 +95,8 @@ export default function Home() {
         setDeadline(info.sd.toNumber())
         setShowConfetti(true)
         setTimeout(() => setShowConfetti(false), 5000)
+        // Store custom name in localStorage
+        localStorage.setItem(`madfill-roundname-${newId}`, roundName || '')
       }
 
       setStatus('⏳ Submitting entry…')
@@ -154,6 +156,18 @@ export default function Home() {
               ))}
             </div>
 
+            <div className="mt-2">
+              <label>Card Name (max 10 chars)</label>
+              <input
+                type="text"
+                maxLength={10}
+                className="block w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1"
+                value={roundName}
+                onChange={(e) => setRoundName(e.target.value)}
+                disabled={busy}
+              />
+            </div>
+
             <div className="bg-slate-900 border border-slate-700 rounded p-4 font-mono text-sm">
               {tpl.parts.map((part, i) => (
                 <Fragment key={i}>
@@ -186,9 +200,12 @@ export default function Home() {
           <CardContent className="space-y-1 text-sm">
             {recentWinners.length === 0
               ? <p>No winners yet.</p>
-              : recentWinners.map((w, i) => (
-                  <p key={i}>Round <strong>#{w.roundId}</strong> → <code>{w.winner}</code></p>
-              ))}
+              : recentWinners.map((w, i) => {
+                  const name = localStorage.getItem(`madfill-roundname-${w.roundId}`) || `Round #${w.roundId}`
+                  return (
+                    <p key={i}><strong>{name}</strong> → <code>{w.winner}</code></p>
+                  )
+                })}
           </CardContent>
         </Card>
       </main>
