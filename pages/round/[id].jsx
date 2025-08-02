@@ -7,7 +7,8 @@ import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
 import Link from 'next/link'
-import { categories } from '@/data/templates'
+import Confetti from 'react-confetti'
+import { useWindowSize } from 'react-use'
 
 export default function RoundPage() {
   const router = useRouter()
@@ -15,10 +16,16 @@ export default function RoundPage() {
 
   const [round, setRound] = useState(null)
   const [submissions, setSubmissions] = useState([])
-  const [winner, setWinner] = useState(null)
   const [tpl, setTpl] = useState(null)
   const [name, setName] = useState('')
+  const [winner, setWinner] = useState(null)
+  const [claimed, setClaimed] = useState(false)
+  const [status, setStatus] = useState('')
+  const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [showConfetti, setShowConfetti] = useState(false)
+  const [preview, setPreview] = useState('')
+  const { width, height } = useWindowSize()
 
   useEffect(() => {
     if (!id) return
@@ -29,20 +36,34 @@ export default function RoundPage() {
         const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
 
         const info = await ct.rounds(BigInt(id))
-        const template = getTemplate(info.t.toNumber(), info.b.toNumber())
+        const template = getTemplate(info.t?.toNumber?.() || 0, info.b.toNumber())
         setTpl(template)
         setRound(info)
         setName(localStorage.getItem(`madfill-roundname-${id}`) || `Round #${id}`)
 
         const allSubs = await ct.getSubmissions(BigInt(id))
-        setSubmissions(allSubs.map((bytes32, i) => ({
+        const decoded = allSubs.map((bytes32, i) => ({
           index: i,
           word: ethers.decodeBytes32String(bytes32),
-        })))
+        }))
+        setSubmissions(decoded)
 
-        const winEvent = await ct.queryFilter(ct.filters.Draw1(BigInt(id)), 0, 'latest')
-        if (winEvent.length) {
-          setWinner(winEvent[0].args.winner)
+        const w = await ct.w1(BigInt(id))
+        setWinner(w)
+
+        const c = await ct.c1(BigInt(id))
+        setClaimed(c)
+
+        const pv = template.parts
+          .map((part, j) => (j < template.blanks ? `${part}${decoded.find(d => d.index === j)?.word || '____'}` : part))
+          .join('')
+        setPreview(pv)
+
+        if (window.ethereum) {
+          const provider = new ethers.BrowserProvider(window.ethereum)
+          const signer = await provider.getSigner()
+          const addr = await signer.getAddress()
+          setUser(addr.toLowerCase())
         }
 
       } catch (err) {
@@ -57,7 +78,7 @@ export default function RoundPage() {
 
   function getTemplate(templateIndex, blanks) {
     let flat = []
-    for (const c of categories) {
+    for (const c of require('@/data/templates').categories) {
       for (const t of c.templates) flat.push(t)
     }
     const t = flat[templateIndex] || flat[0]
@@ -65,6 +86,23 @@ export default function RoundPage() {
       return { name: 'Unknown', blanks, parts: Array(blanks + 1).fill(' ') }
     }
     return t
+  }
+
+  async function handleClaimPrize() {
+    try {
+      setStatus('⏳ Claiming prize...')
+      const provider = new ethers.BrowserProvider(window.ethereum)
+      const signer = await provider.getSigner()
+      const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
+      const tx = await ct.claim1(BigInt(id))
+      await tx.wait()
+      setStatus('✅ Prize claimed successfully!')
+      setClaimed(true)
+      setShowConfetti(true)
+      setTimeout(() => setShowConfetti(false), 5000)
+    } catch (e) {
+      setStatus('❌ ' + (e.reason || e.message || 'Claim failed.'))
+    }
   }
 
   if (loading || !round || !tpl) {
@@ -78,40 +116,41 @@ export default function RoundPage() {
   const deadline = round.sd.toNumber()
   const now = Math.floor(Date.now() / 1000)
   const isOver = now > deadline
-  const poolAmount = Number(round.e) * Number(round.n) / 1e18
+  const canClaim = winner && user && winner.toLowerCase() === user && !claimed
+  const share = encodeURIComponent(`Check out this hilarious MadFill round 🧠\n\n${preview}\n\nhttps://madfill.vercel.app/round/${id}`)
 
   return (
     <Layout>
       <Head><title>{name} | MadFill</title></Head>
-      <main className="space-y-6 text-white">
+      {showConfetti && <Confetti width={width} height={height} />}
+
+      <main className="max-w-3xl mx-auto p-6 space-y-6 text-white">
         <Card className="bg-gradient-to-tr from-slate-800 to-purple-800 shadow-lg rounded-xl">
           <CardHeader>
             <h2 className="text-xl font-bold">🧠 {name}</h2>
             <p className="text-sm text-indigo-200">Template: {tpl.name}</p>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <p><strong>🎁 Prize Pool:</strong> {poolAmount.toFixed(3)} BASE</p>
-            <p><strong>✍️ Entries:</strong> {round.n.toString()}</p>
+            <p><strong>Prize Pool:</strong> {(round.e * round.n / 1e18).toFixed(3)} BASE</p>
+            <p><strong>Entries:</strong> {round.n.toString()}</p>
             <p>
-              <strong>⏱️ Deadline:</strong>{' '}
+              <strong>Deadline:</strong>{' '}
               {isOver ? (
                 <span className="text-red-400">Closed</span>
               ) : (
                 <Countdown targetTimestamp={deadline} />
               )}
             </p>
-            {winner && (
-              <p><strong>🏆 Winner:</strong>{' '}
-                <a
-                  href={`https://warpcast.com/${winner}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline hover:text-indigo-300"
-                >
-                  {winner}
-                </a>
-              </p>
+            {winner && <p><strong>Winner:</strong> <code>{winner}</code></p>}
+            {canClaim && (
+              <button
+                onClick={handleClaimPrize}
+                className="mt-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded shadow"
+              >
+                🎉 Claim Prize
+              </button>
             )}
+            {status && <p className="text-sm mt-2">{status}</p>}
           </CardContent>
         </Card>
 
@@ -139,23 +178,9 @@ export default function RoundPage() {
         <div className="space-y-2">
           <p className="font-semibold text-white">📣 Share this round:</p>
           <div className="flex gap-3 flex-wrap">
-            <a
-              href={`https://twitter.com/intent/tweet?text=Check out my MadFill Round! 🧠\n${name}\nhttps://madfill.vercel.app/round/${id}`}
-              target="_blank"
-              className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded"
-            >
-              🐦 Share on Twitter
-            </a>
-            <a
-              href={`https://warpcast.com/~/compose?text=Check out my MadFill Round! 🧠\n${name}\nhttps://madfill.vercel.app/round/${id}`}
-              target="_blank"
-              className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded"
-            >
-              🌀 Share on Farcaster
-            </a>
-            <Link href="/" className="bg-slate-600 hover:bg-slate-500 text-white px-4 py-2 rounded">
-              ⬅️ Back Home
-            </Link>
+            <a href={`https://twitter.com/intent/tweet?text=${share}`} target="_blank" className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded">🐦 Twitter</a>
+            <a href={`https://warpcast.com/~/compose?text=${share}`} target="_blank" className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded">🌀 Farcaster</a>
+            <Link href="/" className="bg-slate-600 hover:bg-slate-500 text-white px-4 py-2 rounded">⬅️ Back Home</Link>
           </div>
         </div>
       </main>
