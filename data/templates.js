@@ -477,7 +477,9 @@ export const categories = [
     name: 'Technology',
     templates: [
       {
-        id: 'tech1', name: 'AI Assistant', blanks: 5,
+        id: 'tech1',
+        name: 'AI Assistant',
+        blanks: 5,
         parts: [
           'My AI assistant can now ',
           ' my ',
@@ -488,7 +490,9 @@ export const categories = [
         ]
       },
       {
-        id: 'tech2', name: 'Startup Pitch', blanks: 5,
+        id: 'tech2',
+        name: 'Startup Pitch',
+        blanks: 5,
         parts: [
           'We’re building a platform that ',
           ' the way people ',
@@ -498,7 +502,9 @@ export const categories = [
         ]
       },
       {
-        id: 'tech3', name: 'Gadget Review', blanks: 5,
+        id: 'tech3',
+        name: 'Gadget Review',
+        blanks: 5,
         parts: [
           'The new ',
           ' boasts a ',
@@ -509,7 +515,9 @@ export const categories = [
         ]
       },
       {
-        id: 'tech4', name: 'Cybersecurity Alert', blanks: 5,
+        id: 'tech4',
+        name: 'Cybersecurity Alert',
+        blanks: 4,
         parts: [
           'A recent breach exposed ',
           ' accounts, exploited a ',
@@ -519,7 +527,9 @@ export const categories = [
         ]
       },
       {
-        id: 'tech5', name: 'Space Tech', blanks: 5,
+        id: 'tech5',
+        name: 'Space Tech',
+        blanks: 5,
         parts: [
           'By 2030, rockets will be able to ',
           ' payloads of ',
@@ -527,7 +537,221 @@ export const categories = [
           ', powered by ',
           '.'
         ]
-      },
-    ],
+      }
+    ]
   },
-];
+
+  {
+    name: 'Frog Lore',
+    templates: [
+      {
+        name: 'Toad Prophecy',
+        blanks: 3,
+        parts: [
+          'The sacred toad shall rise on the ',
+          ', bearing the ',
+          ', and hopping toward the ',
+          '.'
+        ]
+      },
+      {
+        name: "Toby's Quest",
+        blanks: 4,
+        parts: [
+          'In the marshes of ',
+          ', young Toby found a ',
+          ', fought a ',
+          ', and claimed the ',
+          '.'
+        ]
+      }
+    ]
+  },
+
+  {
+    name: 'Classic Fun',
+    templates: [
+      {
+        name: 'Birthday Bash',
+        blanks: 3,
+        parts: [
+          'I went to a birthday party and ate ',
+          ', danced with a ',
+          ', and took home a ',
+          '.'
+        ]
+      },
+      {
+        name: 'Embarrassing Day',
+        blanks: 3,
+        parts: [
+          'It was the most embarrassing moment when I slipped on a ',
+          ', landed in a ',
+          ', and everyone yelled ',
+          '.'
+        ]
+      }
+    ]
+  },
+
+  {
+    name: 'Holidays',
+    templates: [
+      {
+        name: 'Frosty Chaos',
+        blanks: 3,
+        parts: [
+          'This holiday, I decorated the tree with ',
+          ', fed Santa a ',
+          ', and found a gift labeled ',
+          '.'
+        ]
+      },
+      {
+        name: 'New Year Plan',
+        blanks: 4,
+        parts: [
+          'In 2025, I vow to ',
+          ', avoid ',
+          ', learn ',
+          ', and finally conquer ',
+          '.'
+        ]
+      }
+    ]
+  },
+
+  {
+    name: 'Spooky Season',
+    templates: [
+      {
+        name: "Witch's Brew",
+        blanks: 3,
+        parts: [
+          'In the cauldron we stirred ',
+          ', mixed in ',
+          ', and chanted to summon ',
+          '.'
+        ]
+      },
+      {
+        name: 'Haunted House',
+        blanks: 4,
+        parts: [
+          'Inside the haunted house I saw a ',
+          ', heard a ',
+          ', ran from a ',
+          ', and screamed ',
+          '.'
+        ]
+      }
+    ]
+  },
+
+  {
+    name: 'Summer',
+    templates: [
+      {
+        name: 'Beach Day',
+        blanks: 3,
+        parts: [
+          'We built a sandcastle with ',
+          ', chased crabs with a ',
+          ', and ate ice cream shaped like a ',
+          '.'
+        ]
+      },
+      {
+        name: 'Sunburn Saga',
+        blanks: 4,
+        parts: [
+          'I forgot sunscreen and ended up looking like a ',
+          ', hiding under a ',
+          ', sipping a ',
+          ', and swearing off beaches for ',
+          '.'
+        ]
+      }
+    ]
+  },
+
+  {
+    name: 'Fantasy',
+    templates: [
+      {
+        name: "Dragon's Lair",
+        blanks: 4,
+        parts: [
+          'The knight drew their ',
+          ', mounted a ',
+          ', battled a ',
+          ', and took the treasure to ',
+          '.'
+        ]
+      },
+      {
+        name: 'Wizard Mishap',
+        blanks: 3,
+        parts: [
+          'The spell backfired, turning my wand into a ',
+          ', summoning a ',
+          ', and teleporting me to ',
+          '.'
+        ]
+      }
+    ]
+  },
+
+  {
+    name: 'AI & Robots',
+    templates: [
+      {
+        name: 'Bot Apocalypse',
+        blanks: 4,
+        parts: [
+          'The robots rose up with ',
+          ', marched through ',
+          ', chanting ',
+          ', and demanded ',
+          '.'
+        ]
+      },
+      {
+        name: 'AI Roommate',
+        blanks: 3,
+        parts: [
+          'My AI roommate makes ',
+          ', argues about ',
+          ', and insists on sleeping in the ',
+          '.'
+        ]
+      }
+    ]
+  },
+
+  {
+    name: 'Shower Thoughts',
+    templates: [
+      {
+        name: 'Deep Realization',
+        blanks: 3,
+        parts: [
+          'While washing my hair, I realized that ',
+          ', means ',
+          ', which changes everything about ',
+          '.'
+        ]
+      },
+      {
+        name: 'Toothbrush Paradox',
+        blanks: 3,
+        parts: [
+          'I’ve been using a ',
+          ', brushing with ',
+          ', and wondering if toothpaste even ',
+          '.'
+        ]
+      }
+    ]
+  }
+]
