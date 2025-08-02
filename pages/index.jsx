@@ -18,11 +18,19 @@ export default function Home() {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [recentWinners, setRecentWinners] = useState([])
-
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx]
+  const [duration, setDuration] = useState(1)
+  const [roundId, setRoundId] = useState('')
+  const [blankIndex, setBlankIndex] = useState('0')
+  const [word, setWord] = useState('')
+  const [mode, setMode] = useState('paid')
+  const [deadline, setDeadline] = useState(null)
+  const [showConfetti, setShowConfetti] = useState(false)
+  const { width, height } = useWindowSize()
+  const ENTRY_FEE = '0.001'
 
   const durations = [
     { label: '1 Day', value: 1 },
@@ -33,15 +41,6 @@ export default function Home() {
     { label: '6 Days', value: 6 },
     { label: '1 Week', value: 7 },
   ]
-  const [duration, setDuration] = useState(1)
-  const ENTRY_FEE = '0.001'
-  const [roundId, setRoundId] = useState('')
-  const [blankIndex, setBlankIndex] = useState('0')
-  const [word, setWord] = useState('')
-  const [mode, setMode] = useState('paid')
-  const [deadline, setDeadline] = useState(null)
-  const [showConfetti, setShowConfetti] = useState(false)
-  const { width, height } = useWindowSize()
 
   useEffect(() => {
     if (!roundId) return setDeadline(null)
@@ -49,8 +48,8 @@ export default function Home() {
     ;(async () => {
       try {
         const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-        const rpcContract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
-        const info = await rpcContract.rounds(BigInt(roundId))
+        const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
+        const info = await contract.rounds(BigInt(roundId))
         if (!cancelled) setDeadline(info.sd.toNumber())
       } catch {
         if (!cancelled) setDeadline(null)
@@ -88,6 +87,10 @@ export default function Home() {
     })
     try {
       const instance = await modal.connect()
+      await instance.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: '0x2105' }],
+      })
       const provider = new ethers.BrowserProvider(instance)
       const _signer = await provider.getSigner()
       const _address = await _signer.getAddress()
@@ -134,6 +137,9 @@ export default function Home() {
   const blankStyle = (active) =>
     `inline-block w-8 text-center border-b-2 ${active ? 'border-white' : 'border-slate-400'} cursor-pointer mx-1`
 
+  const truncateAddress = (addr) =>
+    addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : ''
+
   return (
     <>
       <Head><title>MadFill</title></Head>
@@ -167,7 +173,7 @@ export default function Home() {
           <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
             <CardContent className="text-center">
               <Button onClick={connectWallet} disabled={!!address || busy} className="bg-indigo-600 hover:bg-indigo-500">
-                {address ? `👛 ${address}` : 'Connect Wallet'}
+                {address ? `👛 ${truncateAddress(address)}` : 'Connect Wallet'}
               </Button>
             </CardContent>
           </Card>
