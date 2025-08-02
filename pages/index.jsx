@@ -8,7 +8,7 @@ import abi from '../abi/FillInStoryFull.json'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
-import { categories } from '@/data/templates'
+import { categories } from '../data/templates'
 
 export default function Home() {
   const [address, setAddress] = useState(null)
