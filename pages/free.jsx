@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import Head from 'next/head'
-import { useWindowSize } from 'react-use'
-import Confetti from 'react-confetti'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { categories } from '@/data/templates'
+import { useWindowSize } from 'react-use'
+import Confetti from 'react-confetti'
+import { categories } from '../data/templates'
+import StyledCard from '@/components/StyledCard'
 
 export default function FreeGame() {
   const [catIdx, setCatIdx] = useState(0)
@@ -26,29 +27,16 @@ export default function FreeGame() {
     setTimeout(() => setSubmitted(false), 5000)
   }
 
-  const renderFilledCard = () => {
-    return template.parts.map((part, i) => (
-      <span key={i}>
-        {part}
-        {i < template.blanks && (
-          <strong className="text-pink-400 mx-1">{words[i] || '____'}</strong>
-        )}
-      </span>
-    ))
-  }
-
   const shareText = encodeURIComponent(
     `I just played the Free 🧠 MadFill Game!\n\n${template.parts
       .map((part, i) =>
-        i < template.blanks
-          ? `${part}${words[i] || '____'}`
-          : part
+        i < template.blanks ? `${part}${words[i] || '____'}` : part
       )
       .join('')} \n\nPlay for free: https://madfill.vercel.app/free`
   )
 
-  const twitterLink = `https://twitter.com/intent/tweet?text=${shareText}`
   const farcasterLink = `https://warpcast.com/~/compose?text=${shareText}`
+  const twitterLink = `https://twitter.com/intent/tweet?text=${shareText}`
 
   return (
     <Layout>
@@ -60,7 +48,8 @@ export default function FreeGame() {
           <h2 className="text-xl font-bold">🎁 Free MadFill</h2>
           <p className="text-sm text-indigo-200">Fill in the blanks for fun — no wallet needed!</p>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-6">
+          {/* Dropdowns */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label>Category</label>
@@ -95,6 +84,7 @@ export default function FreeGame() {
             </div>
           </div>
 
+          {/* Input fields */}
           <div className="space-y-2">
             {Array.from({ length: template.blanks }).map((_, i) => (
               <input
@@ -116,15 +106,15 @@ export default function FreeGame() {
           </Button>
 
           {submitted && (
-            <div className="bg-slate-800 p-4 rounded mt-4 border border-pink-500 shadow-inner text-white">
-              <h3 className="font-semibold mb-2">Your Completed Card:</h3>
-              <p className="text-lg">{renderFilledCard()}</p>
-              <div className="mt-4 flex gap-4 flex-wrap">
+            <div className="bg-slate-800 p-4 rounded mt-4 border border-pink-500 shadow-inner text-white space-y-4">
+              <h3 className="font-semibold">Your Completed Card:</h3>
+              <StyledCard parts={template.parts} blanks={template.blanks} words={words} />
+              <div className="flex flex-wrap gap-4">
                 <a
                   href={twitterLink}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center px-3 py-1 bg-blue-500 hover:bg-blue-400 text-white rounded shadow"
+                  className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-white"
                 >
                   🐦 Share on Twitter
                 </a>
@@ -132,9 +122,9 @@ export default function FreeGame() {
                   href={farcasterLink}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded shadow"
+                  className="inline-flex items-center px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded text-white"
                 >
-                  💬 Share on Farcaster
+                  🌀 Share on Farcaster
                 </a>
               </div>
             </div>
