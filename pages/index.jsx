@@ -1,6 +1,6 @@
 import { useState, useEffect, Fragment } from 'react'
 import Head from 'next/head'
-import { ethers, formatBytes32String } from 'ethers'
+import { ethers } from 'ethers'
 import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
 import abi from '../abi/FillInStoryFull.json'
@@ -11,11 +11,12 @@ import { categories } from '../data/templates'
 import Layout from '@/components/Layout'
 import { motion } from 'framer-motion'
 import { Info } from 'lucide-react'
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
+import { Tooltip } from '@/components/ui/tooltip'
 
 export default function Home() {
   const [signer, setSigner] = useState(null)
   const [status, setStatus] = useState('')
+  const formatBytes32String = ethers.encodeBytes32String
   const [recentWinners, setRecentWinners] = useState([])
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
