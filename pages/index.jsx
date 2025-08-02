@@ -26,7 +26,6 @@ export default function Home() {
   const [roundId, setRoundId] = useState('')
   const [blankIndex, setBlankIndex] = useState('0')
   const [word, setWord] = useState('')
-  const [mode, setMode] = useState('paid')
   const [deadline, setDeadline] = useState(null)
   const [showConfetti, setShowConfetti] = useState(false)
   const { width, height } = useWindowSize()
@@ -122,11 +121,9 @@ export default function Home() {
       }
       setStatus('⏳ Submitting entry…')
       const data = formatBytes32String(word)
-      const tx2 = mode === 'paid'
-        ? await ct.submitPaid(BigInt(newId), Number(blankIndex), data, { value: ethers.parseEther(ENTRY_FEE) })
-        : await ct.submitFree(BigInt(newId), Number(blankIndex), data)
+      const tx2 = await ct.submitPaid(BigInt(newId), Number(blankIndex), data, { value: ethers.parseEther(ENTRY_FEE) })
       await tx2.wait()
-      setStatus(`✅ Round ${newId} ${mode} entry submitted! Tx: ${tx2.hash}`)
+      setStatus(`✅ Round ${newId} entry submitted! Tx: ${tx2.hash}`)
     } catch (e) {
       setStatus('❌ ' + (e.message || e))
     } finally {
@@ -150,41 +147,33 @@ export default function Home() {
           </h1>
           <div className="space-x-6 text-sm font-medium">
             <a href="/" className="hover:text-indigo-300">Home</a>
-            <a href="/active" className="hover:text-indigo-300">Active Rounds</a>
+            <a href="/active" className="hover:text-indigo-300">Find a Pool</a>
           </div>
         </nav>
 
-        {showConfetti && <Confetti width={width} height={height} />}
+        {showConfetti && <Confetti width={width} height={height} />} 
 
         <main className="max-w-3xl mx-auto p-6 space-y-8">
-
-          {/* 💸 Fee Breakdown Card */}
-          <Card className="bg-gradient-to-br from-purple-800 to-indigo-900 text-white shadow-xl rounded-xl border border-indigo-700">
-            <CardHeader><h2 className="text-xl font-bold">💸 Fee & Pool Breakdown</h2></CardHeader>
-            <CardContent className="text-sm space-y-1 leading-relaxed">
-              <p>🎯 Paid Entry: <strong>{ENTRY_FEE} BASE</strong></p>
-              <p>📦 99.5% goes into the prize pool</p>
-              <p>💼 0.5% is sent to the creator (you!)</p>
-              <p>⚙️ Free mode = only gas fees</p>
-              <p>🧮 Winners drawn transparently on-chain</p>
+          <Card className="bg-gradient-to-tr from-purple-800 to-indigo-900 text-white shadow-2xl rounded-xl">
+            <CardHeader><h2 className="text-xl font-bold">🎮 What Is MadFill?</h2></CardHeader>
+            <CardContent className="text-sm space-y-2">
+              <p>MadFill is an on-chain word game where you create hilarious sentence mashups by filling in the blanks on funny templates!</p>
+              <p>Each new round costs <strong>{ENTRY_FEE} BASE</strong> to create and submit your entry. Your entry goes into the prize pool.</p>
+              <p>After a few days, the round ends and a winner is drawn automatically. The winner takes home 99.5% of the pool.</p>
+              <p>You can start your own round, or find an active one to enter!</p>
             </CardContent>
           </Card>
 
-          {/* 📘 How It Works Card */}
           <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-2xl rounded-xl">
-            <CardHeader><h2 className="text-xl font-bold">How It Works</h2></CardHeader>
-            <CardContent>
-              <ol className="list-decimal list-inside space-y-2 text-sm">
-                <li>Connect your wallet to begin.</li>
-                <li>Choose a category and template to play.</li>
-                <li>Pick a blank and fill it with your word.</li>
-                <li>Click to enter (free = gas only).</li>
-                <li>On-chain winners drawn. Check Active tab!</li>
-              </ol>
+            <CardHeader><h2 className="text-xl font-bold">💸 Fee & Pool Breakdown</h2></CardHeader>
+            <CardContent className="text-sm space-y-1">
+              <p>🎯 Paid Entry: <strong>{ENTRY_FEE} BASE</strong></p>
+              <p>📦 99.5% to prize pool</p>
+              <p>💼 0.5% creator fee (you!)</p>
+              <p>🧮 Winners drawn automatically on-chain</p>
             </CardContent>
           </Card>
 
-          {/* 👛 Connect Wallet Card */}
           <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
             <CardContent className="text-center">
               <Button onClick={connectWallet} disabled={!!address || busy} className="bg-indigo-600 hover:bg-indigo-500">
@@ -193,11 +182,49 @@ export default function Home() {
             </CardContent>
           </Card>
 
-          {/* 🚀 New Round & Submit Entry Card */}
-          {/* (this remains unchanged from your original) */}
-          {/* ... */}
-          
-          {/* 🏆 Recent Winners */}
+          <Card className="bg-gradient-to-tr from-slate-800 to-purple-800 text-white shadow-xl rounded-xl">
+            <CardHeader><h2 className="text-xl font-bold">Start New Round</h2></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {[['Category', catIdx, setCatIdx, categories.map((c, i) => ({ label: c.name, value: i }))],
+                  ['Template', tplIdx, setTplIdx, selectedCategory.templates.map((t, i) => ({ label: t.name, value: i }))],
+                  ['Duration', duration, setDuration, durations]].map(([label, val, setVal, options]) => (
+                  <div key={label}>
+                    <label>{label}</label>
+                    <select className="block w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1" value={val} onChange={e => setVal(+e.target.value)} disabled={busy}>
+                      {options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+
+              <div className="bg-slate-900 border border-slate-700 rounded p-4 font-mono text-sm">
+                {tpl.parts.map((part, i) => (
+                  <Fragment key={i}>
+                    <span>{part}</span>
+                    {i < tpl.blanks && (
+                      <span className={blankStyle(i === +blankIndex)} onClick={() => setBlankIndex(String(i))}>{i}</span>
+                    )}
+                  </Fragment>
+                ))}
+              </div>
+
+              <p className="text-sm">Selected Blank: <strong>{blankIndex}</strong></p>
+
+              <div className="mt-2">
+                <label>Your Word</label>
+                <input type="text" className="block w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1" value={word} onChange={e => setWord(e.target.value)} disabled={busy} />
+              </div>
+
+              {deadline && <p className="text-sm">⏱️ Submissions close in: <Countdown targetTimestamp={deadline} /></p>}
+
+              <Button onClick={handleUnifiedSubmit} disabled={!word || busy} className="bg-indigo-600 hover:bg-indigo-500">
+                {!roundId ? '🚀 Create & Submit' : '✏️ Submit Entry'}
+              </Button>
+              {status && <p className="mt-2 text-sm">{status}</p>}
+            </CardContent>
+          </Card>
+
           <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
             <CardHeader><h2 className="text-xl font-bold">🎉 Recent Winners</h2></CardHeader>
             <CardContent className="space-y-1 text-sm">
