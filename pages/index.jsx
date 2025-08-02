@@ -126,117 +126,123 @@ export default function Home() {
   }
 
   const blankStyle = (active) =>
-    `inline-block w-8 text-center border-b-2 ${active ? 'border-black' : 'border-gray-400'} cursor-pointer mx-1`
+    `inline-block w-8 text-center border-b-2 ${active ? 'border-white' : 'border-slate-400'} cursor-pointer mx-1`
 
   return (
     <>
-      <Head><title>MadFill</title></Head>
-      <nav className="flex justify-between items-center p-4 bg-white border-b shadow-sm">
-        <h1 className="text-xl font-bold cursor-pointer" onClick={() => window.location.href = '/'}>MadFill</h1>
-        <div className="space-x-4">
-          <a href="/" className="text-blue-600">Home</a>
-          <a href="/active" className="text-blue-600">Active Rounds</a>
-        </div>
-      </nav>
+      <Head>
+        <title>MadFill</title>
+      </Head>
+      <div className="bg-gradient-to-br from-slate-900 to-slate-800 min-h-screen text-white">
+        <nav className="flex justify-between items-center p-6 shadow-lg bg-slate-950">
+          <h1 className="text-2xl font-extrabold tracking-tight cursor-pointer" onClick={() => window.location.href = '/'}>
+            🧠 MadFill
+          </h1>
+          <div className="space-x-4">
+            <a href="/" className="text-blue-400 hover:underline">Home</a>
+            <a href="/active" className="text-blue-400 hover:underline">Active Rounds</a>
+          </div>
+        </nav>
 
-      <main className="max-w-3xl mx-auto p-4 space-y-6">
-        <Card>
-          <CardHeader><h2>How It Works</h2></CardHeader>
-          <CardContent>
-            <ol className="list-decimal list-inside space-y-2 text-sm">
-              <li>Connect your wallet.</li>
-              <li>Choose a topic, template, and time period.</li>
-              <li>Pick a blank number and add your word.</li>
-              <li>Click “{!roundId ? 'Create & Submit' : mode === 'paid' ? 'Submit Paid' : 'Submit Free (gas only)'}” — gas is required even for free entries.</li>
-              <li>Winners are chosen on-chain — view open rounds on the Active tab.</li>
-            </ol>
-          </CardContent>
-        </Card>
+        <main className="max-w-3xl mx-auto p-4 space-y-6">
+          <Card className="bg-slate-800 text-white shadow-xl rounded-2xl">
+            <CardHeader><h2 className="text-lg font-semibold">How It Works</h2></CardHeader>
+            <CardContent>
+              <ol className="list-decimal list-inside space-y-2 text-sm">
+                <li>Connect your wallet.</li>
+                <li>Choose a topic, template, and time period.</li>
+                <li>Pick a blank number and add your word.</li>
+                <li>Click “{!roundId ? 'Create & Submit' : mode === 'paid' ? 'Submit Paid' : 'Submit Free (gas only)'}”.</li>
+                <li>Winners are chosen on-chain — check Active tab for results.</li>
+              </ol>
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardContent className="text-center">
-            <Button onClick={connectWallet} disabled={!!address || busy}>
-              {address ? `👛 ${address}` : 'Connect Wallet'}
-            </Button>
-          </CardContent>
-        </Card>
+          <Card className="bg-slate-800 text-white shadow-xl rounded-2xl">
+            <CardContent className="text-center">
+              <Button onClick={connectWallet} disabled={!!address || busy}>
+                {address ? `👛 ${address}` : 'Connect Wallet'}
+              </Button>
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader><h2>New Round & Submit Entry</h2></CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label>Category</label>
-                <select className="block w-full mt-1 border rounded px-2 py-1" value={catIdx} onChange={e => { setCatIdx(+e.target.value); setTplIdx(0) }} disabled={busy}>
-                  {categories.map((c, i) => <option key={i} value={i}>{c.name}</option>)}
-                </select>
+          <Card className="bg-slate-800 text-white shadow-xl rounded-2xl">
+            <CardHeader><h2 className="text-lg font-semibold">New Round & Submit Entry</h2></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label>Category</label>
+                  <select className="block w-full mt-1 border rounded px-2 py-1 bg-slate-900 text-white" value={catIdx} onChange={e => { setCatIdx(+e.target.value); setTplIdx(0) }} disabled={busy}>
+                    {categories.map((c, i) => <option key={i} value={i}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label>Template</label>
+                  <select className="block w-full mt-1 border rounded px-2 py-1 bg-slate-900 text-white" value={tplIdx} onChange={e => setTplIdx(+e.target.value)} disabled={busy}>
+                    {selectedCategory.templates.map((t, i) => <option key={t.id} value={i}>{t.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label>Duration</label>
+                  <select className="block w-full mt-1 border rounded px-2 py-1 bg-slate-900 text-white" value={duration} onChange={e => setDuration(+e.target.value)} disabled={busy}>
+                    {durations.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+                  </select>
+                </div>
               </div>
-              <div>
-                <label>Template</label>
-                <select className="block w-full mt-1 border rounded px-2 py-1" value={tplIdx} onChange={e => setTplIdx(+e.target.value)} disabled={busy}>
-                  {selectedCategory.templates.map((t, i) => <option key={t.id} value={i}>{t.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label>Duration</label>
-                <select className="block w-full mt-1 border rounded px-2 py-1" value={duration} onChange={e => setDuration(+e.target.value)} disabled={busy}>
-                  {durations.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
-                </select>
-              </div>
-            </div>
 
-            <div className="bg-yellow-50 border border-yellow-200 rounded p-4 font-mono text-sm">
-              {tpl.parts.map((part, i) => (
-                <Fragment key={i}>
-                  <span>{part}</span>
-                  {i < tpl.blanks && (
-                    <span className={blankStyle(i === +blankIndex)} onClick={() => setBlankIndex(String(i))}>{i}</span>
-                  )}
-                </Fragment>
-              ))}
-            </div>
-
-            <p className="text-sm">Selected Blank: <strong>{blankIndex}</strong></p>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label>Your Word</label>
-                <input type="text" className="block w-full mt-1 border rounded px-2 py-1" value={word} onChange={e => setWord(e.target.value)} disabled={busy} />
-              </div>
-              <div className="flex items-center space-x-4 mt-6">
-                <label className="flex items-center space-x-2">
-                  <input type="radio" value="paid" checked={mode === 'paid'} onChange={() => setMode('paid')} disabled={busy} />
-                  <span>Paid ({ENTRY_FEE} BASE)</span>
-                </label>
-                <label className="flex items-center space-x-2">
-                  <input type="radio" value="free" checked={mode === 'free'} onChange={() => setMode('free')} disabled={busy} />
-                  <span>Free (gas only)</span>
-                </label>
-              </div>
-            </div>
-
-            {deadline && <p className="text-sm">⏱️ Submissions close in: <Countdown targetTimestamp={deadline} /></p>}
-
-            <Button onClick={handleUnifiedSubmit} disabled={!word || busy}>
-              {!roundId ? '🚀 Create & Submit' : (mode === 'paid' ? '💸 Submit Paid' : '✏️ Submit Free')}
-            </Button>
-            {status && <p className="mt-2 text-sm">{status}</p>}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader><h2>🎉 Recent Winners</h2></CardHeader>
-          <CardContent className="space-y-1 text-sm">
-            {recentWinners.length === 0
-              ? <p>No winners yet.</p>
-              : recentWinners.map((w, i) => (
-                  <p key={i}>
-                    Round <strong>#{w.roundId}</strong> → <code>{w.winner}</code>
-                  </p>
+              <div className="bg-slate-900 border border-slate-700 rounded p-4 font-mono text-sm">
+                {tpl.parts.map((part, i) => (
+                  <Fragment key={i}>
+                    <span>{part}</span>
+                    {i < tpl.blanks && (
+                      <span className={blankStyle(i === +blankIndex)} onClick={() => setBlankIndex(String(i))}>{i}</span>
+                    )}
+                  </Fragment>
                 ))}
-          </CardContent>
-        </Card>
-      </main>
+              </div>
+
+              <p className="text-sm">Selected Blank: <strong>{blankIndex}</strong></p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label>Your Word</label>
+                  <input type="text" className="block w-full mt-1 border rounded px-2 py-1 bg-slate-900 text-white" value={word} onChange={e => setWord(e.target.value)} disabled={busy} />
+                </div>
+                <div className="flex items-center space-x-4 mt-6">
+                  <label className="flex items-center space-x-2">
+                    <input type="radio" value="paid" checked={mode === 'paid'} onChange={() => setMode('paid')} disabled={busy} />
+                    <span>Paid ({ENTRY_FEE} BASE)</span>
+                  </label>
+                  <label className="flex items-center space-x-2">
+                    <input type="radio" value="free" checked={mode === 'free'} onChange={() => setMode('free')} disabled={busy} />
+                    <span>Free (gas only)</span>
+                  </label>
+                </div>
+              </div>
+
+              {deadline && <p className="text-sm">⏱️ Submissions close in: <Countdown targetTimestamp={deadline} /></p>}
+
+              <Button onClick={handleUnifiedSubmit} disabled={!word || busy}>
+                {!roundId ? '🚀 Create & Submit' : (mode === 'paid' ? '💸 Submit Paid' : '✏️ Submit Free')}
+              </Button>
+              {status && <p className="mt-2 text-sm">{status}</p>}
+            </CardContent>
+          </Card>
+
+          <Card className="bg-slate-800 text-white shadow-xl rounded-2xl">
+            <CardHeader><h2 className="text-lg font-semibold">🎉 Recent Winners</h2></CardHeader>
+            <CardContent className="space-y-1 text-sm">
+              {recentWinners.length === 0
+                ? <p>No winners yet.</p>
+                : recentWinners.map((w, i) => (
+                    <p key={i}>
+                      Round <strong>#{w.roundId}</strong> → <code>{w.winner}</code>
+                    </p>
+                  ))}
+            </CardContent>
+          </Card>
+        </main>
+      </div>
     </>
   )
 }
