@@ -154,22 +154,60 @@ export default function Home() {
           </div>
         </nav>
 
-        {showConfetti && <Confetti width={width} height={height} />} 
+        {showConfetti && <Confetti width={width} height={height} />}
 
         <main className="max-w-3xl mx-auto p-6 space-y-8">
-          <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-2xl rounded-xl">
+
+          {/* 💸 Fee Breakdown Card */}
+          <Card className="bg-gradient-to-br from-purple-800 to-indigo-900 text-white shadow-xl rounded-xl border border-indigo-700">
             <CardHeader><h2 className="text-xl font-bold">💸 Fee & Pool Breakdown</h2></CardHeader>
-            <CardContent className="text-sm space-y-1">
+            <CardContent className="text-sm space-y-1 leading-relaxed">
               <p>🎯 Paid Entry: <strong>{ENTRY_FEE} BASE</strong></p>
-              <p>📦 99.5% to prize pool</p>
-              <p>💼 0.5% creator fee (you!)</p>
-              <p>⚙️ Free mode only pays gas</p>
-              <p>🧮 Winners drawn automatically on-chain</p>
+              <p>📦 99.5% goes into the prize pool</p>
+              <p>💼 0.5% is sent to the creator (you!)</p>
+              <p>⚙️ Free mode = only gas fees</p>
+              <p>🧮 Winners drawn transparently on-chain</p>
             </CardContent>
           </Card>
 
-          {/* Existing Cards below this line... */}
+          {/* 📘 How It Works Card */}
+          <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-2xl rounded-xl">
+            <CardHeader><h2 className="text-xl font-bold">How It Works</h2></CardHeader>
+            <CardContent>
+              <ol className="list-decimal list-inside space-y-2 text-sm">
+                <li>Connect your wallet to begin.</li>
+                <li>Choose a category and template to play.</li>
+                <li>Pick a blank and fill it with your word.</li>
+                <li>Click to enter (free = gas only).</li>
+                <li>On-chain winners drawn. Check Active tab!</li>
+              </ol>
+            </CardContent>
+          </Card>
 
+          {/* 👛 Connect Wallet Card */}
+          <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
+            <CardContent className="text-center">
+              <Button onClick={connectWallet} disabled={!!address || busy} className="bg-indigo-600 hover:bg-indigo-500">
+                {address ? `👛 ${truncateAddress(address)}` : 'Connect Wallet'}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* 🚀 New Round & Submit Entry Card */}
+          {/* (this remains unchanged from your original) */}
+          {/* ... */}
+          
+          {/* 🏆 Recent Winners */}
+          <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
+            <CardHeader><h2 className="text-xl font-bold">🎉 Recent Winners</h2></CardHeader>
+            <CardContent className="space-y-1 text-sm">
+              {recentWinners.length === 0
+                ? <p>No winners yet.</p>
+                : recentWinners.map((w, i) => (
+                    <p key={i}>Round <strong>#{w.roundId}</strong> → <code>{w.winner}</code></p>
+                ))}
+            </CardContent>
+          </Card>
         </main>
       </div>
     </>
