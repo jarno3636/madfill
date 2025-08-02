@@ -15,6 +15,7 @@ export default function Active() {
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('all')
   const [search, setSearch] = useState('')
+  const [showModalId, setShowModalId] = useState(null)
   const { width, height } = useWindowSize()
 
   useEffect(() => {
@@ -54,6 +55,7 @@ export default function Active() {
           const fCnt = freeCount[id] || 0
           return {
             id,
+            name: e.args.name || `Round ${id}`,
             fee,
             deadline: dl,
             timeRemaining: rem,
@@ -80,7 +82,7 @@ export default function Active() {
       tab === 'all' ||
       (tab === 'paid' && r.paidCount > 0) ||
       (tab === 'free' && r.freeCount > 0)
-    const matchSearch = search === '' || r.id.toString().includes(search)
+    const matchSearch = search === '' || r.name.toLowerCase().includes(search.toLowerCase()) || r.id.toString().includes(search)
     return matchTab && matchSearch
   })
 
@@ -96,7 +98,6 @@ export default function Active() {
         <main className="max-w-3xl mx-auto p-6 space-y-6">
           <h1 className="text-3xl font-bold text-center">Active MadFill Rounds</h1>
 
-          {/* Top Pool */}
           {!loading && topPool && (
             <Card className="border-2 border-yellow-400 bg-slate-800 text-white">
               <CardHeader>
@@ -111,11 +112,10 @@ export default function Active() {
             </Card>
           )}
 
-          {/* Controls */}
           <div className="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0 md:space-x-6">
             <input
               type="text"
-              placeholder="🔍 Search Round ID"
+              placeholder="🔍 Search by name or ID"
               className="w-full md:max-w-sm px-4 py-2 rounded-xl bg-slate-800 text-white border border-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-gray-400"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -138,10 +138,7 @@ export default function Active() {
             </div>
           </div>
 
-          {/* Loading */}
           {loading && <p className="text-center">Loading rounds…</p>}
-
-          {/* Round List */}
           {!loading && filtered.length === 0 && (
             <p className="text-center">No {tab} rounds found.</p>
           )}
@@ -157,18 +154,17 @@ export default function Active() {
               >
                 <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
                   <CardHeader className="flex justify-between items-center">
-                    <span>Round #{r.id}</span>
+                    <div>
+                      <div className="text-lg font-semibold">{r.name || `Round #${r.id}`}</div>
+                      <div className="text-sm text-slate-400">ID: {r.id}</div>
+                    </div>
                     <span className="px-2 py-1 text-xs rounded bg-indigo-500 animate-pulse text-white">LIVE</span>
                   </CardHeader>
                   <CardContent className="space-y-2 text-sm">
                     <p><strong>Pool:</strong> {r.pool.toFixed(3)} BASE</p>
                     <p><strong>Paid Entries:</strong> {r.paidCount}</p>
                     <p><strong>Free Entries:</strong> {r.freeCount}</p>
-                    <p>
-                      <strong>Time Left:</strong>{' '}
-                      {Math.floor(r.timeRemaining / 3600)}h{' '}
-                      {Math.floor((r.timeRemaining % 3600) / 60)}m
-                    </p>
+                    <p><strong>Time Left:</strong> {Math.floor(r.timeRemaining / 3600)}h {Math.floor((r.timeRemaining % 3600) / 60)}m</p>
                     <Button onClick={() => window.location.href = `/?roundId=${r.id}`}>Participate</Button>
                   </CardContent>
                 </Card>
@@ -176,6 +172,9 @@ export default function Active() {
             ))}
           </AnimatePresence>
         </main>
+        {showModalId !== null && (
+          <Confetti width={width} height={height} />
+        )}
       </div>
     </>
   )
