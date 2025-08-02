@@ -1,7 +1,7 @@
 // pages/active.jsx
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Fragment } from 'react'
 import Head from 'next/head'
-import { ethers } from 'ethers'
+import { ethers, formatBytes32String } from 'ethers'
 import abi from '../abi/FillInStoryFull.json'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -16,7 +16,12 @@ export default function Active() {
   const [tab, setTab] = useState('all')
   const [search, setSearch] = useState('')
   const [showModalId, setShowModalId] = useState(null)
+  const [entryWord, setEntryWord] = useState('')
+  const [blankIndex, setBlankIndex] = useState(0)
+  const [entryStatus, setEntryStatus] = useState('')
+  const [busy, setBusy] = useState(false)
   const { width, height } = useWindowSize()
+  const ENTRY_FEE = '0.001'
 
   useEffect(() => {
     async function load() {
@@ -56,6 +61,7 @@ export default function Active() {
           return {
             id,
             name: e.args.name || `Round ${id}`,
+            blanks: e.args.blanks,
             fee,
             deadline: dl,
             timeRemaining: rem,
@@ -86,6 +92,36 @@ export default function Active() {
     return matchTab && matchSearch
   })
 
+  const submitEntry = async () => {
+    try {
+      if (!window.ethereum) throw new Error('No wallet found')
+      const provider = new ethers.BrowserProvider(window.ethereum)
+      const signer = await provider.getSigner()
+      const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
+
+      setBusy(true)
+      setEntryStatus('Submitting...')
+
+      const data = formatBytes32String(entryWord)
+      const tx = await contract.submitPaid(BigInt(showModalId), Number(blankIndex), data, {
+        value: ethers.parseEther(ENTRY_FEE),
+      })
+      await tx.wait()
+
+      setEntryStatus('✅ Submitted!')
+      setTimeout(() => {
+        setShowModalId(null)
+        setEntryWord('')
+        setBlankIndex(0)
+        setEntryStatus('')
+      }, 2000)
+    } catch (e) {
+      setEntryStatus('❌ ' + (e?.message || 'Failed'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <>
       <Head><title>Active Rounds | MadFill</title></Head>
@@ -107,7 +143,7 @@ export default function Active() {
                 <p>
                   <strong>Round #{topPool.id}</strong> — Pool: {topPool.pool.toFixed(3)} BASE
                 </p>
-                <Button onClick={() => window.location.href = `/?roundId=${topPool.id}`}>Participate</Button>
+                <Button onClick={() => setShowModalId(topPool.id)}>Participate</Button>
               </CardContent>
             </Card>
           )}
@@ -165,16 +201,54 @@ export default function Active() {
                     <p><strong>Paid Entries:</strong> {r.paidCount}</p>
                     <p><strong>Free Entries:</strong> {r.freeCount}</p>
                     <p><strong>Time Left:</strong> {Math.floor(r.timeRemaining / 3600)}h {Math.floor((r.timeRemaining % 3600) / 60)}m</p>
-                    <Button onClick={() => window.location.href = `/?roundId=${r.id}`}>Participate</Button>
+                    <Button onClick={() => setShowModalId(r.id)}>Participate</Button>
                   </CardContent>
                 </Card>
               </motion.div>
             ))}
           </AnimatePresence>
+
+          {showModalId !== null && (
+            <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
+              <div className="bg-slate-900 rounded-lg p-6 w-full max-w-md space-y-4 border border-indigo-700 shadow-lg">
+                <h2 className="text-xl font-bold">Enter Round #{showModalId}</h2>
+                <div>
+                  <label>Your Word</label>
+                  <input
+                    type="text"
+                    className="block w-full mt-1 bg-slate-800 text-white border rounded px-2 py-1"
+                    value={entryWord}
+                    onChange={(e) => setEntryWord(e.target.value)}
+                    maxLength={20}
+                    disabled={busy}
+                  />
+                </div>
+                <div>
+                  <label>Blank Index</label>
+                  <input
+                    type="number"
+                    className="block w-full mt-1 bg-slate-800 text-white border rounded px-2 py-1"
+                    value={blankIndex}
+                    onChange={(e) => setBlankIndex(Number(e.target.value))}
+                    min={0}
+                    max={4}
+                    disabled={busy}
+                  />
+                </div>
+                <div className="flex justify-between space-x-4">
+                  <Button onClick={submitEntry} disabled={busy || !entryWord}>
+                    Submit Entry
+                  </Button>
+                  <Button variant="ghost" onClick={() => setShowModalId(null)}>
+                    Cancel
+                  </Button>
+                </div>
+                {entryStatus && <p className="text-sm">{entryStatus}</p>}
+              </div>
+              {entryStatus.includes('✅') && <Confetti width={width} height={height} />}
+            </div>
+          )}
         </main>
-        {showModalId !== null && (
-          <Confetti width={width} height={height} />
-        )}
       </div>
     </>
   )
