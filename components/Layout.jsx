@@ -32,7 +32,7 @@ export default function Layout({ children }) {
       const instance = await modal.connect()
       await instance.request({
         method: 'wallet_switchEthereumChain',
-        params: [{ chainId: '0x2105' }],
+        params: [{ chainId: '0x2105' }], // Base Mainnet
       })
       const provider = new ethers.BrowserProvider(instance)
       const _signer = await provider.getSigner()
