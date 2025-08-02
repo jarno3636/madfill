@@ -138,18 +138,9 @@ export default function Home() {
           <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-2xl rounded-xl">
             <CardHeader className="flex items-center gap-2">
               <h2 className="text-xl font-bold">💸 Fees & Winnings</h2>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger><Info size={16} className="text-slate-300" /></TooltipTrigger>
-                  <TooltipContent className="bg-slate-900 text-white border border-slate-600">
-                    <p>
-                      Entry: 0.001 BASE — 0.5% goes to devs, 99.5% to prize pool.
-                      <br />
-                      Claiming prize: winner pays 0.5% fee.
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Tooltip text="Entry: 0.001 BASE — 0.5% goes to devs, 99.5% to prize pool. Claiming prize: winner pays 0.5% fee.">
+                <Info size={16} className="text-slate-300 cursor-help hover:text-white transition" />
+              </Tooltip>
             </CardHeader>
             <CardContent className="text-sm space-y-2">
               <p><strong>🎯 Entry Fee:</strong> 0.001 BASE</p>
