@@ -157,22 +157,18 @@ export default function Home() {
         {showConfetti && <Confetti width={width} height={height} />} 
 
         <main className="max-w-3xl mx-auto p-6 space-y-8">
-
-          {/* Fee & Pool Breakdown Card */}
-          <Card className="bg-gradient-to-tr from-indigo-800 to-purple-800 text-white shadow-xl rounded-xl">
-            <CardHeader>
-              <h2 className="text-xl font-bold">💰 Fee & Pool Breakdown</h2>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm leading-relaxed">
-              <ul className="list-disc list-inside">
-                <li><strong>Paid Entry:</strong> Costs <code>{ENTRY_FEE} BASE</code> to join a round.</li>
-                <li><strong>Platform Fee:</strong> 0.5% of the total pool is sent to the developer wallet.</li>
-                <li><strong>Free Entry:</strong> No BASE cost, but you still pay a small gas fee to submit.</li>
-                <li><strong>Prize Pool:</strong> Collected fees (minus platform cut) are awarded to round winners.</li>
-              </ul>
-              <p className="text-xs text-indigo-200 mt-2">All transactions occur on Base Mainnet and are verified on-chain.</p>
+          <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-2xl rounded-xl">
+            <CardHeader><h2 className="text-xl font-bold">💸 Fee & Pool Breakdown</h2></CardHeader>
+            <CardContent className="text-sm space-y-1">
+              <p>🎯 Paid Entry: <strong>{ENTRY_FEE} BASE</strong></p>
+              <p>📦 99.5% to prize pool</p>
+              <p>💼 0.5% creator fee (you!)</p>
+              <p>⚙️ Free mode only pays gas</p>
+              <p>🧮 Winners drawn automatically on-chain</p>
             </CardContent>
           </Card>
+
+          {/* Existing Cards below this line... */}
 
         </main>
       </div>
