@@ -1,4 +1,3 @@
-// pages/api/card-image.tsx
 import { ImageResponse } from '@vercel/og'
 import { NextRequest } from 'next/server'
 
@@ -8,7 +7,7 @@ export const config = {
 
 export default async function handler(req: NextRequest) {
   const { searchParams } = new URL(req.url)
-  const text = searchParams.get('text') || 'MadFill';
+  const text = searchParams.get('text') || 'MadFill'
 
   return new ImageResponse(
     (
@@ -26,7 +25,9 @@ export default async function handler(req: NextRequest) {
           fontFamily: 'sans-serif',
         }}
       >
-        <div style={{ textAlign: 'center', lineHeight: 1.4, maxWidth: 700 }}>{text}</div>
+        <div style={{ textAlign: 'center', lineHeight: 1.4, maxWidth: 700 }}>
+          {text}
+        </div>
       </div>
     ),
     {
