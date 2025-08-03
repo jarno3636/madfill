@@ -11,6 +11,7 @@ import Link from 'next/link'
 
 export default function ChallengePage() {
   const [roundId, setRoundId] = useState('')
+  const [originalPreview, setOriginalPreview] = useState(null)
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
   const [blankIndex, setBlankIndex] = useState('0')
@@ -21,6 +22,48 @@ export default function ChallengePage() {
   const ENTRY_FEE = '0.001'
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx]
+
+  // Load original card preview and template when Round ID changes
+  useEffect(() => {
+    if (!roundId) return
+    let cancelled = false
+
+    const load = async () => {
+      try {
+        const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
+        const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
+        const subs = await contract.getSubmissions(roundId)
+
+        const orig = subs[0] // Assume original is index 0
+        const word = ethers.decodeBytes32String(orig.word)
+        const idx = orig.blank.toString()
+        const tmplIdx = parseInt(orig.template.toString())
+
+        // Auto-set template dropdowns
+        for (let i = 0; i < categories.length; i++) {
+          const tIdx = categories[i].templates.findIndex(t => t.index === tmplIdx)
+          if (tIdx !== -1) {
+            setCatIdx(i)
+            setTplIdx(tIdx)
+            break
+          }
+        }
+
+        // Render preview
+        const preview = categories[catIdx].templates[tplIdx].parts.map((part, i) =>
+          i === Number(idx) ? part + word : i < categories[catIdx].templates[tplIdx].blanks ? part + '____' : part
+        ).join('')
+
+        if (!cancelled) setOriginalPreview(preview)
+      } catch (err) {
+        console.warn('Could not load round info:', err)
+        if (!cancelled) setOriginalPreview(null)
+      }
+    }
+
+    load()
+    return () => { cancelled = true }
+  }, [roundId])
 
   async function handleSubmit() {
     try {
@@ -70,6 +113,13 @@ export default function ChallengePage() {
             <label>Round ID</label>
             <input type="text" className="block w-full bg-slate-800 border rounded px-2 py-1 mt-1" value={roundId} onChange={(e) => setRoundId(e.target.value)} />
           </div>
+
+          {originalPreview && (
+            <div className="text-sm mt-2 p-3 rounded bg-slate-800 border border-slate-700">
+              <p className="text-slate-400 mb-1">📝 Original Card Preview:</p>
+              <p className="italic text-white">{originalPreview}</p>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {[['Category', catIdx, setCatIdx, categories.map((c, i) => ({ label: c.name, value: i }))],
