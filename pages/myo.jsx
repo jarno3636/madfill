@@ -13,6 +13,7 @@ export default function MyOPage() {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [signer, setSigner] = useState(null)
+  const [totalWinnings, setTotalWinnings] = useState(0)
 
   useEffect(() => {
     if (!window.ethereum) return
@@ -33,19 +34,24 @@ export default function MyOPage() {
         const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
         const total = await ct.rounds.length
         const list = []
+        let winnings = 0
 
         for (let i = 0; i < total; i++) {
           try {
             const winner = await ct.w1(i)
             const claimed = await ct.c1(i)
             if (winner.toLowerCase() === address.toLowerCase()) {
-              list.push({ id: i, claimed })
+              const round = await ct.rounds(i)
+              const pool = (round.fee * round.b) / 1e18
+              if (!claimed) winnings += pool
+              list.push({ id: i, claimed, prize: pool.toFixed(3), deadline: round.sd.toNumber() })
             }
           } catch (err) {
             console.warn('Skipping round', i)
           }
         }
         setRounds(list)
+        setTotalWinnings(winnings.toFixed(3))
       } catch (err) {
         console.error('Error loading user rounds:', err)
       }
@@ -76,27 +82,44 @@ export default function MyOPage() {
       <Head><title>My Wins | MadFill</title></Head>
       <h1 className="text-2xl font-bold mb-4 text-white">🏆 My Winning Rounds</h1>
 
+      {address && (
+        <p className="text-sm mb-4 text-indigo-300">
+          Connected as <code>{address}</code> | 💰 Unclaimed: <strong>{totalWinnings} BASE</strong>
+        </p>
+      )}
+
       {status && <p className="mb-4 text-sm">{status}</p>}
 
       {rounds.length === 0 ? (
         <p className="text-white">You haven’t won any rounds yet… keep playing!</p>
       ) : (
         <div className="space-y-4">
-          {rounds.map(r => (
-            <div key={r.id} className="bg-slate-900 border border-slate-700 p-4 rounded-xl space-y-2">
-              <p className="text-sm font-semibold text-white">🎉 Round #{r.id}</p>
-              <div className="flex flex-wrap gap-2">
-                <Link href={`/round/${r.id}`} className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-1 rounded text-sm">📜 View</Link>
-                {!r.claimed ? (
-                  <Button onClick={() => handleClaim(r.id)} disabled={busy} className="bg-green-600 hover:bg-green-500 text-sm">
-                    💰 Claim Prize
-                  </Button>
-                ) : (
-                  <span className="text-green-400 text-sm">✅ Claimed</span>
-                )}
+          {rounds.map(r => {
+            const date = new Date(r.deadline * 1000).toLocaleString()
+            return (
+              <div key={r.id} className="bg-slate-900 border border-slate-700 p-4 rounded-xl space-y-2">
+                <p className="text-sm font-semibold text-white">🎉 Round #{r.id}</p>
+                <p className="text-sm text-slate-300">Prize: {r.prize} BASE | Deadline: {date}</p>
+                <div className="flex flex-wrap gap-2">
+                  <Link href={`/round/${r.id}`} className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-1 rounded text-sm">📜 View</Link>
+                  <a
+                    href={`https://warpcast.com/~/compose?text=I just won Round #${r.id} on MadFill! 🧠\nhttps://madfill.vercel.app/round/${r.id}`}
+                    target="_blank"
+                    className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1 rounded text-sm"
+                  >
+                    🌀 Share
+                  </a>
+                  {!r.claimed ? (
+                    <Button onClick={() => handleClaim(r.id)} disabled={busy} className="bg-green-600 hover:bg-green-500 text-sm">
+                      💰 Claim Prize
+                    </Button>
+                  ) : (
+                    <span className="text-green-400 text-sm">✅ Claimed</span>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </Layout>
