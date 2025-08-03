@@ -6,7 +6,7 @@ export default async function handler(req, res) {
   // Default fallback OG image
   const imageUrl = id
     ? `${siteUrl}/api/og?id=${id}`
-    : `${siteUrl}/og/cover.png`
+    : `${siteUrl}/og/cover.PNG`
 
   res.setHeader('Content-Type', 'application/json')
   res.status(200).json({
