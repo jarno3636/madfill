@@ -21,6 +21,7 @@ export default function Active() {
   const [rounds, setRounds] = useState([])
   const [topPool, setTopPool] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [tab, setTab] = useState('all')
   const [search, setSearch] = useState('')
   const [showModalId, setShowModalId] = useState(null)
   const [entryWord, setEntryWord] = useState('')
@@ -89,7 +90,15 @@ export default function Active() {
   }, [])
 
   const filtered = rounds.filter(r => {
-    return search === '' || r.name.toLowerCase().includes(search.toLowerCase()) || r.id.toString().includes(search)
+    const matchTab =
+      tab === 'all' ||
+      (tab === 'paid' && r.paidCount > 0) ||
+      (tab === 'free' && r.freeCount > 0)
+    const matchSearch =
+      search === '' ||
+      r.name.toLowerCase().includes(search.toLowerCase()) ||
+      r.id.toString().includes(search)
+    return matchTab && matchSearch
   })
 
   const submitEntry = async () => {
@@ -141,7 +150,8 @@ export default function Active() {
         </Card>
       )}
 
-      <div className="flex justify-center mt-6">
+      {/* Filters and Search */}
+      <div className="flex flex-col md:flex-row justify-between items-center mt-6 gap-4">
         <input
           type="text"
           placeholder="🔍 Search by name or ID"
@@ -149,8 +159,25 @@ export default function Active() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
+
+        <div className="flex space-x-2">
+          {['all', 'paid', 'free'].map(t => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`px-4 py-2 rounded-full border transition duration-200 ${
+                tab === t
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-slate-800 text-gray-300 border-slate-600'
+              }`}
+            >
+              {t.charAt(0).toUpperCase() + t.slice(1)}
+            </button>
+          ))}
+        </div>
       </div>
 
+      {/* Rounds List */}
       {loading && <p className="text-center mt-6">Loading rounds…</p>}
       {!loading && filtered.length === 0 && <p className="text-center mt-6">No rounds found.</p>}
 
@@ -175,6 +202,7 @@ export default function Active() {
               <CardContent className="space-y-2 text-sm">
                 <p><strong>Pool:</strong> {r.pool.toFixed(3)} BASE</p>
                 <p><strong>Paid Entries:</strong> {r.paidCount}</p>
+                <p><strong>Free Entries:</strong> {r.freeCount}</p>
                 <p><strong>Time Left:</strong> {Math.floor(r.timeRemaining / 3600)}h {Math.floor((r.timeRemaining % 3600) / 60)}m</p>
                 <Button onClick={() => setShowModalId(r.id)}>Participate</Button>
               </CardContent>
@@ -183,6 +211,7 @@ export default function Active() {
         ))}
       </AnimatePresence>
 
+      {/* Modal */}
       {showModalId !== null && (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
           <div className="bg-slate-900 rounded-lg p-6 w-full max-w-md space-y-4 border border-indigo-700 shadow-lg">
