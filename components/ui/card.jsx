@@ -1,9 +1,10 @@
-// components/ui/card.jsx
 import React from 'react'
 
 export function Card({ children, className = '' }) {
   return (
-    <div className={`bg-white shadow rounded-lg ${className}`}>
+    <div
+      className={`rounded-2xl shadow-md transition-all duration-300 ease-in-out hover:shadow-lg hover:scale-[1.01] ${className}`}
+    >
       {children}
     </div>
   )
