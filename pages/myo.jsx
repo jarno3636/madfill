@@ -2,18 +2,37 @@ import Layout from '@/components/Layout'
 import { useState, useEffect } from 'react'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import clsx from 'clsx'
 
 const defaultStickers = ['🐸', '💥', '🌈', '🧠', '🔥', '✨', '🌀', '🎉', '🍕', '👾']
 const defaultTheme = 'retro'
 
 const themes = {
-  galaxy: 'bg-galaxy',
-  tropical: 'bg-tropical',
-  retro: 'bg-retro',
-  bubblegum: 'bg-bubblegum',
-  swamp: 'bg-swamp',
-  parchment: 'bg-parchment',
-  clouds: 'bg-clouds',
+  galaxy: {
+    label: 'Galaxy',
+    bg: 'bg-gradient-to-br from-indigo-900 to-purple-900',
+    text: 'text-white',
+  },
+  tropical: {
+    label: 'Tropical',
+    bg: 'bg-gradient-to-br from-green-400 to-yellow-500',
+    text: 'text-slate-900',
+  },
+  retro: {
+    label: 'Retro',
+    bg: 'bg-gradient-to-br from-pink-500 to-orange-400',
+    text: 'text-slate-900',
+  },
+  parchment: {
+    label: 'Parchment',
+    bg: 'bg-[url("/parchment-texture.png")] bg-cover bg-center',
+    text: 'text-slate-900',
+  },
+  clouds: {
+    label: 'Clouds',
+    bg: 'bg-[url("/clouds-texture.png")] bg-cover bg-center',
+    text: 'text-slate-800',
+  },
 }
 
 export default function MyoPage() {
@@ -37,14 +56,6 @@ export default function MyoPage() {
     localStorage.setItem('madfill-myo-draft', JSON.stringify({ title, description, parts, theme }))
   }, [title, description, parts, theme])
 
-  useEffect(() => {
-    const closeOnEscape = (e) => {
-      if (e.key === 'Escape') setShowPreview(false)
-    }
-    document.addEventListener('keydown', closeOnEscape)
-    return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [])
-
   const handlePartChange = (value, i) => {
     const newParts = [...parts]
     newParts[i] = value
@@ -67,19 +78,19 @@ export default function MyoPage() {
 
   const randomizeTheme = () => {
     const keys = Object.keys(themes)
-    const next = keys[Math.floor(Math.random() * keys.length)]
-    setTheme(next)
+    const pick = keys[Math.floor(Math.random() * keys.length)]
+    setTheme(pick)
   }
 
   return (
     <Layout>
-      <div className={`transition-all duration-1000 ease-in-out min-h-screen p-4 ${themes[theme]}`}>
-        <Card className="bg-slate-900 text-white shadow-xl rounded-xl">
+      <div className={`transition-all duration-700 p-4 rounded-xl shadow-xl ${themes[theme].bg}`}>
+        <Card className={`bg-black bg-opacity-60 backdrop-blur-md p-4 md:p-6 rounded-xl border border-slate-700`}>
           <CardHeader>
-            <h2 className="text-xl font-bold">🎨 Make Your Own MadFill</h2>
+            <h2 className="text-xl font-bold text-white">🎨 Make Your Own MadFill</h2>
             <p className="text-sm text-indigo-200">Build your own weird sentence + style and mint it soon!</p>
           </CardHeader>
-          <CardContent className="space-y-6">
+          <CardContent className="space-y-6 text-white">
 
             <label className="block text-sm font-medium">Title</label>
             <input
@@ -95,18 +106,20 @@ export default function MyoPage() {
               onChange={(e) => setDescription(e.target.value)}
             />
 
-            <label className="block text-sm font-medium">Theme</label>
             <div className="flex gap-2 items-center">
+              <label className="block text-sm font-medium">Theme</label>
               <select
-                className="w-full bg-slate-800 text-white border border-slate-600 rounded px-3 py-2"
+                className="bg-slate-800 text-white border border-slate-600 rounded px-3 py-2 ml-2"
                 value={theme}
                 onChange={(e) => setTheme(e.target.value)}
               >
-                {Object.entries(themes).map(([key]) => (
-                  <option key={key} value={key}>{key.charAt(0).toUpperCase() + key.slice(1)}</option>
+                {Object.entries(themes).map(([key, val]) => (
+                  <option key={key} value={key}>{val.label}</option>
                 ))}
               </select>
-              <Button onClick={randomizeTheme} className="bg-indigo-600 hover:bg-indigo-500">🎲 Randomize</Button>
+              <Button onClick={randomizeTheme} className="bg-purple-600 hover:bg-purple-500 ml-auto">
+                🎲 Randomize
+              </Button>
             </div>
 
             <div>
@@ -142,7 +155,7 @@ export default function MyoPage() {
               <Button onClick={() => setShowPreview(true)} className="bg-indigo-600 hover:bg-indigo-500">👀 Preview Template</Button>
             </div>
 
-            <div className={`p-6 rounded-xl font-mono text-sm border border-slate-700 bg-opacity-90 ${themes[theme]}`}>
+            <div className={`p-6 rounded-xl font-mono text-sm border border-slate-700 ${themes[theme].bg} ${themes[theme].text}`}>
               <p className="text-lg font-bold mb-2">{title}</p>
               <p className="space-x-1">
                 {parts.map((p, i) => (
@@ -162,8 +175,8 @@ export default function MyoPage() {
 
         {showPreview && (
           <div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center px-4">
-            <div className={`max-w-md w-full p-6 rounded-xl relative shadow-2xl text-white ${themes[theme]}`}>
-              <button onClick={() => setShowPreview(false)} className="absolute top-2 right-3 text-xl text-white">✖️</button>
+            <div className={`max-w-md w-full p-6 rounded-xl relative shadow-2xl ${themes[theme].bg} ${themes[theme].text}`}>
+              <button onClick={() => setShowPreview(false)} className="absolute top-2 right-3 text-xl">✖️</button>
               <h3 className="text-2xl font-bold mb-2">{title}</h3>
               <p className="text-sm text-slate-200 mb-4 italic">{description}</p>
               <div className="font-mono text-base space-x-1">
