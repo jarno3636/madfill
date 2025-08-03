@@ -1,8 +1,17 @@
-export default async function handler(req, res) {
-  const { id } = req.query
-  const imageBuffer = await fetch('https://madfill.vercel.app/og/cover.PNG').then(r => r.arrayBuffer())
+// pages/api/og.js
+import fs from 'fs'
+import path from 'path'
 
-  res.setHeader('Content-Type', 'image/png')
-  res.setHeader('Cache-Control', 'public, max-age=86400')
-  res.status(200).send(Buffer.from(imageBuffer))
+export default async function handler(req, res) {
+  try {
+    const filePath = path.resolve('./public/og/cover.PNG') // ← match exact filename
+    const imageBuffer = fs.readFileSync(filePath)
+
+    res.setHeader('Content-Type', 'image/png')
+    res.setHeader('Cache-Control', 'public, max-age=86400')
+    res.status(200).send(imageBuffer)
+  } catch (err) {
+    console.error('OG image error:', err)
+    res.status(500).send('Error loading image')
+  }
 }
