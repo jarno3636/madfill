@@ -10,6 +10,13 @@ import { useWindowSize } from 'react-use'
 import { motion, AnimatePresence } from 'framer-motion'
 import Layout from '@/components/Layout'
 
+const THEMED_NAMES = [
+  '🍕 Pizza Party', '👻 Ghost Stories', '🧠 Brainstorm Battle', '🌊 Deep Sea Drama',
+  '👽 Alien Adventure', '🎩 Fancy Fables', '🎮 Gamer Mode', '🐸 Toad Madness',
+  '💼 Office Mayhem', '🚀 Space Chase', '🧛‍♂️ Vampire Night', '🐉 Dragon Tales',
+  '🍔 Food Fight', '🧙 Wizard Wordplay', '🎭 Masquerade Mischief', '🌈 Rainbow Run'
+]
+
 export default function Active() {
   const [rounds, setRounds] = useState([])
   const [topPool, setTopPool] = useState(null)
@@ -48,16 +55,17 @@ export default function Active() {
 
       const now = Math.floor(Date.now() / 1000)
       const items = started
-        .map(e => {
+        .map((e, i) => {
           const id = e.args.id.toNumber()
           const fee = parseFloat(ethers.formatEther(e.args.entryFee))
           const dl = e.args.deadline.toNumber()
           const rem = Math.max(dl - now, 0)
           const pCnt = paidCount[id] || 0
           const fCnt = freeCount[id] || 0
+          const themeName = THEMED_NAMES[i % THEMED_NAMES.length]
           return {
             id,
-            name: e.args.name || `Round ${id}`,
+            name: themeName,
             blanks: e.args.blanks,
             fee,
             deadline: dl,
@@ -126,7 +134,7 @@ export default function Active() {
           </CardHeader>
           <CardContent className="space-y-2">
             <p>
-              <strong>Round #{topPool.id}</strong> — Pool: {topPool.pool.toFixed(3)} BASE
+              <strong>{topPool.name}</strong> — Pool: {topPool.pool.toFixed(3)} BASE
             </p>
             <Button onClick={() => setShowModalId(topPool.id)}>Participate</Button>
           </CardContent>
@@ -159,7 +167,7 @@ export default function Active() {
             <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
               <CardHeader className="flex justify-between items-center">
                 <div>
-                  <div className="text-lg font-semibold">{r.name || `Round #${r.id}`}</div>
+                  <div className="text-lg font-semibold">{r.name}</div>
                   <div className="text-sm text-slate-400">ID: {r.id}</div>
                 </div>
                 <span className="px-2 py-1 text-xs rounded bg-indigo-500 animate-pulse text-white">LIVE</span>
