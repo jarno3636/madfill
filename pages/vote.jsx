@@ -9,6 +9,7 @@ import abi from '@/abi/FillInStoryFull.json'
 import { useWindowSize } from 'react-use'
 import Confetti from 'react-confetti'
 import Link from 'next/link'
+import CompareCards from '@/components/CompareCards'
 
 export default function VotePage() {
   const [rounds, setRounds] = useState([])
@@ -115,6 +116,7 @@ export default function VotePage() {
                 <Link href={`/round/${r.id}`} className="text-indigo-400 underline text-sm">🔍 View</Link>
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
+                <CompareCards roundId={r.id} />
                 <p>Which card made you laugh more?</p>
                 <div className="flex gap-2">
                   <Button onClick={() => vote(r.id, true)} className="bg-green-600 hover:bg-green-500">😂 Original</Button>
