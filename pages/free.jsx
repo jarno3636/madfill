@@ -16,8 +16,8 @@ export default function FreeGame() {
   const [copied, setCopied] = useState(false)
   const { width, height } = useWindowSize()
 
-  const category = categories[catIdx]
-  const template = category.templates[tplIdx]
+  const category = categories[catIdx] || { templates: [] }
+  const template = category.templates[tplIdx] || { parts: [], blanks: 0, name: 'Untitled' }
 
   const handleWordChange = (i, val) => {
     setWords({ ...words, [i]: val })
@@ -46,14 +46,31 @@ export default function FreeGame() {
   const twitterLink = `https://twitter.com/intent/tweet?text=${shareText}`
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(filledText)
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(filledText)
+    } else {
+      // Fallback
+      const el = document.createElement('textarea')
+      el.value = filledText
+      document.body.appendChild(el)
+      el.select()
+      document.execCommand('copy')
+      document.body.removeChild(el)
+    }
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const allWordsFilled = Array.from({ length: template.blanks }).every((_, i) => !!words[i]?.trim())
+
   return (
     <Layout>
-      <Head><title>🎁 Free Game | MadFill</title></Head>
+      <Head>
+        <title>🎁 Free Game | MadFill</title>
+        <meta property="og:title" content="Play the Free MadFill Game!" />
+        <meta property="og:description" content="Create, laugh, and share your own fill-in-the-blank card. No wallet needed!" />
+      </Head>
+
       {submitted && <Confetti width={width} height={height} />}
 
       <Card className="bg-gradient-to-br from-indigo-900 to-purple-900 text-white shadow-2xl rounded-xl">
@@ -62,10 +79,9 @@ export default function FreeGame() {
           <p className="text-sm text-indigo-200">Fill in the blanks for fun — no wallet needed!</p>
         </CardHeader>
         <CardContent className="space-y-6">
-
-          {/* Selectors */}
           {!submitted && (
             <>
+              {/* Selectors */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label>Category</label>
@@ -123,6 +139,7 @@ export default function FreeGame() {
               <Button
                 onClick={handleSubmit}
                 className="bg-pink-500 hover:bg-pink-400 w-full mt-4"
+                disabled={!allWordsFilled}
               >
                 🎉 Submit & View Your Card
               </Button>
