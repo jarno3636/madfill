@@ -1,127 +1,70 @@
 // pages/myo.jsx
-import { useEffect, useState } from 'react'
 import Head from 'next/head'
-import { ethers } from 'ethers'
-import abi from '@/abi/FillInStoryFull.json'
 import Layout from '@/components/Layout'
-import Link from 'next/link'
+import { useState } from 'react'
+import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 
-export default function MyOPage() {
-  const [address, setAddress] = useState(null)
-  const [rounds, setRounds] = useState([])
-  const [busy, setBusy] = useState(false)
-  const [status, setStatus] = useState('')
-  const [signer, setSigner] = useState(null)
-  const [totalWinnings, setTotalWinnings] = useState(0)
+export default function MYOPage() {
+  const [blanks, setBlanks] = useState(2)
+  const [parts, setParts] = useState(['', '', ''])
 
-  useEffect(() => {
-    if (!window.ethereum) return
-    const provider = new ethers.BrowserProvider(window.ethereum)
-    provider.getSigner().then(_signer => {
-      _signer.getAddress().then(addr => {
-        setSigner(_signer)
-        setAddress(addr)
-      })
-    })
-  }, [])
-
-  useEffect(() => {
-    if (!address) return
-    const load = async () => {
-      try {
-        const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-        const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
-        const total = await ct.rounds.length
-        const list = []
-        let winnings = 0
-
-        for (let i = 0; i < total; i++) {
-          try {
-            const winner = await ct.w1(i)
-            const claimed = await ct.c1(i)
-            if (winner.toLowerCase() === address.toLowerCase()) {
-              const round = await ct.rounds(i)
-              const pool = (round.fee * round.b) / 1e18
-              if (!claimed) winnings += pool
-              list.push({ id: i, claimed, prize: pool.toFixed(3), deadline: round.sd.toNumber() })
-            }
-          } catch (err) {
-            console.warn('Skipping round', i)
-          }
-        }
-        setRounds(list)
-        setTotalWinnings(winnings.toFixed(3))
-      } catch (err) {
-        console.error('Error loading user rounds:', err)
-      }
-    }
-
-    load()
-  }, [address])
-
-  async function handleClaim(id) {
-    try {
-      setBusy(true)
-      setStatus(`⏳ Claiming prize for round ${id}...`)
-      const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
-      const tx = await ct.claim1(id)
-      await tx.wait()
-      setStatus(`✅ Prize claimed for round ${id}!`)
-      setRounds(prev => prev.map(r => r.id === id ? { ...r, claimed: true } : r))
-    } catch (err) {
-      console.error(err)
-      setStatus('❌ ' + (err.reason || err.message || err))
-    } finally {
-      setBusy(false)
-    }
+  function updatePart(index, value) {
+    const updated = [...parts]
+    updated[index] = value
+    setParts(updated)
   }
+
+  const preview = parts.map((part, i) =>
+    i < blanks ? `${part}[____]` : part
+  ).join('')
 
   return (
     <Layout>
-      <Head><title>My Wins | MadFill</title></Head>
-      <h1 className="text-2xl font-bold mb-4 text-white">🏆 My Winning Rounds</h1>
+      <Head><title>Make Your Own | MadFill</title></Head>
+      <Card className="bg-gradient-to-br from-slate-800 to-purple-800 text-white shadow-xl rounded-xl">
+        <CardHeader>
+          <h2 className="text-xl font-bold">🎨 Make Your Own MadFill</h2>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p>Create your own custom fill-in-the-blank card and share it with friends!</p>
 
-      {address && (
-        <p className="text-sm mb-4 text-indigo-300">
-          Connected as <code>{address}</code> | 💰 Unclaimed: <strong>{totalWinnings} BASE</strong>
-        </p>
-      )}
+          <div>
+            <label>Number of blanks (1–5):</label>
+            <input
+              type="number"
+              value={blanks}
+              min={1}
+              max={5}
+              className="mt-1 block w-full bg-slate-900 text-white px-2 py-1 rounded"
+              onChange={(e) => {
+                const n = Number(e.target.value)
+                setBlanks(n)
+                setParts(Array(n + 1).fill(''))
+              }}
+            />
+          </div>
 
-      {status && <p className="mb-4 text-sm">{status}</p>}
+          {parts.map((p, i) => (
+            <div key={i}>
+              <label>Part {i + 1}:</label>
+              <input
+                type="text"
+                value={p}
+                className="mt-1 block w-full bg-slate-900 text-white px-2 py-1 rounded"
+                onChange={(e) => updatePart(i, e.target.value)}
+              />
+            </div>
+          ))}
 
-      {rounds.length === 0 ? (
-        <p className="text-white">You haven’t won any rounds yet… keep playing!</p>
-      ) : (
-        <div className="space-y-4">
-          {rounds.map(r => {
-            const date = new Date(r.deadline * 1000).toLocaleString()
-            return (
-              <div key={r.id} className="bg-slate-900 border border-slate-700 p-4 rounded-xl space-y-2">
-                <p className="text-sm font-semibold text-white">🎉 Round #{r.id}</p>
-                <p className="text-sm text-slate-300">Prize: {r.prize} BASE | Deadline: {date}</p>
-                <div className="flex flex-wrap gap-2">
-                  <Link href={`/round/${r.id}`} className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-1 rounded text-sm">📜 View</Link>
-                  <a
-                    href={`https://warpcast.com/~/compose?text=I just won Round #${r.id} on MadFill! 🧠\nhttps://madfill.vercel.app/round/${r.id}`}
-                    target="_blank"
-                    className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1 rounded text-sm"
-                  >
-                    🌀 Share
-                  </a>
-                  {!r.claimed ? (
-                    <Button onClick={() => handleClaim(r.id)} disabled={busy} className="bg-green-600 hover:bg-green-500 text-sm">
-                      💰 Claim Prize
-                    </Button>
-                  ) : (
-                    <span className="text-green-400 text-sm">✅ Claimed</span>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
+          <div className="p-4 bg-slate-900 border border-slate-700 rounded text-sm font-mono">
+            <p><strong>Preview:</strong></p>
+            <p>{preview}</p>
+          </div>
+
+          <Button className="bg-indigo-600 hover:bg-indigo-500 w-full">📤 Share This</Button>
+        </CardContent>
+      </Card>
     </Layout>
   )
 }
