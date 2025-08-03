@@ -6,11 +6,15 @@ import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import abi from '@/abi/FillInStoryFull.json'
 import Link from 'next/link'
+import Confetti from 'react-confetti'
+import { useWindowSize } from 'react-use'
 
 export default function MyRounds() {
   const [address, setAddress] = useState(null)
   const [rounds, setRounds] = useState([])
   const [loading, setLoading] = useState(true)
+  const [successId, setSuccessId] = useState(null)
+  const { width, height } = useWindowSize()
 
   useEffect(() => {
     if (window.ethereum) {
@@ -35,7 +39,12 @@ export default function MyRounds() {
 
         for (let evt of startedEvents) {
           const roundId = evt.args.id.toString()
-          const roundInfo = await contract.rounds(roundId)
+          let roundInfo
+          try {
+            roundInfo = await contract.rounds(roundId)
+          } catch {
+            continue
+          }
 
           let hasParticipated = false
           try {
@@ -43,21 +52,25 @@ export default function MyRounds() {
             hasParticipated = submissions.some(s =>
               s.author?.toLowerCase() === address.toLowerCase()
             )
-          } catch (err) {
-            console.warn(`No submissions for round ${roundId}`)
-          }
+          } catch {}
 
           const winnerEvent = drawEvents.find(e => e.args.id.toString() === roundId)
           const isWinner = winnerEvent && winnerEvent.args.winner.toLowerCase() === address.toLowerCase()
 
+          let claimed = false
+          try {
+            claimed = await contract.c1(roundId)
+          } catch {}
+
           if (hasParticipated || isWinner) {
+            const poolAmount = ethers.formatEther(roundInfo.fee * roundInfo.n)
             myRounds.push({
               id: roundId,
               isWinner,
               hasParticipated,
-              deadline: roundInfo.sd.toNumber(),
-              claimed: await contract.c1(roundId),
-              prize: (roundInfo.fee * roundInfo.n / 1e18).toFixed(3)
+              deadline: roundInfo.deadline?.toNumber?.() || 0,
+              claimed,
+              prize: parseFloat(poolAmount).toFixed(3)
             })
           }
         }
@@ -79,8 +92,8 @@ export default function MyRounds() {
       const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
       const tx = await contract.claim1(id)
       await tx.wait()
-      alert('Claimed successfully!')
-      location.reload()
+      setSuccessId(id)
+      setTimeout(() => setSuccessId(null), 3000)
     } catch (err) {
       console.error('Claim failed:', err)
       alert('Error claiming prize')
@@ -113,12 +126,26 @@ export default function MyRounds() {
             {!r.isWinner && r.hasParticipated && <p className="text-slate-300">🎮 Participated</p>}
 
             <div className="mt-3 flex gap-2 flex-wrap">
-              <a href={`https://twitter.com/intent/tweet?text=Check out my MadFill Round! https://madfill.vercel.app/round/${r.id}`} target="_blank" className="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-white text-sm">🐦 Share</a>
-              <a href={`https://warpcast.com/~/compose?text=Check out my MadFill Round! https://madfill.vercel.app/round/${r.id}`} target="_blank" className="bg-purple-600 hover:bg-purple-500 px-3 py-1 rounded text-white text-sm">🌀 Warpcast</a>
+              <a
+                href={`https://twitter.com/intent/tweet?text=Check out my MadFill Round! https://madfill.vercel.app/round/${r.id}`}
+                target="_blank"
+                className="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-white text-sm"
+              >
+                🐦 Share
+              </a>
+              <a
+                href={`https://warpcast.com/~/compose?text=Check out my MadFill Round! https://madfill.vercel.app/round/${r.id}`}
+                target="_blank"
+                className="bg-purple-600 hover:bg-purple-500 px-3 py-1 rounded text-white text-sm"
+              >
+                🌀 Warpcast
+              </a>
             </div>
           </CardContent>
         </Card>
       ))}
+
+      {successId && <Confetti width={width} height={height} />}
     </Layout>
   )
 }
