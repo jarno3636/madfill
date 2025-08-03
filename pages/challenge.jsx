@@ -1,4 +1,3 @@
-// pages/challenge.jsx
 import { useEffect, useState, Fragment } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -19,11 +18,9 @@ export default function ChallengePage() {
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const ENTRY_FEE = '0.001'
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx]
 
-  // Load original card preview and template when Round ID changes
   useEffect(() => {
     if (!roundId) return
     let cancelled = false
@@ -34,12 +31,11 @@ export default function ChallengePage() {
         const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
         const subs = await contract.getSubmissions(roundId)
 
-        const orig = subs[0] // Assume original is index 0
+        const orig = subs[0]
         const word = ethers.decodeBytes32String(orig.word)
         const idx = orig.blank.toString()
         const tmplIdx = parseInt(orig.template.toString())
 
-        // Auto-set template dropdowns
         for (let i = 0; i < categories.length; i++) {
           const tIdx = categories[i].templates.findIndex(t => t.index === tmplIdx)
           if (tIdx !== -1) {
@@ -49,21 +45,22 @@ export default function ChallengePage() {
           }
         }
 
-        // Render preview
-        const preview = categories[catIdx].templates[tplIdx].parts.map((part, i) =>
-          i === Number(idx) ? part + word : i < categories[catIdx].templates[tplIdx].blanks ? part + '____' : part
+        const parts = categories[catIdx].templates[tplIdx].parts
+        const blanks = categories[catIdx].templates[tplIdx].blanks
+        const preview = parts.map((part, i) =>
+          i === Number(idx) ? part + word : i < blanks ? part + '____' : part
         ).join('')
 
         if (!cancelled) setOriginalPreview(preview)
       } catch (err) {
-        console.warn('Could not load round info:', err)
         if (!cancelled) setOriginalPreview(null)
+        console.warn('Could not load round info:', err)
       }
     }
 
     load()
     return () => { cancelled = true }
-  }, [roundId])
+  }, [roundId, catIdx, tplIdx])
 
   async function handleSubmit() {
     try {
@@ -111,7 +108,12 @@ export default function ChallengePage() {
         <CardContent className="space-y-4">
           <div>
             <label>Round ID</label>
-            <input type="text" className="block w-full bg-slate-800 border rounded px-2 py-1 mt-1" value={roundId} onChange={(e) => setRoundId(e.target.value)} />
+            <input
+              type="text"
+              className="block w-full bg-slate-800 border rounded px-2 py-1 mt-1"
+              value={roundId}
+              onChange={(e) => setRoundId(e.target.value)}
+            />
           </div>
 
           {originalPreview && (
@@ -149,7 +151,12 @@ export default function ChallengePage() {
 
           <div>
             <label>Your Word</label>
-            <input type="text" className="block w-full mt-1 bg-slate-800 text-white border rounded px-2 py-1" value={word} onChange={e => setWord(e.target.value)} />
+            <input
+              type="text"
+              className="block w-full mt-1 bg-slate-800 text-white border rounded px-2 py-1"
+              value={word}
+              onChange={e => setWord(e.target.value)}
+            />
           </div>
 
           <Button onClick={handleSubmit} disabled={!roundId || !word || busy} className="bg-blue-600 hover:bg-blue-500">
