@@ -95,6 +95,7 @@ export default function VotePage() {
             <li>🏆 One random voter from the winning side receives the prize pool (minus fees)</li>
           </ul>
           <p className="text-yellow-300">💡 Tip: Invite your friends to vote for your side and help you win!</p>
+          <p className="text-sm mt-2">Want to challenge a card and join the fun? <Link href="/challenge" className="underline text-indigo-300">Submit a Challenger Card</Link></p>
         </CardContent>
       </Card>
 
@@ -118,6 +119,20 @@ export default function VotePage() {
                 <div className="flex gap-2">
                   <Button onClick={() => vote(r.id, true)} className="bg-green-600 hover:bg-green-500">😂 Original</Button>
                   <Button onClick={() => vote(r.id, false)} className="bg-blue-600 hover:bg-blue-500">😆 Challenger</Button>
+                </div>
+                <div className="mt-2 text-xs text-slate-300">
+                  📣 Share this round: 
+                  <a
+                    href={`https://twitter.com/intent/tweet?text=Vote on my hilarious MadFill round! https://madfill.vercel.app/round/${r.id}`}
+                    target="_blank"
+                    className="ml-2 underline text-blue-400"
+                  >Twitter</a>
+                  <span className="mx-1">|</span>
+                  <a
+                    href={`https://warpcast.com/~/compose?text=Vote on my hilarious MadFill round! https://madfill.vercel.app/round/${r.id}`}
+                    target="_blank"
+                    className="underline text-purple-400"
+                  >Warpcast</a>
                 </div>
               </CardContent>
             </Card>
