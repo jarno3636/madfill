@@ -2,7 +2,6 @@ import Layout from '@/components/Layout'
 import { useState, useEffect } from 'react'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { motion } from 'framer-motion'
 
 const defaultStickers = ['🐸', '💥', '🌈', '🧠', '🔥', '✨', '🌀', '🎉', '🍕', '👾']
 const defaultTheme = 'retro'
@@ -24,7 +23,6 @@ export default function MyoPage() {
   const [activeSticker, setActiveSticker] = useState(null)
 
   useEffect(() => {
-    // Load saved draft
     const saved = JSON.parse(localStorage.getItem('madfill-myo-draft') || '{}')
     if (saved.title) setTitle(saved.title)
     if (saved.description) setDescription(saved.description)
@@ -33,7 +31,6 @@ export default function MyoPage() {
   }, [])
 
   useEffect(() => {
-    // Save draft
     localStorage.setItem('madfill-myo-draft', JSON.stringify({ title, description, parts, theme }))
   }, [title, description, parts, theme])
 
@@ -43,13 +40,8 @@ export default function MyoPage() {
     setParts(newParts)
   }
 
-  const addBlank = () => {
-    setParts([...parts, '____'])
-  }
-
-  const addTextPart = () => {
-    setParts([...parts, ''])
-  }
+  const addBlank = () => setParts([...parts, '____'])
+  const addTextPart = () => setParts([...parts, ''])
 
   const toggleSticker = (emoji) => {
     setActiveSticker((prev) => (prev === emoji ? null : emoji))
@@ -72,6 +64,7 @@ export default function MyoPage() {
         <CardContent className="space-y-6">
 
           {/* Title */}
+          <label className="block text-sm font-medium">Title</label>
           <input
             className="w-full bg-slate-800 text-white border border-slate-600 rounded px-3 py-2"
             value={title}
@@ -80,6 +73,7 @@ export default function MyoPage() {
           />
 
           {/* Description */}
+          <label className="block text-sm font-medium">Description</label>
           <textarea
             className="w-full bg-slate-800 text-white border border-slate-600 rounded px-3 py-2"
             value={description}
@@ -88,29 +82,39 @@ export default function MyoPage() {
           />
 
           {/* Theme Picker */}
-          <div>
-            <label className="text-sm">Theme</label>
-            <select
-              className="w-full bg-slate-800 text-white border border-slate-600 rounded px-3 py-2 mt-1"
-              value={theme}
-              onChange={(e) => setTheme(e.target.value)}
-            >
-              {Object.entries(themes).map(([key, value]) => (
-                <option key={key} value={key}>{key}</option>
-              ))}
-            </select>
-          </div>
+          <label className="block text-sm font-medium">Theme</label>
+          <select
+            className="w-full bg-slate-800 text-white border border-slate-600 rounded px-3 py-2"
+            value={theme}
+            onChange={(e) => setTheme(e.target.value)}
+          >
+            {Object.entries(themes).map(([key]) => (
+              <option key={key} value={key}>{key.charAt(0).toUpperCase() + key.slice(1)}</option>
+            ))}
+          </select>
 
           {/* Stickers */}
           <div>
-            <p className="text-sm font-medium mb-1">🖼️ Stickers (click to insert)</p>
+            <p className="text-sm font-medium mb-1">🖼️ Stickers (click to select, then "Add to End")</p>
             <div className="flex gap-2 flex-wrap">
               {stickers.map((s, i) => (
-                <button key={i} onClick={() => toggleSticker(s)} className={`text-xl p-2 rounded ${activeSticker === s ? 'bg-indigo-700' : 'bg-slate-800'}`}>
+                <button
+                  key={i}
+                  title={`Add ${s}`}
+                  onClick={() => toggleSticker(s)}
+                  className={`text-xl p-2 rounded transition ${
+                    activeSticker === s ? 'bg-indigo-700 scale-110' : 'bg-slate-800 hover:bg-slate-700'
+                  }`}
+                >
                   {s}
                 </button>
               ))}
-              <button onClick={addStickerToEnd} className="text-sm px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white">+ Add to End</button>
+              <button
+                onClick={addStickerToEnd}
+                className="text-sm px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white"
+              >
+                + Add to End
+              </button>
             </div>
           </div>
 
@@ -135,7 +139,13 @@ export default function MyoPage() {
           {/* Preview */}
           <div className={`bg-gradient-to-r ${themes[theme]} p-6 rounded-xl font-mono text-sm border border-slate-700`}>
             <p className="text-lg font-bold mb-2">{title}</p>
-            <p>{parts.join(' ')}</p>
+            <p className="space-x-1">
+              {parts.map((p, i) => (
+                <span key={i} className={p === '____' ? 'text-pink-300 underline' : ''}>
+                  {p || ' '}
+                </span>
+              ))}
+            </p>
           </div>
 
           {/* Mint Button */}
