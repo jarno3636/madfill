@@ -1,5 +1,4 @@
-// First: Updated /vote.jsx to reflect "Challenger Card" terminology and cleaner instructions
-
+// pages/vote.jsx
 import { useEffect, useState } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
