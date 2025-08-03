@@ -1,4 +1,3 @@
-// pages/round/[id].jsx
 import { useRouter } from 'next/router'
 import { useEffect, useState } from 'react'
 import Head from 'next/head'
@@ -39,7 +38,7 @@ export default function RoundDetailPage() {
         const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
         const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
         const r = await contract.rounds(id)
-        const template = categories[0].templates[0] // update if tracking template id per round
+        const template = categories[0].templates[0] // optionally track dynamic template
 
         const winnerAddr = await contract.w2(id)
         const alreadyClaimed = await contract.c2(id)
@@ -80,7 +79,7 @@ export default function RoundDetailPage() {
 
   function renderCard(parts, words, title, isWinner) {
     return (
-      <Card className={`bg-slate-900 text-white shadow-xl transition transform ${isWinner ? 'border-2 border-yellow-400 scale-105' : ''}`}>
+      <Card className={`bg-slate-900 text-white shadow-xl transition-all duration-300 ease-in-out ${isWinner ? 'border-2 border-yellow-400 scale-105' : 'border border-slate-700'}`}>
         <CardHeader className="font-bold text-lg text-center">{title}</CardHeader>
         <CardContent className="text-lg px-4 py-2 text-center">
           {parts.map((part, i) => (
@@ -111,9 +110,9 @@ export default function RoundDetailPage() {
           </div>
 
           <div className="mt-6 text-white text-sm">
-            <p>Votes — Original: {round.vP} | Challenger: {round.vF}</p>
+            <p>🗳️ Votes — <strong>Original:</strong> {round.vP} | <strong>Challenger:</strong> {round.vF}</p>
             {winner && (
-              <p className="mt-2">🏆 Winner (voter): <span className="text-green-400">{winner}</span></p>
+              <p className="mt-2">🏆 Winning Voter: <span className="text-green-400">{winner}</span></p>
             )}
 
             {claimable && !claimed && (
@@ -129,7 +128,7 @@ export default function RoundDetailPage() {
             {status && <p className="mt-2 text-yellow-300">{status}</p>}
           </div>
 
-          {status.includes('claimed') && <Confetti width={width} height={height} />} 
+          {status.includes('claimed') && <Confetti width={width} height={height} />}
         </>
       )}
     </Layout>
