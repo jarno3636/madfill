@@ -1,4 +1,5 @@
-// pages/vote.jsx
+// First: Updated /vote.jsx to reflect "Challenger Card" terminology and cleaner instructions
+
 import { useEffect, useState } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -86,14 +87,15 @@ export default function VotePage() {
           <h2 className="text-xl font-bold">How It Works</h2>
         </CardHeader>
         <CardContent className="text-sm space-y-2">
-          <p>After a MadFill round finishes, the community gets to vote on which card was funnier — the Paid card or the Free card!</p>
-          <p>Voting costs <strong>0.001 BASE</strong>. A small dev fee is taken (0.5%), and the rest contributes to the prize pool. At the end, one lucky voter on the winning side receives the pool.</p>
+          <p>Each MadFill round has an Original Card and a Challenger Card submitted by another player.</p>
+          <p>Now it's time for the community to vote which one is funnier!</p>
+          <p>Voting costs <strong>0.001 BASE</strong>. Everyone who votes for the winning side is entered into a prize draw.</p>
           <ul className="list-disc list-inside">
-            <li>✅ Only one vote per address per round</li>
-            <li>⏳ Voting lasts 24 hours after the round is finalized</li>
-            <li>🏆 One winner is drawn from the winning side to claim the prize</li>
+            <li>✅ One vote per wallet per round</li>
+            <li>⏳ Voting lasts 24 hours after the challenge</li>
+            <li>🏆 One random voter from the winning side receives the prize pool (minus fees)</li>
           </ul>
-          <p>💡 Invite your friends to vote and increase your side's chances! Use the share buttons below each round.</p>
+          <p className="text-yellow-300">💡 Tip: Invite your friends to vote for your side and help you win!</p>
         </CardContent>
       </Card>
 
@@ -108,19 +110,15 @@ export default function VotePage() {
               <CardHeader className="flex justify-between items-center">
                 <div>
                   <h3 className="font-semibold">Round #{r.id}</h3>
-                  <p className="text-sm text-slate-300">Votes Paid: {r.vP} | Free: {r.vF}</p>
+                  <p className="text-sm text-slate-300">Votes Original: {r.vP} | Challenger: {r.vF}</p>
                 </div>
                 <Link href={`/round/${r.id}`} className="text-indigo-400 underline text-sm">🔍 View</Link>
               </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <p>Vote for the funnier card:</p>
+              <CardContent className="space-y-2 text-sm">
+                <p>Which card made you laugh more?</p>
                 <div className="flex gap-2">
-                  <Button onClick={() => vote(r.id, true)} className="bg-green-600 hover:bg-green-500">😂 Paid Card</Button>
-                  <Button onClick={() => vote(r.id, false)} className="bg-blue-600 hover:bg-blue-500">😆 Free Card</Button>
-                </div>
-                <div className="flex gap-2 mt-2">
-                  <a href={`https://twitter.com/intent/tweet?text=I just voted in MadFill Round ${r.id}! 🗳️ Come vote too! https://madfill.vercel.app/round/${r.id}`} target="_blank" className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-sm">🐦 Share</a>
-                  <a href={`https://warpcast.com/~/compose?text=Just cast my vote in MadFill Round ${r.id}! 🧠 Vote now: https://madfill.vercel.app/round/${r.id}`} target="_blank" className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1 rounded text-sm">🌀 Warpcast</a>
+                  <Button onClick={() => vote(r.id, true)} className="bg-green-600 hover:bg-green-500">😂 Original</Button>
+                  <Button onClick={() => vote(r.id, false)} className="bg-blue-600 hover:bg-blue-500">😆 Challenger</Button>
                 </div>
               </CardContent>
             </Card>
