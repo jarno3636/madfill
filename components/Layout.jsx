@@ -66,7 +66,7 @@ export default function Layout({ children }) {
           <Link href="/" className="hover:text-indigo-300">Home</Link>
           <Link href="/active" className="hover:text-indigo-300">Active Rounds</Link>
           <Link href="/vote" className="hover:text-indigo-300">Community Vote</Link>
-          <Link href="/events" className="hover:text-indigo-300">Special Events</Link>
+          <Link href="/myo" className="hover:text-indigo-300">My Rounds</Link>
           <Link href="/free" className="hover:text-pink-400 font-semibold">🎁 Free Game</Link>
         </div>
       </nav>
