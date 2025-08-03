@@ -1,0 +1,111 @@
+// pages/challenge.jsx
+import { useEffect, useState, Fragment } from 'react'
+import Head from 'next/head'
+import { ethers } from 'ethers'
+import Layout from '@/components/Layout'
+import { Card, CardHeader, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import abi from '@/abi/FillInStoryFull.json'
+import { categories } from '@/data/templates'
+
+export default function ChallengePage() {
+  const [roundId, setRoundId] = useState('')
+  const [catIdx, setCatIdx] = useState(0)
+  const [tplIdx, setTplIdx] = useState(0)
+  const [blankIndex, setBlankIndex] = useState('0')
+  const [word, setWord] = useState('')
+  const [status, setStatus] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const ENTRY_FEE = '0.001'
+  const selectedCategory = categories[catIdx]
+  const tpl = selectedCategory.templates[tplIdx]
+
+  async function handleSubmit() {
+    try {
+      if (!window.ethereum) throw new Error('Wallet not found')
+      setBusy(true)
+      setStatus('Submitting your challenger entry...')
+      const modal = new ethers.BrowserProvider(window.ethereum)
+      const signer = await modal.getSigner()
+      const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
+      const data = ethers.encodeBytes32String(word)
+      const tx = await contract.submitFree(BigInt(roundId), Number(blankIndex), data)
+      await tx.wait()
+      setStatus(`✅ Challenger card submitted to round ${roundId}`)
+    } catch (e) {
+      setStatus('❌ ' + (e.message || e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const blankStyle = (active) =>
+    `inline-block w-8 text-center border-b-2 ${active ? 'border-white' : 'border-slate-400'} cursor-pointer mx-1`
+
+  return (
+    <Layout>
+      <Head><title>Submit a Challenger | MadFill</title></Head>
+      <h1 className="text-3xl font-bold text-white mb-4">😆 Submit a Challenger Card</h1>
+
+      <Card className="bg-gradient-to-tr from-purple-800 to-indigo-900 text-white shadow-xl">
+        <CardHeader>
+          <h2 className="text-xl font-bold">How It Works</h2>
+        </CardHeader>
+        <CardContent className="text-sm space-y-2">
+          <p>See a round you think you can beat? Submit a Challenger Card using the same template and join the showdown.</p>
+          <p>Everyone will vote which card is funnier — the Original or your Challenger!</p>
+        </CardContent>
+      </Card>
+
+      <Card className="mt-6 bg-slate-900 text-white shadow-lg">
+        <CardHeader>
+          <h2 className="text-lg font-semibold">Challenger Card Form</h2>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <label>Round ID</label>
+            <input type="text" className="block w-full bg-slate-800 border rounded px-2 py-1 mt-1" value={roundId} onChange={(e) => setRoundId(e.target.value)} />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {[['Category', catIdx, setCatIdx, categories.map((c, i) => ({ label: c.name, value: i }))],
+              ['Template', tplIdx, setTplIdx, selectedCategory.templates.map((t, i) => ({ label: t.name, value: i }))]].map(([label, val, setVal, options]) => (
+              <div key={label}>
+                <label>{label}</label>
+                <select className="block w-full mt-1 bg-slate-800 text-white border rounded px-2 py-1" value={val} onChange={e => setVal(+e.target.value)}>
+                  {options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+
+          <div>
+            <label>Choose Blank</label>
+            <div className="bg-slate-800 border border-slate-600 rounded p-4 font-mono text-sm">
+              {tpl.parts.map((part, i) => (
+                <Fragment key={i}>
+                  <span>{part}</span>
+                  {i < tpl.blanks && (
+                    <span className={blankStyle(i === +blankIndex)} onClick={() => setBlankIndex(String(i))}>{i}</span>
+                  )}
+                </Fragment>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label>Your Word</label>
+            <input type="text" className="block w-full mt-1 bg-slate-800 text-white border rounded px-2 py-1" value={word} onChange={e => setWord(e.target.value)} />
+          </div>
+
+          <Button onClick={handleSubmit} disabled={!roundId || !word || busy} className="bg-blue-600 hover:bg-blue-500">
+            🚀 Submit Challenger Card
+          </Button>
+
+          {status && <p className="text-sm mt-2 text-white">{status}</p>}
+        </CardContent>
+      </Card>
+    </Layout>
+  )
+}
