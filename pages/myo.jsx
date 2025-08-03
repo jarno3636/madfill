@@ -25,12 +25,12 @@ const themes = {
   },
   parchment: {
     label: 'Parchment',
-    bg: 'bg-[url("/parchment-texture.png")] bg-cover bg-center',
+    bg: 'bg-[url("/parchment-texture.PNG")] bg-cover bg-center',
     text: 'text-slate-900',
   },
   clouds: {
     label: 'Clouds',
-    bg: 'bg-[url("/clouds-texture.png")] bg-cover bg-center',
+    bg: 'bg-[url("/clouds-texture.PNG")] bg-cover bg-center',
     text: 'text-slate-800',
   },
 }
