@@ -17,6 +17,15 @@ const THEMED_NAMES = [
   '🍔 Food Fight', '🧙 Wizard Wordplay', '🎭 Masquerade Mischief', '🌈 Rainbow Run'
 ]
 
+const TABS = [
+  { key: 'all', label: 'All' },
+  { key: 'paid', label: 'Paid' },
+  { key: 'free', label: 'Free' },
+  { key: 'popular', label: '>5 Entries' },
+  { key: 'top', label: 'Top Pool' },
+  { key: 'expiring', label: 'Expiring Soon' }
+]
+
 export default function Active() {
   const [rounds, setRounds] = useState([])
   const [topPool, setTopPool] = useState(null)
@@ -93,11 +102,16 @@ export default function Active() {
     const matchTab =
       tab === 'all' ||
       (tab === 'paid' && r.paidCount > 0) ||
-      (tab === 'free' && r.freeCount > 0)
+      (tab === 'free' && r.freeCount > 0) ||
+      (tab === 'popular' && r.paidCount + r.freeCount > 5) ||
+      (tab === 'top' && topPool && r.id === topPool.id) ||
+      (tab === 'expiring' && r.timeRemaining < 3600)
+
     const matchSearch =
       search === '' ||
       r.name.toLowerCase().includes(search.toLowerCase()) ||
       r.id.toString().includes(search)
+
     return matchTab && matchSearch
   })
 
@@ -160,18 +174,18 @@ export default function Active() {
           onChange={(e) => setSearch(e.target.value)}
         />
 
-        <div className="flex space-x-2">
-          {['all', 'paid', 'free'].map(t => (
+        <div className="flex flex-wrap gap-2">
+          {TABS.map(({ key, label }) => (
             <button
-              key={t}
-              onClick={() => setTab(t)}
+              key={key}
+              onClick={() => setTab(key)}
               className={`px-4 py-2 rounded-full border transition duration-200 ${
-                tab === t
+                tab === key
                   ? 'bg-indigo-600 text-white border-indigo-600'
                   : 'bg-slate-800 text-gray-300 border-slate-600'
               }`}
             >
-              {t.charAt(0).toUpperCase() + t.slice(1)}
+              {label}
             </button>
           ))}
         </div>
