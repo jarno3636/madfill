@@ -7,6 +7,7 @@ import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import abi from '@/abi/FillInStoryFull.json'
 import { categories } from '@/data/templates'
+import Link from 'next/link'
 
 export default function ChallengePage() {
   const [roundId, setRoundId] = useState('')
@@ -53,8 +54,10 @@ export default function ChallengePage() {
           <h2 className="text-xl font-bold">How It Works</h2>
         </CardHeader>
         <CardContent className="text-sm space-y-2">
-          <p>See a round you think you can beat? Submit a Challenger Card using the same template and join the showdown.</p>
-          <p>Everyone will vote which card is funnier — the Original or your Challenger!</p>
+          <p>Think your version is funnier? Submit a Challenger Card and see if the community agrees!</p>
+          <p>Voting will open between the Original and Challenger cards, and one side will win the prize pool.</p>
+          <p className="text-yellow-300">💡 Invite your friends to vote for your card!</p>
+          <p className="text-sm mt-2">Want to vote instead? <Link href="/vote" className="underline text-indigo-300">Go to Community Vote</Link></p>
         </CardContent>
       </Card>
 
