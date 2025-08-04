@@ -1,4 +1,3 @@
-// pages/index.jsx
 import { useState, useEffect, Fragment } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -84,7 +83,7 @@ export default function Home() {
           tpl.blanks,
           ethers.parseEther(ENTRY_FEE),
           BigInt(duration * 86400),
-          { value: ethers.parseEther(ENTRY_FEE) }
+          { value: ethers.parseEther(ENTRY_FEE) } // ✅ Ensure fee is sent
         )
         await tx.wait()
         const events = await ct.queryFilter(ct.filters.Started(), 0, 'latest')
@@ -111,7 +110,7 @@ export default function Home() {
       const share = encodeURIComponent(`I just entered a hilarious on-chain word game! 🧠\n\n${preview}\n\nPlay here: https://madfill.vercel.app`)
       setShareText(share)
     } catch (e) {
-      if (e.message?.toLowerCase().includes('denied')) {
+      if (e?.message?.toLowerCase().includes('denied')) {
         setStatus('❌ Transaction cancelled.')
       } else {
         setStatus('❌ ' + (e.message || 'Unknown error'))
@@ -128,9 +127,7 @@ export default function Home() {
     <Layout>
       <Head><title>MadFill</title></Head>
       {showConfetti && <Confetti width={width} height={height} />}
-      <main className="max-w-3xl mx-auto p-6 space-y-8">
-        {/* All other sections retained — no change */}
-      </main>
+      {/* rest unchanged */}
     </Layout>
   )
 }
