@@ -57,8 +57,8 @@ export default function Home() {
 
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
-  const selectedCategory = categories[catIdx]
-  const tpl = selectedCategory.templates[tplIdx]
+  const selectedCategory = categories[catIdx] ?? {}
+  const tpl = selectedCategory.templates?.[tplIdx] ?? { blanks: 0, parts: [] }
 
   const durations = [
     { label: '1 Day', value: 1 }, { label: '2 Days', value: 2 },
@@ -70,7 +70,11 @@ export default function Home() {
   useEffect(() => {
     if (!roundId) return setDeadline(null)
     const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-    const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
+    const contract = new ethers.Contract(
+      process.env.NEXT_PUBLIC_FILLIN_ADDRESS!,
+      abi,
+      provider
+    )
     contract.rounds(BigInt(roundId))
       .then(info => setDeadline(info.sd.toNumber()))
       .catch(() => setDeadline(null))
@@ -80,12 +84,19 @@ export default function Home() {
     async function loadWinners() {
       try {
         const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-        const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
+        const contract = new ethers.Contract(
+          process.env.NEXT_PUBLIC_FILLIN_ADDRESS!,
+          abi,
+          provider
+        )
         const events = await contract.queryFilter(contract.filters.Draw1(), 0, 'latest')
-        const last5 = events.slice(-5).reverse().map(e => ({
-          roundId: e.args.id.toNumber(),
-          winner: e.args.winner,
-        }))
+        const last5 = events
+          .slice(-5)
+          .reverse()
+          .map(e => ({
+            roundId: e.args.id.toNumber(),
+            winner: e.args.winner,
+          }))
         setRecentWinners(last5)
       } catch (err) {
         console.error('Failed to load winners', err)
@@ -101,7 +112,11 @@ export default function Home() {
 
       const modal = new ethers.BrowserProvider(window.ethereum)
       const signer = await modal.getSigner()
-      const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
+      const ct = new ethers.Contract(
+        process.env.NEXT_PUBLIC_FILLIN_ADDRESS!,
+        abi,
+        signer
+      )
       let newId = roundId
 
       // 1) Create round (gas only)
@@ -110,7 +125,7 @@ export default function Home() {
         const tx = await ct.start(
           tpl.blanks,
           ethers.parseEther(ENTRY_FEE),
-          BigInt(duration * 86400)
+          BigInt(duration * 86400),
         )
         await tx.wait()
         const ev = await ct.queryFilter(ct.filters.Started(), 0, 'latest')
@@ -143,20 +158,25 @@ export default function Home() {
       await tx2.wait()
 
       setStatus(`✅ Round ${newId} entry submitted!`)
-      const preview = tpl.parts.map((part, i) =>
-        i < tpl.blanks
-          ? `${part}${i === Number(blankIndex) ? userWord : '____'}`
-          : part
-      ).join('')
+      const preview = tpl.parts
+        .map((part, i) =>
+          i < tpl.blanks
+            ? `${part}${i === Number(blankIndex) ? userWord : '____'}`
+            : part
+        )
+        .join('')
       setShareText(encodeURIComponent(
         `I just entered a hilarious on-chain word game! 🧠\n\n${preview}\n\nPlay here: https://madfill.vercel.app`
       ))
-    } catch (e) {
-      const msg = (e?.message || '').toLowerCase()
+    } catch (e: any) {
+      const msg = (e.message || '').toLowerCase()
       if (msg.includes('denied')) {
         setStatus('❌ Transaction cancelled by you.')
-      } else if (msg.includes('execution reverted') || msg.includes('require(false)')) {
-        setStatus('❌ Transaction failed on–chain.')
+      } else if (
+        msg.includes('execution reverted') ||
+        msg.includes('require(false)')
+      ) {
+        setStatus('❌ Transaction failed on-chain.')
       } else {
         setStatus('❌ ' + (e.message || 'Unknown error'))
       }
@@ -165,7 +185,7 @@ export default function Home() {
     }
   }
 
-  const blankStyle = active =>
+  const blankStyle = (active: boolean) =>
     `inline-block w-8 text-center border-b-2 ${
       active ? 'border-white' : 'border-slate-400'
     } cursor-pointer mx-1`
@@ -179,8 +199,8 @@ export default function Home() {
         <Card className="bg-slate-700 text-white rounded p-4 mb-6">
           <p><strong>Fees:</strong></p>
           <ul className="list-disc list-inside text-sm">
-            <li>Create round ➡️ gas only</li>
-            <li>Enter pool ➡️ <strong>{ENTRY_FEE} BASE</strong> per entry</li>
+            <li>Create round → gas only</li>
+            <li>Enter pool → <strong>{ENTRY_FEE} BASE</strong> per entry</li>
           </ul>
         </Card>
 
@@ -189,17 +209,22 @@ export default function Home() {
         <main className="max-w-3xl mx-auto p-6 space-y-8">
 
           {/* Info Card */}
-          {/* <motion.div…> */}
-            <Card className="bg-gradient-to-tr from-purple-800 to-indigo-900 text-white shadow-2xl rounded-xl">
-              <CardHeader>
-                <h2 className="text-xl font-bold">🎮 What Is MadFill?</h2>
-              </CardHeader>
-              <CardContent className="text-sm space-y-2">
-                <p>MadFill is an on-chain word game where you create hilarious sentence mashups by filling in blanks on funny templates.</p>
-                <p>Create a round (gas only), then enter with <strong>{ENTRY_FEE} BASE</strong>. Winner takes the pool.</p>
-              </CardContent>
-            </Card>
-          {/* </motion.div> */}
+          {/* <motion.div> … </motion.div> */}
+          <Card className="bg-gradient-to-tr from-purple-800 to-indigo-900 text-white shadow-2xl rounded-xl">
+            <CardHeader>
+              <h2 className="text-xl font-bold">🎮 What Is MadFill?</h2>
+            </CardHeader>
+            <CardContent className="text-sm space-y-2">
+              <p>
+                MadFill is an on-chain word game where you create hilarious
+                sentence mashups by filling in blanks on funny templates.
+              </p>
+              <p>
+                Create a round (gas only), then enter with{' '}
+                <strong>{ENTRY_FEE} BASE</strong>. Winner takes the pool.
+              </p>
+            </CardContent>
+          </Card>
 
           {/* Round Setup */}
           <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
@@ -208,23 +233,26 @@ export default function Home() {
               <Tooltip text="0.5% fees | Winner claims prize | All on-chain!" />
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Category / Template / Duration selectors */}
+
+              {/* Category / Template / Duration */}
               <div className="grid md:grid-cols-3 gap-4">
                 {[
-                  ['Category', catIdx, setCatIdx, categories.map((c,i)=>({label:c.name,value:i}))],
-                  ['Template', tplIdx, setTplIdx, selectedCategory.templates.map((t,i)=>({label:t.name,value:i}))],
+                  ['Category', catIdx, setCatIdx, categories.map((c, i) => ({ label: c.name, value: i }))],
+                  ['Template', tplIdx, setTplIdx, selectedCategory.templates?.map((t, i) => ({ label: t.name, value: i })) || []],
                   ['Duration', duration, setDuration, durations],
-                ].map(([lbl,val,fn,opts])=>(
-                  <div key={lbl}>
-                    <label>{lbl}</label>
+                ].map(([label, val, setter, opts]) => (
+                  <div key={label as string}>
+                    <label>{label}</label>
                     <select
                       className="w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1"
-                      value={val}
-                      onChange={e=>fn(+e.target.value)}
+                      value={val as number}
+                      onChange={e => (setter as any)(+e.target.value)}
                       disabled={busy}
                     >
-                      {opts.map(o=>(
-                        <option key={o.value} value={o.value}>{o.label}</option>
+                      {opts.map(o => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
                       ))}
                     </select>
                   </div>
@@ -237,25 +265,30 @@ export default function Home() {
                 placeholder="Card Name"
                 className="block w-full mt-2 bg-slate-900 text-white border rounded px-2 py-1"
                 value={roundName}
-                onChange={e=>setRoundName(e.target.value)}
+                onChange={e => setRoundName(e.target.value)}
                 disabled={busy}
               />
 
               <div className="bg-slate-900 border border-slate-700 rounded p-4 font-mono text-sm">
-                {tpl.parts.map((part,i)=>(
+                {tpl.parts.map((part, i) => (
                   <Fragment key={i}>
                     <span>{part}</span>
                     {i < tpl.blanks && (
                       <span
-                        className={blankStyle(i===+blankIndex)}
-                        onClick={()=>setBlankIndex(String(i))}
-                      >{i}</span>
+                        className={blankStyle(i === +blankIndex)}
+                        onClick={() => setBlankIndex(String(i))}
+                      >
+                        {i}
+                      </span>
                     )}
                   </Fragment>
                 ))}
               </div>
 
-              <p className="text-sm">Selected Blank: <strong>{blankIndex}</strong></p>
+              <p className="text-sm">
+                Selected Blank:{' '}
+                <strong>{blankIndex}</strong>
+              </p>
 
               <Button
                 onClick={handleUnifiedSubmit}
@@ -269,22 +302,31 @@ export default function Home() {
 
               {roundId && shareText && (
                 <div className="mt-4 space-y-2">
-                  <p className="font-semibold text-white">📣 Share your round:</p>
+                  <p className="font-semibold text-white">
+                    📣 Share your round:
+                  </p>
                   <div className="flex flex-wrap gap-2">
                     <a
                       href={`https://twitter.com/intent/tweet?text=${shareText}`}
-                      target="_blank" rel="noopener noreferrer"
+                      target="_blank"
+                      rel="noopener noreferrer"
                       className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded"
-                    >🐦 Twitter</a>
+                    >
+                      🐦 Twitter
+                    </a>
                     <a
                       href={`https://warpcast.com/~/compose?text=${shareText}`}
-                      target="_blank" rel="noopener noreferrer"
+                      target="_blank"
+                      rel="noopener noreferrer"
                       className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded"
-                    >🌀 Farcaster</a>
-                    <Link href={`/round/${roundId}`}>
-                      <a className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded">
-                        📜 View Round
-                      </a>
+                    >
+                      🌀 Farcaster
+                    </a>
+                    <Link
+                      href={`/round/${roundId}`}
+                      className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded"
+                    >
+                      📜 View Round
                     </Link>
                   </div>
                 </div>
@@ -294,18 +336,24 @@ export default function Home() {
 
           {/* Recent Winners */}
           <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
-            <CardHeader><h2 className="text-xl font-bold">🎉 Recent Winners</h2></CardHeader>
+            <CardHeader>
+              <h2 className="text-xl font-bold">🎉 Recent Winners</h2>
+            </CardHeader>
             <CardContent className="text-sm space-y-1">
-              {recentWinners.length === 0
-                ? <p>No winners yet.</p>
-                : recentWinners.map((w,i)=> {
-                    const nm = localStorage.getItem(`madfill-roundname-${w.roundId}`) || `Round #${w.roundId}`
-                    return (
-                      <p key={i}>
-                        <strong>{nm}</strong> → <code>{w.winner}</code>
-                      </p>
-                    )
-                  })}
+              {recentWinners.length === 0 ? (
+                <p>No winners yet.</p>
+              ) : (
+                recentWinners.map((w, i) => {
+                  const nm =
+                    localStorage.getItem(`madfill-roundname-${w.roundId}`) ||
+                    `Round #${w.roundId}`
+                  return (
+                    <p key={i}>
+                      <strong>{nm}</strong> → <code>{w.winner}</code>
+                    </p>
+                  )
+                })
+              )}
             </CardContent>
           </Card>
         </main>
