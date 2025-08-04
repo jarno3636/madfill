@@ -1,7 +1,7 @@
 // pages/active-rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
-import { ethers, Interface } from 'ethers'
+import { ethers } from 'ethers'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
 import Layout from '@/components/Layout'
@@ -21,14 +21,15 @@ export default function ActiveRoundsPage() {
         const API_KEY = process.env.NEXT_PUBLIC_BASESCAN_API_KEY
         const ADDRESS = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
         const FROM    = process.env.NEXT_PUBLIC_START_BLOCK || '33631502'
-        if (!API_KEY) throw new Error('Missing BASESCAN API key')
+
+        if (!API_KEY) throw new Error('Missing BaseScan API key')
         if (!ADDRESS) throw new Error('Missing contract address')
 
-        // use the standalone Interface class
-        const iface = new Interface(abi)
+        // prepare ABI parser
+        const iface = new ethers.Interface(abi)
 
         async function fetchLogs(topic0) {
-          const params = new URLSearchParams({
+          const qs = new URLSearchParams({
             module:    'logs',
             action:    'getLogs',
             fromBlock: FROM,
@@ -37,37 +38,38 @@ export default function ActiveRoundsPage() {
             topic0,
             apikey:    API_KEY,
           })
-          const res  = await fetch(`https://api.basescan.org/api?${params}`)
-          const data = await res.json()
+          const resp = await fetch(`https://api.basescan.org/api?${qs}`)
+          const data = await resp.json()
           if (data.status !== '1') {
-            throw new Error(data.message || 'no logs')
+            throw new Error(data.message || 'no logs returned')
           }
+          // parse each log entry
           return data.result.map(log =>
-            iface.parseLog({ data: log.data, topics: log.topics }).args
+            iface.parseLog({ topics: log.topics, data: log.data }).args
           )
         }
 
-        const startedTopic = iface.getEventTopic('Started')
-        const paidTopic    = iface.getEventTopic('Paid')
-
+        // pull both started & paid
         const [startedArgs, paidArgs] = await Promise.all([
-          fetchLogs(startedTopic),
-          fetchLogs(paidTopic)
+          fetchLogs(iface.getEventTopic('Started')),
+          fetchLogs(iface.getEventTopic('Paid'))
         ])
 
+        // tally pool sizes
         const poolCounts = paidArgs.reduce((acc, ev) => {
           const id = Number(ev.id)
           acc[id] = (acc[id] || 0) + 1
           return acc
         }, {})
 
+        // build our open‐round list
         const now = Math.floor(Date.now() / 1000)
         const openRounds = startedArgs
           .map(ev => ({
             id:        Number(ev.id),
             blanks:    Number(ev.blanks),
             deadline:  Number(ev.deadline),
-            poolCount: poolCounts[Number(ev.id)] || 0
+            poolCount: poolCounts[Number(ev.id)] || 0,
           }))
           .filter(r => r.deadline > now)
 
@@ -80,7 +82,7 @@ export default function ActiveRoundsPage() {
     })()
   }, [])
 
-  // filter + sort
+  // filter & sort in‐memory
   const filtered = (rounds || []).filter(r =>
     !search || String(r.id).includes(search.trim())
   )
@@ -102,19 +104,23 @@ export default function ActiveRoundsPage() {
           🏁 Active Rounds
         </h1>
 
-        {/* Search & Sort */}
-        <div className="flex flex-col md:flex-row justify-between gap-4 mb-4">
+        {error && (
+          <p className="text-red-500 text-center">{error}</p>
+        )}
+
+        {/* search & sort */}
+        <div className="flex flex-col md:flex-row justify-between gap-4">
           <input
             type="text"
             placeholder="🔍 Filter by Round ID"
-            className="flex-1 bg-slate-900 text-white rounded px-3 py-2"
             value={search}
             onChange={e => setSearch(e.target.value)}
+            className="flex-1 bg-slate-900 text-white rounded px-3 py-2"
           />
           <select
-            className="bg-slate-900 text-white rounded px-3 py-2"
             value={sortOption}
             onChange={e => setSortOption(e.target.value)}
+            className="bg-slate-900 text-white rounded px-3 py-2"
           >
             <option value="timeAsc">⏱️ Time ↑</option>
             <option value="timeDesc">⏱️ Time ↓</option>
@@ -123,15 +129,14 @@ export default function ActiveRoundsPage() {
           </select>
         </div>
 
-        {error && <p className="text-red-500 text-center">{error}</p>}
-
+        {/* content */}
         {rounds === null ? (
           <p className="text-center text-gray-500">Loading…</p>
         ) : sorted.length === 0 ? (
           <p className="text-center text-gray-500">No open rounds found.</p>
         ) : (
           sorted.map(r => (
-            <Card key={r.id} className="bg-slate-800 text-white rounded-lg shadow mb-4">
+            <Card key={r.id} className="bg-slate-800 text-white rounded-lg shadow">
               <CardHeader className="flex justify-between items-center">
                 <div>
                   <h2 className="text-xl">Round #{r.id}</h2>
