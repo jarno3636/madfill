@@ -1,7 +1,7 @@
 // pages/active-rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
-import { ethers } from 'ethers'
+import { ethers, Interface } from 'ethers'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
 import Layout from '@/components/Layout'
@@ -24,8 +24,8 @@ export default function ActiveRoundsPage() {
         if (!API_KEY) throw new Error('Missing BASESCAN API key')
         if (!ADDRESS) throw new Error('Missing contract address')
 
-        // ← use the v6 constructor directly
-        const iface = new ethers.Interface(abi)
+        // ethers v6: import Interface directly
+        const iface = new Interface(abi)
 
         async function fetchLogs(topic0) {
           const params = new URLSearchParams({
@@ -50,11 +50,11 @@ export default function ActiveRoundsPage() {
         const startedTopic = iface.getEventTopic('Started')
         const paidTopic    = iface.getEventTopic('Paid')
 
-        const [startedArgs, paidArgs] = await Promise.all([
-          fetchLogs(startedTopic),
-          fetchLogs(paidTopic),
-        ])
+        // fetch both in parallel
+        const [startedArgs, paidArgs] =
+          await Promise.all([fetchLogs(startedTopic), fetchLogs(paidTopic)])
 
+        // tally pool sizes
         const poolCounts = paidArgs.reduce((acc, ev) => {
           const id = Number(ev.id)
           acc[id] = (acc[id] || 0) + 1
@@ -80,6 +80,7 @@ export default function ActiveRoundsPage() {
     })()
   }, [])
 
+  // filter + sort
   const filtered = (rounds || []).filter(r =>
     !search || String(r.id).includes(search.trim())
   )
@@ -97,7 +98,6 @@ export default function ActiveRoundsPage() {
     <Layout>
       <Head><title>MadFill • Active Rounds</title></Head>
       <main className="max-w-4xl mx-auto p-6 space-y-8">
-
         <h1 className="text-3xl font-extrabold text-center text-indigo-400">
           🏁 Active Rounds
         </h1>
@@ -151,7 +151,6 @@ export default function ActiveRoundsPage() {
             </Card>
           ))
         )}
-
       </main>
       <Footer />
     </Layout>
