@@ -32,7 +32,7 @@ export default function RoundDetailPage() {
     }
   }, [])
 
-  // load round details & submissions
+  // load round
   useEffect(() => {
     if (!id) return
     setLoading(true)
@@ -52,37 +52,46 @@ export default function RoundDetailPage() {
           provider
         )
 
-        // 2) fetch on-chain state, winner, claim flag
+        // 2) on-chain state, winner, claim status
         const [ onchain, winnerAddr, hasClaimed ] = await Promise.all([
           ct.rounds(BigInt(id)),
           ct.w2(BigInt(id)),
           ct.c2(BigInt(id)),
         ])
 
-        // 3) get chosen template indices from localStorage
+        // 3) find the Started event to know blanks/template (if needed)
+        const deployBlock = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 33631502
+        const latestBlock = await provider.getBlockNumber()
+        const BATCH       = 500
+        let startEvtArgs  = null
+
+        for (let start = deployBlock; start <= latestBlock; start += BATCH) {
+          const end = Math.min(start + BATCH - 1, latestBlock)
+          const evs = await ct.queryFilter(ct.filters.Started(), start, end)
+          const found = evs.find(e => e.args.id.toString() === id)
+          if (found) {
+            startEvtArgs = found.args
+            break
+          }
+        }
+        if (!startEvtArgs) {
+          throw new Error(`Started event not found for round ${id}`)
+        }
+
+        // 4) recover chosen template from localStorage
         const tplIx = Number(localStorage.getItem(`madfill-tplIdx-${id}`) || 0)
         const catIx = Number(localStorage.getItem(`madfill-catIdx-${id}`) || 0)
         const tpl   = categories[catIx].templates[tplIx]
 
-        // 4) fetch all submissions (paid vs free)
-        const subs = await ct.getSubmissions(BigInt(id))
-        const originalSub     = subs.find(s => s.paid)
-        const challengerSubs  = subs.filter(s => !s.paid)
+        // 5) decode the two on-chain arrays pA (paid/original) and fA (free/challenger)
+        const origWords = onchain.pA.map(w => ethers.decodeBytes32String(w))
+        const chalWords = onchain.fA.map(w => ethers.decodeBytes32String(w))
 
-        // 5) decode words into strings
-        const original = originalSub
-          ? [ ethers.decodeBytes32String(originalSub.word) ]
-          : []
-        const challenger = challengerSubs.map(s =>
-          ethers.decodeBytes32String(s.word)
-        )
-
-        // 6) update state
         setClaimed(hasClaimed)
         setRoundData({
           tpl,
-          original,
-          challenger,
+          original:    origWords,
+          challenger:  chalWords,
           votes: {
             original:   onchain.vP.toString(),
             challenger: onchain.vF.toString(),
@@ -98,7 +107,7 @@ export default function RoundDetailPage() {
     })()
   }, [id])
 
-  // claim button handler
+  // claim prize
   async function handleClaim() {
     try {
       setStatus('Claiming…')
@@ -118,7 +127,7 @@ export default function RoundDetailPage() {
     }
   }
 
-  // card renderer
+  // render one card
   function renderCard(parts, words, title, highlight) {
     return (
       <Card
