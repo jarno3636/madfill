@@ -1,190 +1,117 @@
-// pages/active‐rounds.jsx
+// pages/active-rounds.jsx
 import React, { useState, useEffect } from 'react'
+import axios from 'axios'
 import Head from 'next/head'
-import { ethers } from 'ethers'
-import { motion } from 'framer-motion'
-import abi from '../abi/FillInStoryFull.json'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
 import Layout from '@/components/Layout'
 import Footer from '@/components/Footer'
 import Link from 'next/link'
+import { utils } from 'ethers'
+import abi from '../abi/FillInStoryFull.json'
 
 export default function ActiveRoundsPage() {
-  const [rounds, setRounds]     = useState(null)
-  const [search, setSearch]     = useState('')
-  const [sortOption, setSort]   = useState('timeAsc')
-  const [error, setError]       = useState('')
+  const [rounds, setRounds] = useState(null)
+  const [error, setError]   = useState('')
 
   useEffect(() => {
-    (async () => {
+    ;(async () => {
       try {
-        // — CONFIG —
-        const address = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
-        const rpcUrl  = process.env.NEXT_PUBLIC_ALCHEMY_URL
-        if (!address || !rpcUrl) throw new Error('Missing address or Alchemy URL')
+        const API_KEY  = process.env.NEXT_PUBLIC_BASESCAN_API_KEY
+        const ADDRESS  = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
+        const FROM     = process.env.NEXT_PUBLIC_START_BLOCK || '33631502'
+        const iface    = new utils.Interface(abi)
 
-        // — PROVIDERS —
-        const alchemy = new ethers.JsonRpcProvider(rpcUrl)
-        const fallback= new ethers.JsonRpcProvider('https://mainnet.base.org')
-        const provider= new ethers.FallbackProvider([alchemy, fallback])
-        const contract= new ethers.Contract(address, abi, provider)
-
-        // — BLOCK WINDOW & CHUNKING —
-        const latest = await provider.getBlockNumber()
-        const windowSize = 200_000    // scan just last ~week
-        const startBlock = Math.max(latest - windowSize, 0)
-        const chunkSize  = 500        // ≤500 blocks/chunk
-
-        // — RETRYABLE getLogs helper —
-        async function safeGetLogs(opts, retries = 3) {
-          try {
-            return await alchemy.getLogs(opts)
-          } catch (e) {
-            if (retries > 0 && /rate limit|over rate limit/i.test(e.message)) {
-              // wait a bit then retry
-              await new Promise(r => setTimeout(r, 1000))
-              return safeGetLogs(opts, retries - 1)
+        // helper to call BaseScan logs endpoint
+        async function fetchLogs(topic0) {
+          const res = await axios.get('https://api.basescan.org/api', {
+            params: {
+              module:    'logs',
+              action:    'getLogs',
+              fromBlock: FROM,
+              toBlock:   'latest',
+              address:   ADDRESS,
+              topic0,
+              apikey:    API_KEY,
             }
-            // fallback to public node for this chunk
-            return fallback.getLogs(opts)
+          })
+          if (res.data.status !== '1') {
+            throw new Error(res.data.message || 'no logs')
           }
+          return res.data.result.map(log => iface.parseLog(log).args)
         }
 
-        // — FETCH & PARSE in CHUNKS —
-        async function fetchLogs(filter) {
-          const all = []
-          for (let b = startBlock; b <= latest; b += chunkSize) {
-            const to = Math.min(b + chunkSize - 1, latest)
-            const logs = await safeGetLogs({
-              address,
-              topics: filter.topics,
-              fromBlock: b,
-              toBlock:   to,
-            })
-            for (const l of logs) {
-              all.push(contract.interface.parseLog(l).args)
-            }
-          }
-          return all
-        }
+        // Started() topic
+        const TOPIC_STARTED = iface.getEventTopic('Started')
+        const startedArgs   = await fetchLogs(TOPIC_STARTED)
 
-        // — PULL EVENTS —
-        const started = await fetchLogs(contract.filters.Started())
-        const paid    = await fetchLogs(contract.filters.Paid())
+        // Paid() topic
+        const TOPIC_PAID    = iface.getEventTopic('Paid')
+        const paidArgs      = await fetchLogs(TOPIC_PAID)
 
-        // — TALLY POOLS & BUILD ROUNDS —
-        const pool = {}
-        paid.forEach(ev => {
+        // tally pools
+        const poolCounts = paidArgs.reduce((acc, ev) => {
           const id = Number(ev.id)
-          pool[id] = (pool[id] || 0) + 1
-        })
+          acc[id] = (acc[id] || 0) + 1
+          return acc
+        }, {})
 
+        // build open rounds
         const now = Math.floor(Date.now()/1000)
-        const open = started
+        const openRounds = startedArgs
           .map(ev => ({
-            id: Number(ev.id),
-            blanks: Number(ev.blanks),
-            deadline: Number(ev.deadline),
-            poolCount: pool[Number(ev.id)] || 0,
+            id:        Number(ev.id),
+            blanks:    Number(ev.blanks),
+            deadline:  Number(ev.deadline),
+            poolCount: poolCounts[Number(ev.id)] || 0
           }))
           .filter(r => r.deadline > now)
 
-        setRounds(open)
+        setRounds(openRounds)
       } catch (e) {
         console.error(e)
-        setError(e.message || 'Load failed')
+        setError('⚠️ Unable to load active rounds: ' + e.message)
         setRounds([])
       }
     })()
   }, [])
 
-  // FILTER & SORT
-  const filtered = (rounds||[]).filter(r =>
-    !search || String(r.id).includes(search.trim())
-  )
-  const sorted = [...filtered].sort((a,b)=>{
-    switch(sortOption) {
-      case 'timeAsc':   return a.deadline  - b.deadline
-      case 'timeDesc':  return b.deadline  - a.deadline
-      case 'poolAsc':   return a.poolCount - b.poolCount
-      case 'poolDesc':  return b.poolCount - a.poolCount
-      default:          return 0
-    }
-  })
-
   return (
     <Layout>
       <Head><title>MadFill • Active Rounds</title></Head>
-      <main className="max-w-5xl mx-auto p-6 space-y-8">
-
-        <h1 className="text-4xl font-extrabold text-center text-indigo-500">
+      <main className="max-w-4xl mx-auto p-6 space-y-8">
+        <h1 className="text-3xl font-extrabold text-center text-indigo-400">
           🏁 Active Rounds
         </h1>
-
-        {error && (
-          <p className="text-center text-red-600">
-            ⚠ Unable to load active rounds: {error}
-          </p>
+        {error && <p className="text-red-500 text-center">{error}</p>}
+        {rounds === null ? (
+          <p className="text-center text-gray-500">Loading…</p>
+        ) : rounds.length === 0 ? (
+          <p className="text-center text-gray-500">No open rounds found.</p>
+        ) : (
+          rounds.map(r => (
+            <Card key={r.id} className="bg-slate-800 text-white rounded-lg shadow">
+              <CardHeader className="flex justify-between items-center">
+                <div>
+                  <h2 className="text-xl">Round #{r.id}</h2>
+                  <p className="text-sm opacity-75">
+                    {r.blanks} blank{r.blanks>1?'s':''} • {r.poolCount} entr{r.poolCount===1?'y':'ies'}
+                  </p>
+                </div>
+                <Countdown targetTimestamp={r.deadline} />
+              </CardHeader>
+              <CardContent className="text-right">
+                <Link href={`/round/${r.id}`}>
+                  <a className="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded">
+                    View & Enter
+                  </a>
+                </Link>
+              </CardContent>
+            </Card>
+          ))
         )}
-
-        <div className="flex flex-col md:flex-row gap-4">
-          <input
-            className="flex-1 bg-slate-900 text-white rounded-lg px-4 py-2"
-            placeholder="🔍 Filter by Round ID"
-            value={search}
-            onChange={e=>setSearch(e.target.value)}
-          />
-          <select
-            className="w-48 bg-slate-900 text-white rounded-lg px-4 py-2"
-            value={sortOption}
-            onChange={e=>setSort(e.target.value)}
-          >
-            <option value="timeAsc">⏱ Time ↑</option>
-            <option value="timeDesc">⏱ Time ↓</option>
-            <option value="poolAsc">💰 Pool ↑</option>
-            <option value="poolDesc">💰 Pool ↓</option>
-          </select>
-        </div>
-
-        {rounds===null
-          ? <p className="text-center text-slate-400">Loading active rounds…</p>
-          : sorted.length===0
-            ? <p className="text-center text-slate-400">No open rounds found.</p>
-            : (
-              <div className="grid sm:grid-cols-2 gap-6">
-                {sorted.map(r=>(
-                  <motion.div key={r.id} whileHover={{scale:1.02}} transition={{duration:0.2}}>
-                    <Card className="bg-slate-800 text-white rounded-xl shadow-lg overflow-hidden">
-                      <CardHeader className="flex justify-between items-start">
-                        <div>
-                          <h2 className="text-2xl font-semibold">#{r.id}</h2>
-                          <div className="mt-1 flex gap-2">
-                            <span className="bg-indigo-600 px-2 py-1 rounded-full text-xs">
-                              {r.blanks} blank{r.blanks>1?'s':''}
-                            </span>
-                            <span className="bg-emerald-600 px-2 py-1 rounded-full text-xs">
-                              {r.poolCount} entr{r.poolCount===1?'y':'ies'}
-                            </span>
-                          </div>
-                        </div>
-                        <Countdown targetTimestamp={r.deadline} />
-                      </CardHeader>
-                      <CardContent className="flex justify-end">
-                        <Link href={`/round/${r.id}`}>
-                          <a className="bg-gradient-to-r from-indigo-500 to-purple-500 px-4 py-2 rounded-lg">
-                            View & Enter
-                          </a>
-                        </Link>
-                      </CardContent>
-                    </Card>
-                  </motion.div>
-                ))}
-              </div>
-            )
-        }
       </main>
-      <Footer/>
+      <Footer />
     </Layout>
   )
 }
