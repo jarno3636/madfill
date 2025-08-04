@@ -24,12 +24,11 @@ export default function ActiveRoundsPage() {
         if (!API_KEY) throw new Error('Missing BASESCAN API key')
         if (!ADDRESS) throw new Error('Missing contract address')
 
-        // ← HERE’S THE FIX: pull Interface from ethers.utils
-        const iface = new ethers.utils.Interface(abi)
+        // ← use the v6 constructor directly
+        const iface = new ethers.Interface(abi)
 
         async function fetchLogs(topic0) {
-          const url = new URL('https://api.basescan.org/api')
-          url.search = new URLSearchParams({
+          const params = new URLSearchParams({
             module:    'logs',
             action:    'getLogs',
             fromBlock: FROM,
@@ -37,12 +36,11 @@ export default function ActiveRoundsPage() {
             address:   ADDRESS,
             topic0,
             apikey:    API_KEY,
-          }).toString()
-
-          const res  = await fetch(url)
+          })
+          const res  = await fetch(`https://api.basescan.org/api?${params}`)
           const data = await res.json()
           if (data.status !== '1') {
-            throw new Error(data.message || 'No logs')
+            throw new Error(data.message || 'no logs')
           }
           return data.result.map(log =>
             iface.parseLog({ data: log.data, topics: log.topics }).args
@@ -52,8 +50,10 @@ export default function ActiveRoundsPage() {
         const startedTopic = iface.getEventTopic('Started')
         const paidTopic    = iface.getEventTopic('Paid')
 
-        const startedArgs = await fetchLogs(startedTopic)
-        const paidArgs    = await fetchLogs(paidTopic)
+        const [startedArgs, paidArgs] = await Promise.all([
+          fetchLogs(startedTopic),
+          fetchLogs(paidTopic),
+        ])
 
         const poolCounts = paidArgs.reduce((acc, ev) => {
           const id = Number(ev.id)
