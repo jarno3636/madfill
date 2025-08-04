@@ -2,8 +2,8 @@ import Layout from '@/components/Layout'
 import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import clsx from 'clsx'
-import { TwitterShareButton, TwitterIcon } from 'react-share'
-import { useRouter } from 'next/router'
+import { toast } from 'react-hot-toast'
+import { ethers } from 'ethers'
 
 const defaultStickers = ['🐸', '💥', '🌈', '🧠', '🔥', '✨', '🌀', '🎉', '🍕', '👾']
 const defaultTheme = 'retro'
@@ -45,10 +45,6 @@ export default function MyoPage() {
   const [activeSticker, setActiveSticker] = useState(null)
   const [showPreview, setShowPreview] = useState(false)
 
-  const router = useRouter()
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://madfill.vercel.app'
-  const shareUrl = `${siteUrl}/myo`
-
   useEffect(() => {
     const saved = JSON.parse(localStorage.getItem('madfill-myo-draft') || '{}')
     if (saved.title) setTitle(saved.title)
@@ -85,6 +81,26 @@ export default function MyoPage() {
     const keys = Object.keys(themes)
     const pick = keys[Math.floor(Math.random() * keys.length)]
     setTheme(pick)
+  }
+
+  async function handleSubmit() {
+    try {
+      const modal = new ethers.BrowserProvider(window.ethereum)
+      const signer = await modal.getSigner()
+      const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
+      const value = ethers.parseEther('0.001')
+      const partsEncoded = parts.map(p => p === '____' ? '' : p) // adjust this logic based on contract needs
+
+      const tx = await contract.submitPaid(partsEncoded, { value })
+      await tx.wait()
+      toast.success('🎉 Card submitted with fee!')
+    } catch (e) {
+      if (e?.code === 4001) {
+        toast.error('❌ Transaction cancelled by user')
+      } else {
+        toast.error(`❌ ${e.message || 'Submission failed'}`)
+      }
+    }
   }
 
   return (
@@ -165,20 +181,11 @@ export default function MyoPage() {
           </p>
         </div>
 
-        <div className="text-center mt-6 space-y-2">
-          <Button disabled className="bg-slate-600 cursor-not-allowed opacity-60">
-            🪙 Mint Template (Coming Soon)
+        <div className="text-center mt-6">
+          <Button onClick={handleSubmit} className="bg-blue-600 hover:bg-blue-500">
+            🚀 Submit with 0.001 ETH
           </Button>
-          <p className="text-xs text-slate-400 italic">Soon you’ll be able to mint your own MadFill masterpiece!</p>
-
-          <div className="mt-4 space-x-2">
-            <a href={`https://warpcast.com/~/compose?text=Check out my MadFill card!&embeds[]=${encodeURIComponent(shareUrl)}`} target="_blank" rel="noopener noreferrer">
-              <Button className="bg-blue-500 hover:bg-blue-400">Share on Farcaster</Button>
-            </a>
-            <TwitterShareButton url={shareUrl} title={title}>
-              <Button className="bg-sky-500 hover:bg-sky-400">Share on X</Button>
-            </TwitterShareButton>
-          </div>
+          <p className="text-xs mt-2 text-slate-400 italic">Small fee helps build the game. Canceling is okay too!</p>
         </div>
       </div>
 
