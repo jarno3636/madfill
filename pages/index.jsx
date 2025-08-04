@@ -44,13 +44,13 @@ export default function Home() {
     if (!roundId) return setDeadline(null)
     const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
     const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
-    contract.rounds(BigInt(roundId)).then(info => {
-      setDeadline(info.sd.toNumber())
-    }).catch(() => setDeadline(null))
+    contract.rounds(BigInt(roundId))
+      .then(info => setDeadline(info.sd.toNumber()))
+      .catch(() => setDeadline(null))
   }, [roundId])
 
   useEffect(() => {
-    const loadWinners = async () => {
+    async function loadWinners() {
       try {
         const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
         const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
@@ -77,14 +77,14 @@ export default function Home() {
       setStatus('')
       let newId = roundId
 
-      // Create round if needed, sending entry fee
       if (!roundId) {
         setStatus('⏳ Creating round…')
+        // ✅ FIX: include the ENTRY_FEE as msg.value on start()
         const tx = await ct.start(
           tpl.blanks,
           ethers.parseEther(ENTRY_FEE),
           BigInt(duration * 86400),
-          { value: ethers.parseEther(ENTRY_FEE) } // ✅ FEE FIX
+          { value: ethers.parseEther(ENTRY_FEE) }
         )
         await tx.wait()
         const events = await ct.queryFilter(ct.filters.Started(), 0, 'latest')
@@ -97,7 +97,6 @@ export default function Home() {
         setTimeout(() => setShowConfetti(false), 5000)
       }
 
-      // Submit entry with fee
       setStatus('⏳ Submitting entry…')
       const data = ethers.encodeBytes32String(word)
       const tx2 = await ct.submitPaid(BigInt(newId), Number(blankIndex), data, {
@@ -106,20 +105,22 @@ export default function Home() {
       await tx2.wait()
       setStatus(`✅ Round ${newId} entry submitted!`)
 
-      // Prepare share text
       const preview = tpl.parts.map((part, i) =>
-        i < tpl.blanks ? `${part}${i === Number(blankIndex) ? word : '____'}` : part
+        i < tpl.blanks
+          ? `${part}${i === Number(blankIndex) ? word : '____'}`
+          : part
       ).join('')
-      const share = encodeURIComponent(`I just entered a hilarious on-chain word game! 🧠\n\n${preview}\n\nPlay here: https://madfill.vercel.app`)
+      const share = encodeURIComponent(
+        `I just entered a hilarious on-chain word game! 🧠\n\n${preview}\n\nPlay here: https://madfill.vercel.app`
+      )
       setShareText(share)
+
     } catch (e) {
-      // ✅ ERROR MESSAGE FIX
+      // ✅ clean, user-friendly error messages
       if (e?.message?.toLowerCase().includes('denied')) {
         setStatus('❌ Transaction cancelled.')
-      } else if (e?.code === 'CALL_EXCEPTION' || e?.message?.includes('execution reverted')) {
-        setStatus('❌ Reverted: Check your input or try again.')
       } else {
-        setStatus('❌ ' + (e.message || 'Unknown error occurred.'))
+        setStatus('❌ ' + (e.message || 'Unknown error'))
       }
     } finally {
       setBusy(false)
@@ -127,14 +128,16 @@ export default function Home() {
   }
 
   const blankStyle = (active) =>
-    `inline-block w-8 text-center border-b-2 ${active ? 'border-white' : 'border-slate-400'} cursor-pointer mx-1`
+    `inline-block w-8 text-center border-b-2 ${
+      active ? 'border-white' : 'border-slate-400'
+    } cursor-pointer mx-1`
 
   return (
     <Layout>
       <Head><title>MadFill</title></Head>
       {showConfetti && <Confetti width={width} height={height} />}
-      <main className="max-w-3xl mx-auto p-6 space-y-8">
 
+      <main className="max-w-3xl mx-auto p-6 space-y-8">
         {/* Info Section */}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }}>
           <Card className="bg-gradient-to-tr from-purple-800 to-indigo-900 text-white shadow-2xl rounded-xl">
@@ -153,46 +156,74 @@ export default function Home() {
             <Tooltip text="0.5% fees | Winner claims prize | All on-chain!" />
           </CardHeader>
           <CardContent className="space-y-4">
-
             {/* Selectors */}
             <div className="grid md:grid-cols-3 gap-4">
-              {[['Category', catIdx, setCatIdx, categories.map((c, i) => ({ label: c.name, value: i }))],
-                ['Template', tplIdx, setTplIdx, selectedCategory.templates.map((t, i) => ({ label: t.name, value: i }))],
+              {[
+                ['Category', catIdx, setCatIdx, categories.map((c,i)=>({label:c.name,value:i}))],
+                ['Template', tplIdx, setTplIdx, selectedCategory.templates.map((t,i)=>({label:t.name,value:i}))],
                 ['Duration', duration, setDuration, durations]
-              ].map(([label, val, setVal, opts]) => (
+              ].map(([label, val, setVal, opts])=>(
                 <div key={label}>
                   <label>{label}</label>
-                  <select className="w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1"
-                    value={val} onChange={e => setVal(+e.target.value)} disabled={busy}>
-                    {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  <select
+                    className="w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1"
+                    value={val}
+                    onChange={e => setVal(+e.target.value)}
+                    disabled={busy}
+                  >
+                    {opts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                 </div>
               ))}
             </div>
 
-            <input type="text" maxLength={10} placeholder="Card Name"
+            <input
+              type="text"
+              maxLength={10}
+              placeholder="Card Name"
               className="block w-full mt-2 bg-slate-900 text-white border rounded px-2 py-1"
-              value={roundName} onChange={e => setRoundName(e.target.value)} disabled={busy}
+              value={roundName}
+              onChange={e => setRoundName(e.target.value)}
+              disabled={busy}
             />
 
             <div className="bg-slate-900 border border-slate-700 rounded p-4 font-mono text-sm">
-              {tpl.parts.map((part, i) => (
+              {tpl.parts.map((part,i)=>(
                 <Fragment key={i}>
                   <span>{part}</span>
                   {i < tpl.blanks && (
-                    <span className={blankStyle(i === +blankIndex)} onClick={() => setBlankIndex(String(i))}>{i}</span>
+                    <span
+                      className={blankStyle(i===+blankIndex)}
+                      onClick={()=> setBlankIndex(String(i))}
+                    >{i}</span>
                   )}
                 </Fragment>
               ))}
             </div>
 
-            <p className="text-sm">Selected Blank: <strong>{blankIndex}</strong></p>
-            <input type="text" placeholder="Your Word" value={word} onChange={e => setWord(e.target.value)}
-              className="w-full bg-slate-900 text-white border rounded px-2 py-1" disabled={busy} />
+            <p className="text-sm">
+              Selected Blank: <strong>{blankIndex}</strong>
+            </p>
+            <input
+              type="text"
+              placeholder="Your Word"
+              className="w-full bg-slate-900 text-white border rounded px-2 py-1"
+              value={word}
+              onChange={e=>setWord(e.target.value)}
+              disabled={busy}
+            />
 
-            {deadline && <p className="text-sm">⏱️ Submissions close in: <Countdown targetTimestamp={deadline} /></p>}
+            {deadline && (
+              <p className="text-sm">
+                ⏱️ Submissions close in: <Countdown targetTimestamp={deadline} />
+              </p>
+            )}
 
-            <Button onClick={handleUnifiedSubmit} disabled={!word || busy} className="bg-indigo-600 hover:bg-indigo-500">
+            <Button
+              onClick={handleUnifiedSubmit}
+              disabled={!word || busy}
+              className="bg-indigo-600 hover:bg-indigo-500"
+            >
               {!roundId ? '🚀 Create & Submit' : '✏️ Submit Entry'}
             </Button>
 
@@ -202,11 +233,20 @@ export default function Home() {
               <div className="mt-4 space-y-2">
                 <p className="font-semibold text-white">📣 Share your round:</p>
                 <div className="flex flex-wrap gap-2">
-                  <a href={`https://twitter.com/intent/tweet?text=${shareText}`} target="_blank" rel="noopener noreferrer"
-                    className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded">🐦 Twitter</a>
-                  <a href={`https://warpcast.com/~/compose?text=${shareText}`} target="_blank" rel="noopener noreferrer"
-                    className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded">🌀 Farcaster</a>
-                  <Link href={`/round/${roundId}`} className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded">📜 View Round</Link>
+                  <a
+                    href={`https://twitter.com/intent/tweet?text=${shareText}`}
+                    target="_blank" rel="noopener noreferrer"
+                    className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded"
+                  >🐦 Twitter</a>
+                  <a
+                    href={`https://warpcast.com/~/compose?text=${shareText}`}
+                    target="_blank" rel="noopener noreferrer"
+                    className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded"
+                  >🌀 Farcaster</a>
+                  <Link
+                    href={`/round/${roundId}`}
+                    className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded"
+                  >📜 View Round</Link>
                 </div>
               </div>
             )}
@@ -219,7 +259,7 @@ export default function Home() {
           <CardContent className="text-sm space-y-1">
             {recentWinners.length === 0
               ? <p>No winners yet.</p>
-              : recentWinners.map((w, i) => {
+              : recentWinners.map((w,i)=> {
                   const name = localStorage.getItem(`madfill-roundname-${w.roundId}`) || `Round #${w.roundId}`
                   return <p key={i}><strong>{name}</strong> → <code>{w.winner}</code></p>
                 })}
