@@ -79,12 +79,11 @@ export default function Home() {
 
       if (!roundId) {
         setStatus('⏳ Creating round…')
-        // ✅ FIX: include the ENTRY_FEE as msg.value on start()
         const tx = await ct.start(
           tpl.blanks,
           ethers.parseEther(ENTRY_FEE),
           BigInt(duration * 86400),
-          { value: ethers.parseEther(ENTRY_FEE) }
+          { value: ethers.parseEther(ENTRY_FEE) } // ✅ FEE FIX
         )
         await tx.wait()
         const events = await ct.queryFilter(ct.filters.Started(), 0, 'latest')
@@ -116,12 +115,15 @@ export default function Home() {
       setShareText(share)
 
     } catch (e) {
-      // ✅ clean, user-friendly error messages
-      if (e?.message?.toLowerCase().includes('denied')) {
+      // —— Only this catch block changed —— 
+      if (e.code === 'ACTION_REJECTED' || e?.message?.toLowerCase().includes('denied')) {
         setStatus('❌ Transaction cancelled.')
+      } else if (e.code === 'CALL_EXCEPTION') {
+        setStatus('❌ Transaction failed on-chain.')
       } else {
         setStatus('❌ ' + (e.message || 'Unknown error'))
       }
+      console.error(e)  // still log the raw for your debugging console
     } finally {
       setBusy(false)
     }
@@ -162,13 +164,13 @@ export default function Home() {
                 ['Category', catIdx, setCatIdx, categories.map((c,i)=>({label:c.name,value:i}))],
                 ['Template', tplIdx, setTplIdx, selectedCategory.templates.map((t,i)=>({label:t.name,value:i}))],
                 ['Duration', duration, setDuration, durations]
-              ].map(([label, val, setVal, opts])=>(
+              ].map(([label,val,setVal,opts])=>(
                 <div key={label}>
                   <label>{label}</label>
                   <select
                     className="w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1"
                     value={val}
-                    onChange={e => setVal(+e.target.value)}
+                    onChange={e=>setVal(+e.target.value)}
                     disabled={busy}
                   >
                     {opts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
@@ -183,7 +185,7 @@ export default function Home() {
               placeholder="Card Name"
               className="block w-full mt-2 bg-slate-900 text-white border rounded px-2 py-1"
               value={roundName}
-              onChange={e => setRoundName(e.target.value)}
+              onChange={e=>setRoundName(e.target.value)}
               disabled={busy}
             />
 
@@ -194,7 +196,7 @@ export default function Home() {
                   {i < tpl.blanks && (
                     <span
                       className={blankStyle(i===+blankIndex)}
-                      onClick={()=> setBlankIndex(String(i))}
+                      onClick={()=>setBlankIndex(String(i))}
                     >{i}</span>
                   )}
                 </Fragment>
