@@ -1,267 +1,332 @@
-// pages/active.jsx
-import { useEffect, useState } from 'react'
+// pages/index.jsx
+import React, { Component, useState, useEffect, Fragment } from 'react'
 import Head from 'next/head'
-import { ethers, formatBytes32String } from 'ethers'
-import abi from '@/abi/FillInStoryFull.json'
-import { Button } from '@/components/ui/button'
-import { Card, CardHeader, CardContent } from '@/components/ui/card'
+import { ethers } from 'ethers'
 import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
-import { motion, AnimatePresence } from 'framer-motion'
+import abi from '../abi/FillInStoryFull.json'
+import { Button } from '@/components/ui/button'
+import { Card, CardHeader, CardContent } from '@/components/ui/card'
+import { Countdown } from '@/components/Countdown'
+import { categories, durations } from '../data/templates'
 import Layout from '@/components/Layout'
+import { motion } from 'framer-motion'
+import { Tooltip } from '@/components/ui/tooltip'
+import Link from 'next/link'
+import Footer from '@/components/Footer'    // ← your prebuilt footer
 
-const THEMED_NAMES = [
-  '🍕 Pizza Party', '👻 Ghost Stories', '🧠 Brainstorm Battle', '🌊 Deep Sea Drama',
-  '👽 Alien Adventure', '🎩 Fancy Fables', '🎮 Gamer Mode', '🐸 Toad Madness',
-  '💼 Office Mayhem', '🚀 Space Chase', '🧛‍♂️ Vampire Night', '🐉 Dragon Tales',
-  '🍔 Food Fight', '🧙 Wizard Wordplay', '🎭 Masquerade Mischief', '🌈 Rainbow Run'
-]
-
-const TABS = [
-  { key: 'all', label: 'All' },
-  { key: 'paid', label: 'Paid' },
-  { key: 'free', label: 'Free' },
-  { key: 'popular', label: '>5 Entries' },
-  { key: 'top', label: 'Top Pool' },
-  { key: 'expiring', label: 'Expiring Soon' }
-]
-
-export default function Active() {
-  const [rounds, setRounds] = useState([])
-  const [topPool, setTopPool] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState('all')
-  const [search, setSearch] = useState('')
-  const [showModalId, setShowModalId] = useState(null)
-  const [entryWord, setEntryWord] = useState('')
-  const [blankIndex, setBlankIndex] = useState(0)
-  const [entryStatus, setEntryStatus] = useState('')
-  const [busy, setBusy] = useState(false)
-  const { width, height } = useWindowSize()
-  const ENTRY_FEE = '0.001'
-
-  useEffect(() => {
-    async function load() {
-      const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-      const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
-
-      const [started, paidE, freeE] = await Promise.all([
-        contract.queryFilter(contract.filters.Started(), 0, 'latest'),
-        contract.queryFilter(contract.filters.Paid(), 0, 'latest'),
-        contract.queryFilter(contract.filters.Free(), 0, 'latest'),
-      ])
-
-      const paidCount = {}
-      paidE.forEach(e => {
-        const id = e.args.id.toNumber()
-        paidCount[id] = (paidCount[id] || 0) + 1
-      })
-
-      const freeCount = {}
-      freeE.forEach(e => {
-        const id = e.args.id.toNumber()
-        freeCount[id] = (freeCount[id] || 0) + 1
-      })
-
-      const now = Math.floor(Date.now() / 1000)
-      const items = started
-        .map((e, i) => {
-          const id = e.args.id.toNumber()
-          const fee = parseFloat(ethers.formatEther(e.args.entryFee))
-          const dl = e.args.deadline.toNumber()
-          const rem = Math.max(dl - now, 0)
-          const pCnt = paidCount[id] || 0
-          const fCnt = freeCount[id] || 0
-          const themeName = THEMED_NAMES[i % THEMED_NAMES.length]
-          return {
-            id,
-            name: themeName,
-            blanks: e.args.blanks,
-            fee,
-            deadline: dl,
-            timeRemaining: rem,
-            paidCount: pCnt,
-            freeCount: fCnt,
-            pool: pCnt * fee,
-          }
-        })
-        .filter(r => r.timeRemaining > 0)
-        .slice(-10)
-
-      setRounds(items)
-      if (items.length) {
-        const top = items.reduce((a, b) => (b.pool > a.pool ? b : a), items[0])
-        setTopPool(top)
-      }
-      setLoading(false)
+// --- ErrorBoundary to catch any render errors ---
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+  static getDerivedStateFromError(err) {
+    return { hasError: true, error: err }
+  }
+  componentDidCatch(err, info) {
+    console.error('ErrorBoundary caught:', err, info)
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-6 max-w-lg mx-auto">
+          <h2 className="text-2xl font-bold text-red-600">Something went wrong.</h2>
+          <pre className="mt-4 p-4 bg-slate-100 text-sm text-red-800 rounded">
+            {this.state.error?.toString()}
+          </pre>
+          <Button onClick={() => window.location.reload()}>Reload Page</Button>
+        </div>
+      )
     }
-    load()
+    return this.props.children
+  }
+}
+
+export default function Home() {
+  const [status, setStatus]           = useState('')
+  const [roundId, setRoundId]         = useState('')
+  const [blankIndex, setBlankIndex]   = useState('0')
+  const [roundName, setRoundName]     = useState('')
+  const [word, setWord]               = useState('')
+  const [duration, setDuration]       = useState(durations[0].value)
+  const [deadline, setDeadline]       = useState(null)
+  const [recentWinners, setRecentWinners] = useState([])
+  const [shareText, setShareText]     = useState('')
+  const [busy, setBusy]               = useState(false)
+  const { width, height }             = useWindowSize()
+  const ENTRY_FEE                     = '0.001'
+
+  const [catIdx, setCatIdx]           = useState(0)
+  const [tplIdx, setTplIdx]           = useState(0)
+  const selectedCategory              = categories[catIdx]
+  const tpl                            = selectedCategory.templates[tplIdx]
+
+  // load deadline
+  useEffect(() => {
+    if (!roundId) return setDeadline(null)
+    const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
+    const ct       = new ethers.Contract(
+      process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider
+    )
+    ct.rounds(BigInt(roundId))
+      .then(info => setDeadline(info.sd))
+      .catch(() => setDeadline(null))
+  }, [roundId])
+
+  // load recent winners
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
+        const ct       = new ethers.Contract(
+          process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider
+        )
+        const evs = await ct.queryFilter(ct.filters.Draw1(), 0, 'latest')
+        setRecentWinners(
+          evs.slice(-5).reverse().map(e => ({
+            roundId: e.args.id.toNumber(),
+            winner: e.args.winner,
+          }))
+        )
+      } catch (err) {
+        console.error('Failed to load winners', err)
+      }
+    })()
   }, [])
 
-  const filtered = rounds.filter(r => {
-    const matchTab =
-      tab === 'all' ||
-      (tab === 'paid' && r.paidCount > 0) ||
-      (tab === 'free' && r.freeCount > 0) ||
-      (tab === 'popular' && r.paidCount + r.freeCount > 5) ||
-      (tab === 'top' && topPool && r.id === topPool.id) ||
-      (tab === 'expiring' && r.timeRemaining < 3600)
+  async function handleUnifiedSubmit() {
+    if (!word) {
+      setStatus('❌ Please enter a word before submitting.')
+      return
+    }
 
-    const matchSearch =
-      search === '' ||
-      r.name.toLowerCase().includes(search.toLowerCase()) ||
-      r.id.toString().includes(search)
-
-    return matchTab && matchSearch
-  })
-
-  const submitEntry = async () => {
     try {
-      if (!window.ethereum) throw new Error('No wallet found')
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      const signer = await provider.getSigner()
-      const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
-
       setBusy(true)
-      setEntryStatus('Submitting...')
+      setStatus('')
 
-      const data = formatBytes32String(entryWord)
-      const tx = await contract.submitPaid(BigInt(showModalId), Number(blankIndex), data, {
-        value: ethers.parseEther(ENTRY_FEE),
-      })
-      await tx.wait()
+      const provider = new ethers.BrowserProvider(window.ethereum)
+      const signer   = await provider.getSigner()
+      const ct       = new ethers.Contract(
+        process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer
+      )
 
-      setEntryStatus('✅ Submitted!')
-      setTimeout(() => {
-        setShowModalId(null)
-        setEntryWord('')
-        setBlankIndex(0)
-        setEntryStatus('')
-      }, 2000)
+      let newId = roundId
+
+      // 1) Create round (gas only)
+      if (!roundId) {
+        setStatus('⏳ Creating round…')
+        const tx = await ct.start(
+          tpl.blanks,
+          ethers.parseEther(ENTRY_FEE),
+          BigInt(duration * 86400)
+        )
+        await tx.wait()
+        const ev = await ct.queryFilter(ct.filters.Started(), 0, 'latest')
+        newId = ev[ev.length - 1].args.id.toString()
+        setRoundId(newId)
+        const info = await ct.rounds(BigInt(newId))
+        setDeadline(info.sd)
+        localStorage.setItem(`madfill-roundname-${newId}`, roundName || '')
+      }
+
+      // 2) Submit entry (pay fee)
+      setStatus('⏳ Submitting entry…')
+      const data = ethers.encodeBytes32String(word)
+      const tx2  = await ct.submitPaid(
+        BigInt(newId),
+        Number(blankIndex),
+        data,
+        { value: ethers.parseEther(ENTRY_FEE) }
+      )
+      await tx2.wait()
+
+      setStatus(`✅ Round ${newId} entry submitted!`)
+      // share preview
+      const preview = tpl.parts
+        .map((part, i) =>
+          i < tpl.blanks
+            ? `${part}${i === Number(blankIndex) ? word : '____'}`
+            : part
+        )
+        .join('')
+      setShareText(
+        encodeURIComponent(
+          `I just entered MadFill!\n\n${preview}\n\nPlay: https://madfill.vercel.app`
+        )
+      )
     } catch (e) {
-      setEntryStatus('❌ ' + (e?.message || 'Failed'))
+      const msg = (e?.message || '').toLowerCase()
+      if (msg.includes('denied')) {
+        setStatus('❌ Transaction cancelled.')
+      } else if (msg.includes('execution reverted') || msg.includes('require(false)')) {
+        setStatus('❌ Transaction failed on-chain.')
+      } else {
+        setStatus('❌ ' + (e.message || 'Unknown error'))
+      }
     } finally {
       setBusy(false)
     }
   }
 
+  const blankStyle = active =>
+    `inline-block w-8 text-center border-b-2 ${
+      active ? 'border-white' : 'border-slate-400'
+    } cursor-pointer mx-1`
+
   return (
-    <Layout>
-      <Head><title>Active Rounds | MadFill</title></Head>
-      <h1 className="text-3xl font-bold text-center">Active MadFill Rounds</h1>
+    <ErrorBoundary>
+      <Layout>
+        <Head>
+          <title>MadFill</title>
+        </Head>
 
-      {!loading && topPool && (
-        <Card className="border-2 border-yellow-400 bg-slate-800 text-white mt-4">
-          <CardHeader>
-            <h2>🏆 Biggest Pool Right Now</h2>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <p>
-              <strong>{topPool.name}</strong> — Pool: {topPool.pool.toFixed(3)} BASE
-            </p>
-            <Button onClick={() => setShowModalId(topPool.id)}>Participate</Button>
-          </CardContent>
-        </Card>
-      )}
+        {/* only celebrate once you’ve entered! */}
+        {shareText && <Confetti width={width} height={height} />}
 
-      {/* Filters and Search */}
-      <div className="flex flex-col md:flex-row justify-between items-center mt-6 gap-4">
-        <input
-          type="text"
-          placeholder="🔍 Search by name or ID"
-          className="w-full md:max-w-sm px-4 py-2 rounded-xl bg-slate-800 text-white border border-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-gray-400"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+        {/* Fee breakdown - now extra fun! */}
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+        >
+          <Card className="bg-gradient-to-r from-yellow-500 to-red-500 text-white rounded p-6 mb-6 shadow-lg">
+            <h3 className="text-lg font-bold mb-2">💰 Fee Breakdown</h3>
+            <ul className="list-disc list-inside text-sm">
+              <li><strong>Create Round:</strong> just gas to kick things off!</li>
+              <li><strong>Enter Pool:</strong> <strong>{ENTRY_FEE} BASE</strong> per word (0.5% platform cut)</li>
+              <li><strong>Winner Claim:</strong> 0.5% cut on payout</li>
+            </ul>
+          </Card>
+        </motion.div>
 
-        <div className="flex flex-wrap gap-2">
-          {TABS.map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => setTab(key)}
-              className={`px-4 py-2 rounded-full border transition duration-200 ${
-                tab === key
-                  ? 'bg-indigo-600 text-white border-indigo-600'
-                  : 'bg-slate-800 text-gray-300 border-slate-600'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Rounds List */}
-      {loading && <p className="text-center mt-6">Loading rounds…</p>}
-      {!loading && filtered.length === 0 && <p className="text-center mt-6">No rounds found.</p>}
-
-      <AnimatePresence>
-        {!loading && filtered.map(r => (
-          <motion.div
-            key={r.id}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.3 }}
-            className="mt-4"
-          >
-            <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
-              <CardHeader className="flex justify-between items-center">
-                <div>
-                  <div className="text-lg font-semibold">{r.name}</div>
-                  <div className="text-sm text-slate-400">ID: {r.id}</div>
-                </div>
-                <span className="px-2 py-1 text-xs rounded bg-indigo-500 animate-pulse text-white">LIVE</span>
+        <main className="max-w-4xl mx-auto p-6 space-y-8">
+          {/* What Is MadFill? */}
+          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} transition={{ duration: 0.4 }}>
+            <Card className="bg-purple-800 text-white shadow-2xl rounded-xl">
+              <CardHeader>
+                <h2 className="text-2xl font-extrabold">🎮 What Is MadFill?</h2>
               </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                <p><strong>Pool:</strong> {r.pool.toFixed(3)} BASE</p>
-                <p><strong>Paid Entries:</strong> {r.paidCount}</p>
-                <p><strong>Free Entries:</strong> {r.freeCount}</p>
-                <p><strong>Time Left:</strong> {Math.floor(r.timeRemaining / 3600)}h {Math.floor((r.timeRemaining % 3600) / 60)}m</p>
-                <Button onClick={() => setShowModalId(r.id)}>Participate</Button>
+              <CardContent className="text-sm space-y-2">
+                <p>MadFill is your ticket to the silliest on-chain word party! 🎉</p>
+                <p>Pick a hilarious template, fill in the blanks, and watch the fun unfold.</p>
+                <p>👛 Create a new round (gas only), then submit your word for just <strong>{ENTRY_FEE} BASE</strong>. Winner takes the pot!</p>
+                <p>🕹️ All action happens on-chain, so you know it’s fair and transparent.</p>
               </CardContent>
             </Card>
           </motion.div>
-        ))}
-      </AnimatePresence>
 
-      {/* Modal */}
-      {showModalId !== null && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
-          <div className="bg-slate-900 rounded-lg p-6 w-full max-w-md space-y-4 border border-indigo-700 shadow-lg">
-            <h2 className="text-xl font-bold">Enter Round #{showModalId}</h2>
-            <div>
-              <label>Your Word</label>
+          {/* Setup & Play */}
+          <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
+            <CardHeader className="flex items-center justify-between">
+              <h2 className="text-xl font-bold">
+                {!roundId ? '🚀 Create & Play' : `🔄 Round #${roundId}`}
+              </h2>
+              <Tooltip text="0.5% cut on entry & claim" />
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* selectors */}
+              <div className="grid md:grid-cols-3 gap-4">
+                {[
+                  ['Category', catIdx, setCatIdx, categories],
+                  ['Template', tplIdx, setTplIdx, selectedCategory.templates],
+                  ['Duration', duration, setDuration, durations]
+                ].map(([lbl,val,fn,opts])=>(
+                  <div key={lbl}>
+                    <label className="block text-sm mb-1">{lbl}</label>
+                    <select
+                      className="w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1"
+                      value={val}
+                      onChange={e=>fn(+e.target.value)}
+                      disabled={busy}
+                    >
+                      {opts.map((o,i)=>(
+                        <option key={i} value={o.value ?? i}>
+                          {o.label ?? o.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
+
               <input
                 type="text"
-                className="block w-full mt-1 bg-slate-800 text-white border rounded px-2 py-1"
-                value={entryWord}
-                onChange={(e) => setEntryWord(e.target.value)}
-                maxLength={20}
+                maxLength={12}
+                placeholder="Round Name (optional)"
+                className="w-full bg-slate-900 text-white border rounded px-2 py-1"
+                value={roundName}
+                onChange={e=>setRoundName(e.target.value)}
                 disabled={busy}
               />
-            </div>
-            <div>
-              <label>Blank Index</label>
+
+              <div className="bg-slate-900 border border-slate-700 rounded p-4 font-mono text-sm">
+                {tpl.parts.map((part,i)=>(
+                  <Fragment key={i}>
+                    <span>{part}</span>
+                    {i<tpl.blanks && (
+                      <span
+                        className={blankStyle(i===+blankIndex)}
+                        onClick={()=>setBlankIndex(String(i))}
+                      >{i}</span>
+                    )}
+                  </Fragment>
+                ))}
+              </div>
+
+              <p className="text-sm">Selected blank: <strong>{blankIndex}</strong></p>
+
               <input
-                type="number"
-                className="block w-full mt-1 bg-slate-800 text-white border rounded px-2 py-1"
-                value={blankIndex}
-                onChange={(e) => setBlankIndex(Number(e.target.value))}
-                min={0}
-                max={4}
+                type="text"
+                placeholder="Type your wild word here!"
+                value={word}
+                onChange={e=>setWord(e.target.value)}
+                className="w-full bg-slate-900 text-white border rounded px-2 py-1"
                 disabled={busy}
               />
-            </div>
-            <div className="flex justify-between space-x-4">
-              <Button onClick={submitEntry} disabled={busy || !entryWord}>Submit Entry</Button>
-              <Button variant="ghost" onClick={() => setShowModalId(null)}>Cancel</Button>
-            </div>
-            {entryStatus && <p className="text-sm">{entryStatus}</p>}
-          </div>
-          {entryStatus.includes('✅') && <Confetti width={width} height={height} />}
-        </div>
-      )}
-    </Layout>
+
+              <Button
+                onClick={handleUnifiedSubmit}
+                disabled={busy || !word}
+                className="bg-indigo-600 hover:bg-indigo-500 w-full"
+              >
+                {!roundId ? '🚀 Launch Round' : '🪪 Enter Pool'}
+              </Button>
+
+              {status && <p className="text-sm mt-2">{status}</p>}
+
+              {shareText && (
+                <div className="mt-4 space-y-2">
+                  <p className="font-semibold">📣 Spread the word:</p>
+                  <div className="flex flex-wrap gap-2">
+                    <a href={`https://twitter.com/intent/tweet?text=${shareText}`} target="_blank" rel="noopener noreferrer" className="bg-blue-600 px-4 py-2 rounded">🐦 Twitter</a>
+                    <a href={`https://warpcast.com/~/compose?text=${shareText}`} target="_blank" rel="noopener noreferrer" className="bg-purple-600 px-4 py-2 rounded">🌀 Farcaster</a>
+                    <Link href={`/round/${roundId}`}><a className="bg-slate-700 px-4 py-2 rounded">📜 View</a></Link>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Recent Winners */}
+          <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
+            <CardHeader><h2 className="text-xl font-bold">🎉 Recent Winners</h2></CardHeader>
+            <CardContent className="text-sm space-y-1">
+              {!recentWinners.length
+                ? <p>No winners yet. Be the first!</p>
+                : recentWinners.map((w,i)=>(
+                    <p key={i}>
+                      <strong>{localStorage.getItem(`madfill-roundname-${w.roundId}`) || `Round #${w.roundId}`}</strong> → <code>{w.winner}</code>
+                    </p>
+                  ))
+              }
+            </CardContent>
+          </Card>
+        </main>
+
+        {/* replace inline footer with your component */}
+        <Footer/>
+      </Layout>
+    </ErrorBoundary>
   )
 }
