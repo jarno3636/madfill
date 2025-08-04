@@ -22,7 +22,7 @@ export default function RoundDetailPage() {
   const [claimed, setClaimed]     = useState(false)
   const { width, height }         = useWindowSize()
 
-  // Prompt user for their wallet address
+  // connect wallet
   useEffect(() => {
     if (window.ethereum) {
       window.ethereum
@@ -51,39 +51,31 @@ export default function RoundDetailPage() {
           provider
         )
 
-        // 2) read on-chain state
+        // 2) read basic on-chain state
         const [ onchain, winnerAddr, hasClaimed ] = await Promise.all([
           ct.rounds(BigInt(id)),
           ct.w2(BigInt(id)),
           ct.c2(BigInt(id)),
         ])
 
-        // 3) fetch Started event—but only looking at the last 10k blocks
-        const latestBlock = await provider.getBlockNumber()
-        const lookback    = 10_000
-        const scanFrom    = Math.max(latestBlock - lookback, Number(process.env.NEXT_PUBLIC_START_BLOCK) || 0)
-        const logFilter   = ct.filters.Started()
-
-        const logs = await provider.getLogs({
-          address:   ct.address,
-          topics:    logFilter.topics,
-          fromBlock: scanFrom,
-          toBlock:   latestBlock,
+        // 3) fetch exactly the Started event for this round
+        const topic0  = ct.filters.Started().topics[0]
+        const idTopic = ethers.hexZeroPad(ethers.hexlify(id), 32)
+        const logs    = await provider.getLogs({
+          address: ct.address,
+          topics:  [ topic0, idTopic ]
         })
-        const parsed = logs
-          .map(l => ct.interface.parseLog(l).args)
-          .find(a => a.id.toString() === id)
-
-        if (!parsed) {
-          throw new Error(`Started event for round ${id} not found in last ${lookback} blocks`)
+        if (logs.length === 0) {
+          throw new Error(`Started event not found for round ${id}`)
         }
+        const startArgs = ct.interface.parseLog(logs[0]).args
 
-        // 4) recover saved template choice
+        // 4) restore which template they picked (saved in localStorage on create)
         const tplIx = Number(localStorage.getItem(`madfill-tplIdx-${id}`) || 0)
         const catIx = Number(localStorage.getItem(`madfill-catIdx-${id}`) || 0)
         const tpl   = categories[catIx].templates[tplIx]
 
-        // 5) decode both word arrays
+        // 5) decode the two word arrays
         const origWords = onchain.pA.map(w => ethers.decodeBytes32String(w))
         const chalWords = onchain.fA.map(w => ethers.decodeBytes32String(w))
 
@@ -93,7 +85,7 @@ export default function RoundDetailPage() {
           original:    origWords,
           challenger:  chalWords,
           votes: {
-            original: onchain.vP.toString(),
+            original:   onchain.vP.toString(),
             challenger: onchain.vF.toString(),
           },
           winner: winnerAddr.toLowerCase(),
@@ -131,8 +123,10 @@ export default function RoundDetailPage() {
     return (
       <Card
         className={
-          `bg-slate-900 text-white shadow-xl overflow-hidden transform transition 
-           ${highlight ? 'scale-105 ring-4 ring-yellow-400' : ''}`
+          `bg-slate-900 text-white shadow-xl overflow-hidden transform transition ` +
+          (highlight
+            ? 'scale-105 ring-4 ring-yellow-400'
+            : '')
         }
       >
         <CardHeader className="bg-slate-800 text-center font-bold">
@@ -178,10 +172,12 @@ export default function RoundDetailPage() {
 
           <div className="text-white space-y-2">
             <p>
-              🗳️ Votes — Original: <strong>{roundData.votes.original}</strong> | Challenger: <strong>{roundData.votes.challenger}</strong>
+              🗳️ Votes — Original: <strong>{roundData.votes.original}</strong> | Challenger:{' '}
+              <strong>{roundData.votes.challenger}</strong>
             </p>
             <p>
-              🏆 Winner: <code className="text-green-400">{roundData.winner}</code>
+              🏆 Winning address:{' '}
+              <code className="text-green-400">{roundData.winner}</code>
             </p>
 
             {address?.toLowerCase() === roundData.winner && !claimed && (
