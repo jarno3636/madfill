@@ -1,54 +1,50 @@
-// pages/active-rounds.jsx
+// pages/active‐rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
 import abi from '../abi/FillInStoryFull.json'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
-import { Button } from '@/components/ui/button'
 import Layout from '@/components/Layout'
 import Footer from '@/components/Footer'
 import Link from 'next/link'
 
 export default function ActiveRoundsPage() {
-  const [rounds, setRounds]       = useState(null)
-  const [search, setSearch]       = useState('')
+  const [rounds, setRounds]         = useState(null)
+  const [search, setSearch]         = useState('')
   const [sortOption, setSortOption] = useState('timeAsc')
-  const [debug, setDebug]         = useState({
-    address:       null,
-    fromBlock:     null,
-    latestBlock:   null,
-    startedIds:    [],
-    paidIds:       [],
-    openIds:       [],
-    error:         null
+  const [debug, setDebug]           = useState({
+    address:     null,
+    fromBlock:   null,
+    latestBlock: null,
+    startedIds:  [],
+    paidIds:     [],
+    openIds:     [],
+    error:       null
   })
 
   useEffect(() => {
     ;(async () => {
       try {
         // 1) Contract address
-        const address   = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
+        const address = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
         if (!address) throw new Error('NEXT_PUBLIC_FILLIN_ADDRESS not set')
 
-        // 2) Connect to Base mainnet (fallback to Alchemy if needed)
-        const providerBase    = new ethers.JsonRpcProvider('https://mainnet.base.org')
-        let   provider        = providerBase
-        try {
-          await providerBase.getBlockNumber()
-        } catch {
-          const alchemyUrl = process.env.NEXT_PUBLIC_ALCHEMY_URL
-          provider = new ethers.JsonRpcProvider(alchemyUrl)
-          await provider.getBlockNumber()
-        }
-
-        const ct = new ethers.Contract(address, abi, provider)
+        // 2) FallbackProvider: Base RPC → Alchemy URL
+        const baseRpc     = new ethers.JsonRpcProvider('https://mainnet.base.org')
+        const alchemyRpc  = new ethers.JsonRpcProvider(process.env.NEXT_PUBLIC_ALCHEMY_URL)
+        const provider    = new ethers.FallbackProvider([ baseRpc, alchemyRpc ])
 
         // 3) Block range
         const latestBlock = await provider.getBlockNumber()
-        const fromBlock   = Number(process.env.NEXT_PUBLIC_START_BLOCK || 0)
+        // use env START_BLOCK if set, otherwise look back ~200k blocks
+        const envFrom     = process.env.NEXT_PUBLIC_START_BLOCK
+        const fromBlock   = envFrom
+          ? Number(envFrom)
+          : Math.max(0, latestBlock - 200_000)
 
-        // 4) Started events
+        // 4) Connect & fetch Started events
+        const ct = new ethers.Contract(address, abi, provider)
         const startedEvs = await ct.queryFilter(
           ct.filters.Started(),
           fromBlock,
@@ -56,7 +52,7 @@ export default function ActiveRoundsPage() {
         )
         const startedIds = startedEvs.map(e => e.args.id.toNumber())
 
-        // 5) Paid events
+        // 5) Fetch Paid events
         const paidEvs = await ct.queryFilter(
           ct.filters.Paid(),
           fromBlock,
@@ -64,13 +60,13 @@ export default function ActiveRoundsPage() {
         )
         const paidIds = paidEvs.map(e => e.args.id.toNumber())
 
-        // tally pool sizes
+        // 6) Tally pool sizes
         const poolCounts = paidIds.reduce((acc, id) => {
           acc[id] = (acc[id] || 0) + 1
           return acc
         }, {})
 
-        // 6) Filter open
+        // 7) Build Open Rounds
         const now = Math.floor(Date.now() / 1000)
         const openRounds = startedEvs
           .map(e => {
@@ -84,9 +80,8 @@ export default function ActiveRoundsPage() {
             }
           })
           .filter(r => r.deadline > now)
-        const openIds = openRounds.map(r => r.id)
 
-        // Update state
+        // 8) Update state & debug
         setRounds(openRounds)
         setDebug({
           address,
@@ -94,7 +89,7 @@ export default function ActiveRoundsPage() {
           latestBlock,
           startedIds,
           paidIds,
-          openIds,
+          openIds: openRounds.map(r => r.id),
           error: null
         })
       } catch (err) {
@@ -128,7 +123,7 @@ export default function ActiveRoundsPage() {
           🏁 Active Rounds
         </h1>
 
-        {/* 🔧 Debug Panel — remove or hide me once you’ve fixed your RPC/events */}
+        {/* 🔧 Debug Panel — remove once everything’s working */}
         <Card className="bg-slate-200 text-slate-800">
           <CardHeader><h2 className="font-bold">🔧 Debug Info</h2></CardHeader>
           <CardContent className="text-sm space-y-1">
