@@ -1,13 +1,15 @@
 // pages/_app.jsx
-import '../styles/globals.css'
 import { useEffect } from 'react'
+import '../styles/globals.css'
 
 export default function App({ Component, pageProps }) {
   useEffect(() => {
-    if (process.env.NODE_ENV === 'development') {
-      import('eruda').then((eruda) => {
+    // only run in browser
+    if (typeof window !== 'undefined') {
+      import('eruda').then(eruda => {
         eruda.init()
-        eruda.show()
+        // optional: open console automatically
+        // eruda.show()
       })
     }
   }, [])
