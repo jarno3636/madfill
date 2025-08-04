@@ -26,47 +26,52 @@ export default function ActiveRoundsPage() {
   useEffect(() => {
     ;(async () => {
       try {
-        // 1) Contract address
         const address = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
         if (!address) throw new Error('NEXT_PUBLIC_FILLIN_ADDRESS not set')
 
-        // 2) FallbackProvider: Base RPC → Alchemy URL
-        const baseRpc     = new ethers.JsonRpcProvider('https://mainnet.base.org')
-        const alchemyRpc  = new ethers.JsonRpcProvider(process.env.NEXT_PUBLIC_ALCHEMY_URL)
-        const provider    = new ethers.FallbackProvider([ baseRpc, alchemyRpc ])
+        // build a FallbackProvider: Base RPC + Alchemy
+        const baseRpc    = new ethers.JsonRpcProvider('https://mainnet.base.org')
+        const alchemyRpc = new ethers.JsonRpcProvider(process.env.NEXT_PUBLIC_ALCHEMY_URL)
+        const provider   = new ethers.FallbackProvider([ baseRpc, alchemyRpc ])
 
-        // 3) Block range
+        // determine block range
         const latestBlock = await provider.getBlockNumber()
-        // use env START_BLOCK if set, otherwise look back ~200k blocks
         const envFrom     = process.env.NEXT_PUBLIC_START_BLOCK
         const fromBlock   = envFrom
           ? Number(envFrom)
           : Math.max(0, latestBlock - 200_000)
 
-        // 4) Connect & fetch Started events
         const ct = new ethers.Contract(address, abi, provider)
-        const startedEvs = await ct.queryFilter(
-          ct.filters.Started(),
-          fromBlock,
-          latestBlock
-        )
-        const startedIds = startedEvs.map(e => e.args.id.toNumber())
 
-        // 5) Fetch Paid events
-        const paidEvs = await ct.queryFilter(
-          ct.filters.Paid(),
-          fromBlock,
-          latestBlock
-        )
-        const paidIds = paidEvs.map(e => e.args.id.toNumber())
+        // helper to page through logs in ≤500-block windows
+        async function fetchEventsInRange(filter, start, end) {
+          const CHUNK = 500
+          let events = []
+          for (let b = start; b <= end; b += CHUNK) {
+            const to = Math.min(b + CHUNK - 1, end)
+            const ev = await ct.queryFilter(filter, b, to)
+            events = events.concat(ev)
+          }
+          return events
+        }
 
-        // 6) Tally pool sizes
+        // 1) Started events
+        const startedFilter = ct.filters.Started()
+        const startedEvs    = await fetchEventsInRange(startedFilter, fromBlock, latestBlock)
+        const startedIds    = startedEvs.map(e => e.args.id.toNumber())
+
+        // 2) Paid events
+        const paidFilter = ct.filters.Paid()
+        const paidEvs    = await fetchEventsInRange(paidFilter, fromBlock, latestBlock)
+        const paidIds    = paidEvs.map(e => e.args.id.toNumber())
+
+        // tally pools
         const poolCounts = paidIds.reduce((acc, id) => {
           acc[id] = (acc[id] || 0) + 1
           return acc
         }, {})
 
-        // 7) Build Open Rounds
+        // build open rounds
         const now = Math.floor(Date.now() / 1000)
         const openRounds = startedEvs
           .map(e => {
@@ -81,7 +86,6 @@ export default function ActiveRoundsPage() {
           })
           .filter(r => r.deadline > now)
 
-        // 8) Update state & debug
         setRounds(openRounds)
         setDebug({
           address,
@@ -119,11 +123,9 @@ export default function ActiveRoundsPage() {
       <Head><title>MadFill • Active Rounds</title></Head>
 
       <main className="max-w-4xl mx-auto p-6 space-y-8">
-        <h1 className="text-3xl font-extrabold text-center text-indigo-400">
-          🏁 Active Rounds
-        </h1>
+        <h1 className="text-3xl font-extrabold text-center text-indigo-400">🏁 Active Rounds</h1>
 
-        {/* 🔧 Debug Panel — remove once everything’s working */}
+        {/* Debug Panel (disable/remove when happy) */}
         <Card className="bg-slate-200 text-slate-800">
           <CardHeader><h2 className="font-bold">🔧 Debug Info</h2></CardHeader>
           <CardContent className="text-sm space-y-1">
@@ -133,8 +135,8 @@ export default function ActiveRoundsPage() {
                   <p><strong>Contract:</strong> {debug.address}</p>
                   <p><strong>Blocks:</strong> from {debug.fromBlock} to {debug.latestBlock}</p>
                   <p><strong>Started IDs:</strong> {debug.startedIds.join(', ') || '—'}</p>
-                  <p><strong>Paid IDs:</strong> {debug.paidIds.join(', ') || '—'}</p>
-                  <p><strong>Open IDs:</strong> {debug.openIds.join(', ') || '—'}</p>
+                  <p><strong>Paid IDs:</strong>    {debug.paidIds.join(', ')    || '—'}</p>
+                  <p><strong>Open IDs:</strong>    {debug.openIds.join(', ')    || '—'}</p>
                 </>
             }
           </CardContent>
@@ -172,7 +174,7 @@ export default function ActiveRoundsPage() {
               <div>
                 <h2 className="text-xl font-semibold">Round #{r.id}</h2>
                 <p className="text-sm opacity-75">
-                  {r.blanks} blank{r.blanks > 1 && 's'} • {r.poolCount} entr{r.poolCount === 1 ? 'y' : 'ies'}
+                  {r.blanks} blank{r.blanks > 1 ? 's' : ''} • {r.poolCount} entr{r.poolCount === 1 ? 'y' : 'ies'}
                 </p>
               </div>
               <Countdown targetTimestamp={r.deadline} />
