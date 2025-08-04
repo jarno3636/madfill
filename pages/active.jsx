@@ -1,7 +1,7 @@
 // pages/active-rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
-import { ethers } from 'ethers'
+import { ethers, Interface } from 'ethers'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
 import Layout from '@/components/Layout'
@@ -24,8 +24,8 @@ export default function ActiveRoundsPage() {
         if (!API_KEY) throw new Error('Missing BASESCAN API key')
         if (!ADDRESS) throw new Error('Missing contract address')
 
-        // use utils.Interface
-        const iface = new ethers.utils.Interface(abi)
+        // use the standalone Interface class
+        const iface = new Interface(abi)
 
         async function fetchLogs(topic0) {
           const params = new URLSearchParams({
@@ -42,21 +42,19 @@ export default function ActiveRoundsPage() {
           if (data.status !== '1') {
             throw new Error(data.message || 'no logs')
           }
-          // parse each raw log
           return data.result.map(log =>
             iface.parseLog({ data: log.data, topics: log.topics }).args
           )
         }
 
-        // topics
         const startedTopic = iface.getEventTopic('Started')
         const paidTopic    = iface.getEventTopic('Paid')
 
-        // fetch in parallel
-        const [startedArgs, paidArgs] =
-          await Promise.all([fetchLogs(startedTopic), fetchLogs(paidTopic)])
+        const [startedArgs, paidArgs] = await Promise.all([
+          fetchLogs(startedTopic),
+          fetchLogs(paidTopic)
+        ])
 
-        // tally pools
         const poolCounts = paidArgs.reduce((acc, ev) => {
           const id = Number(ev.id)
           acc[id] = (acc[id] || 0) + 1
