@@ -1,15 +1,18 @@
+// pages/index.jsx
 import React, { Component, useState, useEffect, Fragment } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
-// import { useWindowSize } from 'react-use'
+import Confetti from 'react-confetti'
+import { useWindowSize } from 'react-use'
 import abi from '../abi/FillInStoryFull.json'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
-// import { Countdown } from '@/components/Countdown'
+import { Countdown } from '@/components/Countdown'
 import { categories, durations } from '../data/templates'
 import Layout from '@/components/Layout'
-// import { Tooltip } from '@/components/ui/tooltip'
-// import Link from 'next/link'
+import { motion } from 'framer-motion'
+import { Tooltip } from '@/components/ui/tooltip'
+import Link from 'next/link'
 
 // --- ErrorBoundary to catch any render errors ---
 class ErrorBoundary extends Component {
@@ -48,8 +51,9 @@ export default function Home() {
   const [deadline, setDeadline] = useState(null)
   const [recentWinners, setRecentWinners] = useState([])
   const [shareText, setShareText] = useState('')
+  const [showConfetti, setShowConfetti] = useState(false)
   const [busy, setBusy] = useState(false)
-  // const { width, height } = useWindowSize()
+  const { width, height } = useWindowSize()
   const ENTRY_FEE = '0.001'
 
   const [catIdx, setCatIdx] = useState(0)
@@ -57,9 +61,12 @@ export default function Home() {
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx]
 
-  // load deadline
+  // 1) fetch deadline
   useEffect(() => {
-    if (!roundId) return setDeadline(null)
+    if (!roundId) {
+      setDeadline(null)
+      return
+    }
     const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
     const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
     ct.rounds(BigInt(roundId))
@@ -67,7 +74,7 @@ export default function Home() {
       .catch(() => setDeadline(null))
   }, [roundId])
 
-  // load recent winners
+  // 2) fetch recent winners
   useEffect(() => {
     ;(async () => {
       try {
@@ -107,12 +114,12 @@ export default function Home() {
         const ev = await ct.queryFilter(ct.filters.Started(), 0, 'latest')
         newId = ev[ev.length - 1].args.id.toString()
         setRoundId(newId)
-        const info = await ct.rounds(BigInt(newId))
-        setDeadline(info.sd.toNumber())
+        setShowConfetti(true)
+        setTimeout(() => setShowConfetti(false), 5000)
         localStorage.setItem(`madfill-roundname-${newId}`, roundName || '')
       }
 
-      // 2) Prompt user for word + fee
+      // 2) Prompt for word + fee
       const userWord = window.prompt(
         `Round #${newId} – enter your word for blank #${blankIndex} (fee: ${ENTRY_FEE} BASE)`
       )
@@ -132,7 +139,7 @@ export default function Home() {
       await tx2.wait()
 
       setStatus(`✅ Round ${newId} entry submitted!`)
-      // share preview
+      // build share preview
       const preview = tpl.parts.map((part,i)=>
         i < tpl.blanks
           ? `${part}${i===Number(blankIndex)?userWord:'____'}`
@@ -142,10 +149,10 @@ export default function Home() {
         `I just entered MadFill!\n\n${preview}\n\nPlay: https://madfill.vercel.app`
       ))
     } catch (e) {
-      const msg = (e?.message||'').toLowerCase()
+      const msg = (e?.message || '').toLowerCase()
       if (msg.includes('denied')) {
-        setStatus('❌ Transaction cancelled.')
-      } else if (msg.includes('execution reverted')|| msg.includes('require(false)')) {
+        setStatus('❌ Transaction cancelled by you.')
+      } else if (msg.includes('execution reverted') || msg.includes('require(false)')) {
         setStatus('❌ Transaction failed on-chain.')
       } else {
         setStatus('❌ ' + (e.message || 'Unknown error'))
@@ -164,6 +171,7 @@ export default function Home() {
     <ErrorBoundary>
       <Layout>
         <Head><title>MadFill</title></Head>
+        {showConfetti && <Confetti width={width} height={height} />}
 
         {/* Fee breakdown */}
         <Card className="bg-slate-700 text-white rounded p-4 mb-6">
@@ -175,39 +183,44 @@ export default function Home() {
         </Card>
 
         <main className="max-w-3xl mx-auto p-6 space-y-8">
-          {/* Info */}
-          <Card className="bg-purple-800 text-white shadow-2xl rounded-xl">
-            <CardHeader>
-              <h2 className="text-xl font-bold">🎮 What Is MadFill?</h2>
-            </CardHeader>
-            <CardContent className="text-sm">
-              Create a round (gas only), then enter it by paying <strong>{ENTRY_FEE} BASE</strong>. Winner takes the pool!
-            </CardContent>
-          </Card>
 
-          {/* Setup */}
-          <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
+          {/* Info Section */}
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }}>
+            <Card className="bg-gradient-to-tr from-purple-800 to-indigo-900 text-white shadow-2xl rounded-xl">
+              <CardHeader>
+                <h2 className="text-xl font-bold">🎮 What Is MadFill?</h2>
+              </CardHeader>
+              <CardContent className="text-sm space-y-2">
+                <p>MadFill is an on-chain word game where you create hilarious sentence mashups by filling in blanks on funny templates.</p>
+                <p>Create a round (gas only), then enter it by paying <strong>{ENTRY_FEE} BASE</strong>. Winner takes the pool!</p>
+              </CardContent>
+            </Card>
+          </motion.div>
+
+          {/* Round Setup */}
+          <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
             <CardHeader className="flex items-center gap-2">
               <h2 className="text-xl font-bold">{!roundId ? 'Start a New Round' : `Round #${roundId}`}</h2>
-              {/* <Tooltip text="0.5% cut each way" /> */}
+              <Tooltip text="0.5% cut each way" />
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Category / Template / Duration */}
+
+              {/* Dropdowns */}
               <div className="grid md:grid-cols-3 gap-4">
-                {[ 
-                  ['Category', catIdx, setCatIdx, categories],
-                  ['Template', tplIdx, setTplIdx, selectedCategory.templates],
+                {[
+                  ['Category', catIdx , setCatIdx , categories],
+                  ['Template', tplIdx , setTplIdx , selectedCategory.templates],
                   ['Duration', duration, setDuration, durations]
-                ].map(([lbl,val,fn,opts])=>(
+                ].map(([lbl, val, fn, opts]) => (
                   <div key={lbl}>
                     <label>{lbl}</label>
                     <select
                       className="w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1"
                       value={val}
-                      onChange={e=>fn(+e.target.value)}
+                      onChange={e => fn(+e.target.value)}
                       disabled={busy}
                     >
-                      {opts.map((o,i)=>(
+                      {opts.map((o,i) => (
                         <option key={i} value={o.value ?? i}>
                           {o.label ?? o.name}
                         </option>
@@ -217,55 +230,73 @@ export default function Home() {
                 ))}
               </div>
 
-              {/* Card name */}
+              {/* Card Name */}
               <input
-                type="text" maxLength={10} placeholder="Card Name"
+                type="text"
+                maxLength={10}
+                placeholder="Card Name"
                 className="w-full bg-slate-900 text-white border rounded px-2 py-1"
-                value={roundName} onChange={e=>setRoundName(e.target.value)}
+                value={roundName}
+                onChange={e => setRoundName(e.target.value)}
                 disabled={busy}
               />
 
-              {/* Template preview */}
+              {/* Template Preview */}
               <div className="bg-slate-900 border border-slate-700 rounded p-4 font-mono text-sm">
-                {tpl.parts.map((part,i)=>(
+                {tpl.parts.map((part,i) => (
                   <Fragment key={i}>
                     <span>{part}</span>
                     {i < tpl.blanks && (
                       <span
-                        className={blankStyle(i===+blankIndex)}
-                        onClick={()=>setBlankIndex(String(i))}
+                        className={blankStyle(i === +blankIndex)}
+                        onClick={() => setBlankIndex(String(i))}
                       >{i}</span>
                     )}
                   </Fragment>
                 ))}
               </div>
 
-              <p className="text-sm">Selected Blank: <strong>{blankIndex}</strong></p>
+              <p className="text-sm">
+                Selected Blank: <strong>{blankIndex}</strong>
+              </p>
 
-              {/* Create / Enter */}
+              {/* Create / Enter Button */}
               <Button
                 onClick={handleUnifiedSubmit}
                 disabled={busy}
                 className="bg-indigo-600 hover:bg-indigo-500 w-full"
               >
-                {!roundId ? '🚀 Create Round' : '🪪 Enter Pool'}
+                {!roundId ? '🚀 Create & Submit' : '✏️ Submit Entry'}
               </Button>
+
+              {/* Countdown */}
+              {deadline && (
+                <p className="text-sm">⏱️ Submissions close in: <Countdown targetTimestamp={deadline} /></p>
+              )}
 
               {/* Status */}
               {status && <p className="text-sm mt-2">{status}</p>}
 
-              {/* Sharing */}
+              {/* Share */}
               {roundId && shareText && (
                 <div className="mt-4 space-y-2">
-                  <p className="font-semibold">📣 Share:</p>
-                  <div className="flex gap-2">
-                    {/* <a href={`https://twitter.com/intent/tweet?text=${shareText}`}
-                       target="_blank" rel="noopener noreferrer"
-                       className="bg-blue-600 px-4 py-2 rounded">🐦 Twitter</a>
-                    <a href={`https://warpcast.com/~/compose?text=${shareText}`}
-                       target="_blank" rel="noopener noreferrer"
-                       className="bg-purple-600 px-4 py-2 rounded">🌀 Farcaster</a>
-                    <Link href={`/round/${roundId}"><a className="bg-slate-700 px-4 py-2 rounded">📜 View</a></Link> */}
+                  <p className="font-semibold text-white">📣 Share your round:</p>
+                  <div className="flex flex-wrap gap-2">
+                    <a
+                      href={`https://twitter.com/intent/tweet?text=${shareText}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded"
+                    >🐦 Twitter</a>
+                    <a
+                      href={`https://warpcast.com/~/compose?text=${shareText}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded"
+                    >🌀 Farcaster</a>
+                    <Link href={`/round/${roundId}`}>
+                      <a className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded">📜 View Round</a>
+                    </Link>
                   </div>
                 </div>
               )}
@@ -273,15 +304,19 @@ export default function Home() {
           </Card>
 
           {/* Recent Winners */}
-          <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
-            <CardHeader><h2 className="text-xl font-bold">🎉 Recent Winners</h2></CardHeader>
+          <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
+            <CardHeader>
+              <h2 className="text-xl font-bold">🎉 Recent Winners</h2>
+            </CardHeader>
             <CardContent className="text-sm space-y-1">
-              {recentWinners.length === 0
-                ? <p>No winners yet.</p>
-                : recentWinners.map((w,i)=> {
-                    const nm = localStorage.getItem(`madfill-roundname-${w.roundId}`) || `Round #${w.roundId}`
-                    return <p key={i}><strong>{nm}</strong> → <code>{w.winner}</code></p>
-                  })}
+              {recentWinners.length === 0 ? (
+                <p>No winners yet.</p>
+              ) : (
+                recentWinners.map((w,i) => {
+                  const nm = localStorage.getItem(`madfill-roundname-${w.roundId}`) || `Round #${w.roundId}`
+                  return <p key={i}><strong>{nm}</strong> → <code>{w.winner}</code></p>
+                })
+              )}
             </CardContent>
           </Card>
         </main>
