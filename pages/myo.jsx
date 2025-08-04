@@ -160,7 +160,31 @@ export default function MyoPage() {
         </div>
 
         <div className="text-center mt-6">
-          <Button disabled className="bg-slate-600 cursor-not-allowed opacity-60">
+          <Button
+            onClick={() => {
+              const base = `https://warpcast.com/~/compose?text=`
+              const filled = parts.map(p => (p === '____' ? '____' : p)).join('')
+              const shareText = encodeURIComponent(`🎭 My custom #MadFill: ${title}\n\n${filled}\n\nPlay: https://madfill.vercel.app`)
+              window.open(base + shareText, '_blank')
+            }}
+            className="bg-blue-600 hover:bg-blue-500"
+          >
+            📤 Share to Farcaster
+          </Button>
+
+          <Button
+            onClick={() => {
+              const base = `https://twitter.com/intent/tweet?text=`
+              const filled = parts.map(p => (p === '____' ? '____' : p)).join('')
+              const shareText = encodeURIComponent(`🎭 My custom #MadFill: ${title}\n\n${filled}\n\nPlay: https://madfill.vercel.app`)
+              window.open(base + shareText, '_blank')
+            }}
+            className="bg-sky-500 hover:bg-sky-400 ml-3"
+          >
+            🐦 Share to X
+          </Button>
+
+          <Button disabled className="bg-slate-600 cursor-not-allowed opacity-60 ml-3">
             🪙 Mint Template (Coming Soon)
           </Button>
           <p className="text-xs mt-2 text-slate-400 italic">Soon you’ll be able to mint your own MadFill masterpiece!</p>
