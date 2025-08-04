@@ -71,7 +71,7 @@ export default function Home() {
     if (!roundId) return setDeadline(null)
     const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
     const contract = new ethers.Contract(
-      process.env.NEXT_PUBLIC_FILLIN_ADDRESS!,
+      process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
       abi,
       provider
     )
@@ -85,7 +85,7 @@ export default function Home() {
       try {
         const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
         const contract = new ethers.Contract(
-          process.env.NEXT_PUBLIC_FILLIN_ADDRESS!,
+          process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
           abi,
           provider
         )
@@ -113,7 +113,7 @@ export default function Home() {
       const modal = new ethers.BrowserProvider(window.ethereum)
       const signer = await modal.getSigner()
       const ct = new ethers.Contract(
-        process.env.NEXT_PUBLIC_FILLIN_ADDRESS!,
+        process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
         abi,
         signer
       )
@@ -125,7 +125,7 @@ export default function Home() {
         const tx = await ct.start(
           tpl.blanks,
           ethers.parseEther(ENTRY_FEE),
-          BigInt(duration * 86400),
+          BigInt(duration * 86400)
         )
         await tx.wait()
         const ev = await ct.queryFilter(ct.filters.Started(), 0, 'latest')
@@ -168,7 +168,7 @@ export default function Home() {
       setShareText(encodeURIComponent(
         `I just entered a hilarious on-chain word game! 🧠\n\n${preview}\n\nPlay here: https://madfill.vercel.app`
       ))
-    } catch (e: any) {
+    } catch (e) {
       const msg = (e.message || '').toLowerCase()
       if (msg.includes('denied')) {
         setStatus('❌ Transaction cancelled by you.')
@@ -185,7 +185,7 @@ export default function Home() {
     }
   }
 
-  const blankStyle = (active: boolean) =>
+  const blankStyle = (active) =>
     `inline-block w-8 text-center border-b-2 ${
       active ? 'border-white' : 'border-slate-400'
     } cursor-pointer mx-1`
@@ -207,9 +207,8 @@ export default function Home() {
         {/* {showConfetti && <Confetti width={width} height={height} />} */}
 
         <main className="max-w-3xl mx-auto p-6 space-y-8">
-
           {/* Info Card */}
-          {/* <motion.div> … </motion.div> */}
+          {/* <motion.div>…</motion.div> */}
           <Card className="bg-gradient-to-tr from-purple-800 to-indigo-900 text-white shadow-2xl rounded-xl">
             <CardHeader>
               <h2 className="text-xl font-bold">🎮 What Is MadFill?</h2>
@@ -233,7 +232,6 @@ export default function Home() {
               <Tooltip text="0.5% fees | Winner claims prize | All on-chain!" />
             </CardHeader>
             <CardContent className="space-y-4">
-
               {/* Category / Template / Duration */}
               <div className="grid md:grid-cols-3 gap-4">
                 {[
@@ -241,12 +239,12 @@ export default function Home() {
                   ['Template', tplIdx, setTplIdx, selectedCategory.templates?.map((t, i) => ({ label: t.name, value: i })) || []],
                   ['Duration', duration, setDuration, durations],
                 ].map(([label, val, setter, opts]) => (
-                  <div key={label as string}>
+                  <div key={label}>
                     <label>{label}</label>
                     <select
                       className="w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1"
-                      value={val as number}
-                      onChange={e => (setter as any)(+e.target.value)}
+                      value={val}
+                      onChange={e => setter(+e.target.value)}
                       disabled={busy}
                     >
                       {opts.map(o => (
@@ -286,8 +284,7 @@ export default function Home() {
               </div>
 
               <p className="text-sm">
-                Selected Blank:{' '}
-                <strong>{blankIndex}</strong>
+                Selected Blank: <strong>{blankIndex}</strong>
               </p>
 
               <Button
@@ -302,9 +299,7 @@ export default function Home() {
 
               {roundId && shareText && (
                 <div className="mt-4 space-y-2">
-                  <p className="font-semibold text-white">
-                    📣 Share your round:
-                  </p>
+                  <p className="font-semibold text-white">📣 Share your round:</p>
                   <div className="flex flex-wrap gap-2">
                     <a
                       href={`https://twitter.com/intent/tweet?text=${shareText}`}
