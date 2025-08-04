@@ -1,4 +1,4 @@
-// pages/active-rounds.jsx
+// pages/active‐rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -16,58 +16,57 @@ export default function ActiveRoundsPage() {
   const [sortOption, setSortOption] = useState('timeAsc')
 
   useEffect(() => {
-    (async () => {
+    ;(async () => {
       try {
-        // 1) config
+        // 1. CONFIG
         const address = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
         const rpcUrl  = process.env.NEXT_PUBLIC_ALCHEMY_URL
-        if (!address) throw new Error('Missing NEXT_PUBLIC_FILLIN_ADDRESS')
-        if (!rpcUrl)  throw new Error('Missing NEXT_PUBLIC_ALCHEMY_URL')
+        if (!address || !rpcUrl) throw new Error('Missing contract address or ALCHEMY URL')
 
-        // 2) fallback provider (Alchemy → public Base)
+        // 2. FALLBACK PROVIDER
         const provider = new ethers.FallbackProvider([
           new ethers.JsonRpcProvider(rpcUrl),
           new ethers.JsonRpcProvider('https://mainnet.base.org'),
         ])
         const contract = new ethers.Contract(address, abi, provider)
 
-        // 3) block window: only last ~150k blocks (~1 week)
-        const latest = await provider.getBlockNumber()
-        const fromEnv = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 0
-        const from    = Math.max(latest - 150_000, fromEnv)
-        const batch   = 2_000
+        // 3. BLOCK RANGE
+        const latestBlock = await provider.getBlockNumber()
+        const deployBlock = 33_631_502
+        const fromBlock   = Number(process.env.NEXT_PUBLIC_START_BLOCK) || deployBlock
+        const batchSize   = 2000
 
-        // 4) batch‐fetch helper
+        // 4. BATCH‐FETCH HELPER
         async function fetchEvents(filter) {
           let all = []
-          for (let start = from; start <= latest; start += batch) {
-            const end = Math.min(start + batch - 1, latest)
+          for (let start = fromBlock; start <= latestBlock; start += batchSize) {
+            const end = Math.min(start + batchSize - 1, latestBlock)
             const logs = await provider.getLogs({
               address,
-              topics: filter.topics,
+              topics:    filter.topics,
               fromBlock: start,
               toBlock:   end,
             })
             const parsed = logs.map(log => contract.interface.parseLog(log).args)
-            all.push(...parsed.map(args => ({ args })))
+            all = all.concat(parsed.map(args => ({ args })))
           }
           return all
         }
 
-        // 5) pull Started & Paid
-        const started = await fetchEvents(contract.filters.Started())
-        const paid    = await fetchEvents(contract.filters.Paid())
+        // 5. PULL EVENTS
+        const startedEvs = await fetchEvents(contract.filters.Started())
+        const paidEvs    = await fetchEvents(contract.filters.Paid())
 
-        // 6) tally pool sizes
-        const poolCounts = paid.reduce((acc, e) => {
+        // 6. TALLY POOLS
+        const poolCounts = paidEvs.reduce((m, e) => {
           const id = Number(e.args.id)
-          acc[id] = (acc[id] || 0) + 1
-          return acc
+          m[id] = (m[id] || 0) + 1
+          return m
         }, {})
 
-        // 7) build open rounds
+        // 7. BUILD OPEN ROUNDS
         const now = Math.floor(Date.now() / 1000)
-        const open = started
+        const open = startedEvs
           .map(e => ({
             id:        Number(e.args.id),
             blanks:    Number(e.args.blanks),
@@ -78,13 +77,13 @@ export default function ActiveRoundsPage() {
 
         setRounds(open)
       } catch (err) {
-        console.error('Active rounds load failed:', err)
-        setRounds([]) // show “no open rounds”
+        console.error('ActiveRounds load error:', err)
+        setRounds([]) // show "No open rounds"
       }
     })()
   }, [])
 
-  // filter & sort
+  // FILTER & SORT
   const filtered = (rounds || []).filter(r =>
     !search || String(r.id).includes(search.trim())
   )
@@ -100,7 +99,10 @@ export default function ActiveRoundsPage() {
 
   return (
     <Layout>
-      <Head><title>MadFill &middot; Active Rounds</title></Head>
+      <Head>
+        <title>MadFill • Active Rounds</title>
+      </Head>
+
       <main className="max-w-5xl mx-auto p-6 space-y-8">
         <h1 className="text-4xl font-extrabold text-center bg-gradient-to-r from-indigo-400 to-purple-500 bg-clip-text text-transparent">
           🏁 Active Rounds
@@ -141,21 +143,21 @@ export default function ActiveRoundsPage() {
                 transition={{ duration: 0.2 }}
               >
                 <Card className="bg-slate-800 text-white rounded-xl shadow-lg overflow-hidden">
-                  <CardHeader className="flex justify-between items-start px-4 py-3">
+                  <CardHeader className="flex justify-between items-start">
                     <div>
                       <h2 className="text-2xl font-semibold">#{r.id}</h2>
-                      <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                        <span className="bg-indigo-600 px-2 py-1 rounded-full">
-                          {r.blanks} blank{r.blanks > 1 && 's'}
+                      <div className="mt-1 flex flex-wrap gap-2">
+                        <span className="bg-indigo-600 px-2 py-1 rounded-full text-xs font-medium">
+                          {r.blanks} blank{r.blanks > 1 ? 's' : ''}
                         </span>
-                        <span className="bg-emerald-600 px-2 py-1 rounded-full">
+                        <span className="bg-emerald-600 px-2 py-1 rounded-full text-xs font-medium">
                           {r.poolCount} entr{r.poolCount === 1 ? 'y' : 'ies'}
                         </span>
                       </div>
                     </div>
                     <Countdown targetTimestamp={r.deadline} className="text-sm" />
                   </CardHeader>
-                  <CardContent className="flex justify-end px-4 py-3">
+                  <CardContent className="pt-2 flex justify-end">
                     <Link href={`/round/${r.id}`}>
                       <a className="bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white font-medium px-4 py-2 rounded-lg">
                         View & Enter
@@ -168,6 +170,7 @@ export default function ActiveRoundsPage() {
           </div>
         )}
       </main>
+
       <Footer />
     </Layout>
   )
