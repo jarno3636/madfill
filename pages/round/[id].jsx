@@ -22,7 +22,6 @@ export default function RoundDetailPage() {
   const [claimed, setClaimed]     = useState(false)
   const { width, height }         = useWindowSize()
 
-  // connect wallet
   useEffect(() => {
     if (window.ethereum) {
       window.ethereum
@@ -39,7 +38,6 @@ export default function RoundDetailPage() {
 
     ;(async () => {
       try {
-        // 1) provider + contract
         const rpcUrl = process.env.NEXT_PUBLIC_ALCHEMY_URL
         const provider = new ethers.FallbackProvider([
           new ethers.JsonRpcProvider(rpcUrl),
@@ -51,31 +49,34 @@ export default function RoundDetailPage() {
           provider
         )
 
-        // 2) read basic on-chain state
+        // read on-chain state
         const [ onchain, winnerAddr, hasClaimed ] = await Promise.all([
           ct.rounds(BigInt(id)),
           ct.w2(BigInt(id)),
           ct.c2(BigInt(id)),
         ])
 
-        // 3) fetch exactly the Started event for this round
-        const topic0  = ct.filters.Started().topics[0]
-        const idTopic = ethers.hexZeroPad(ethers.hexlify(id), 32)
+        // fetch the single Started event by indexed round ID
+        const topic0  = ct.interface.getEventTopic('Started')
+        const idTopic = ethers.hexZeroPad(
+          ethers.hexlify(BigInt(id)),
+          32
+        )
         const logs    = await provider.getLogs({
           address: ct.address,
           topics:  [ topic0, idTopic ]
         })
-        if (logs.length === 0) {
+        if (!logs.length) {
           throw new Error(`Started event not found for round ${id}`)
         }
         const startArgs = ct.interface.parseLog(logs[0]).args
 
-        // 4) restore which template they picked (saved in localStorage on create)
+        // restore template choice
         const tplIx = Number(localStorage.getItem(`madfill-tplIdx-${id}`) || 0)
         const catIx = Number(localStorage.getItem(`madfill-catIdx-${id}`) || 0)
         const tpl   = categories[catIx].templates[tplIx]
 
-        // 5) decode the two word arrays
+        // decode answers
         const origWords = onchain.pA.map(w => ethers.decodeBytes32String(w))
         const chalWords = onchain.fA.map(w => ethers.decodeBytes32String(w))
 
@@ -109,8 +110,7 @@ export default function RoundDetailPage() {
         abi,
         signer
       )
-      const tx = await ct.claim2(BigInt(id))
-      await tx.wait()
+      await (await ct.claim2(BigInt(id))).wait()
       setClaimed(true)
       setStatus('✅ Claimed!')
     } catch (e) {
@@ -122,12 +122,9 @@ export default function RoundDetailPage() {
   function renderCard(parts, words, title, highlight) {
     return (
       <Card
-        className={
-          `bg-slate-900 text-white shadow-xl overflow-hidden transform transition ` +
-          (highlight
-            ? 'scale-105 ring-4 ring-yellow-400'
-            : '')
-        }
+        className={`bg-slate-900 text-white shadow-xl overflow-hidden transform transition ${
+          highlight ? 'scale-105 ring-4 ring-yellow-400' : ''
+        }`}
       >
         <CardHeader className="bg-slate-800 text-center font-bold">
           {title}
