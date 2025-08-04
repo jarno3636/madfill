@@ -2,6 +2,8 @@ import Layout from '@/components/Layout'
 import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import clsx from 'clsx'
+import { TwitterShareButton, TwitterIcon } from 'react-share'
+import { useRouter } from 'next/router'
 
 const defaultStickers = ['🐸', '💥', '🌈', '🧠', '🔥', '✨', '🌀', '🎉', '🍕', '👾']
 const defaultTheme = 'retro'
@@ -42,6 +44,10 @@ export default function MyoPage() {
   const [stickers, setStickers] = useState(defaultStickers)
   const [activeSticker, setActiveSticker] = useState(null)
   const [showPreview, setShowPreview] = useState(false)
+
+  const router = useRouter()
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://madfill.vercel.app'
+  const shareUrl = `${siteUrl}/myo`
 
   useEffect(() => {
     const saved = JSON.parse(localStorage.getItem('madfill-myo-draft') || '{}')
@@ -159,35 +165,20 @@ export default function MyoPage() {
           </p>
         </div>
 
-        <div className="text-center mt-6">
-          <Button
-            onClick={() => {
-              const base = `https://warpcast.com/~/compose?text=`
-              const filled = parts.map(p => (p === '____' ? '____' : p)).join('')
-              const shareText = encodeURIComponent(`🎭 My custom #MadFill: ${title}\n\n${filled}\n\nPlay: https://madfill.vercel.app`)
-              window.open(base + shareText, '_blank')
-            }}
-            className="bg-blue-600 hover:bg-blue-500"
-          >
-            📤 Share to Farcaster
-          </Button>
-
-          <Button
-            onClick={() => {
-              const base = `https://twitter.com/intent/tweet?text=`
-              const filled = parts.map(p => (p === '____' ? '____' : p)).join('')
-              const shareText = encodeURIComponent(`🎭 My custom #MadFill: ${title}\n\n${filled}\n\nPlay: https://madfill.vercel.app`)
-              window.open(base + shareText, '_blank')
-            }}
-            className="bg-sky-500 hover:bg-sky-400 ml-3"
-          >
-            🐦 Share to X
-          </Button>
-
-          <Button disabled className="bg-slate-600 cursor-not-allowed opacity-60 ml-3">
+        <div className="text-center mt-6 space-y-2">
+          <Button disabled className="bg-slate-600 cursor-not-allowed opacity-60">
             🪙 Mint Template (Coming Soon)
           </Button>
-          <p className="text-xs mt-2 text-slate-400 italic">Soon you’ll be able to mint your own MadFill masterpiece!</p>
+          <p className="text-xs text-slate-400 italic">Soon you’ll be able to mint your own MadFill masterpiece!</p>
+
+          <div className="mt-4 space-x-2">
+            <a href={`https://warpcast.com/~/compose?text=Check out my MadFill card!&embeds[]=${encodeURIComponent(shareUrl)}`} target="_blank" rel="noopener noreferrer">
+              <Button className="bg-blue-500 hover:bg-blue-400">Share on Farcaster</Button>
+            </a>
+            <TwitterShareButton url={shareUrl} title={title}>
+              <Button className="bg-sky-500 hover:bg-sky-400">Share on X</Button>
+            </TwitterShareButton>
+          </div>
         </div>
       </div>
 
