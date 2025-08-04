@@ -22,7 +22,7 @@ export default function RoundDetailPage() {
   const [claimed, setClaimed]     = useState(false)
   const { width, height }         = useWindowSize()
 
-  // prompt for wallet
+  // ask user to connect wallet
   useEffect(() => {
     if (window.ethereum) {
       window.ethereum
@@ -32,6 +32,7 @@ export default function RoundDetailPage() {
     }
   }, [])
 
+  // load round details & submissions
   useEffect(() => {
     if (!id) return
     setLoading(true)
@@ -51,51 +52,37 @@ export default function RoundDetailPage() {
           provider
         )
 
-        // 2) read on-chain state
+        // 2) fetch on-chain state, winner, claim flag
         const [ onchain, winnerAddr, hasClaimed ] = await Promise.all([
           ct.rounds(BigInt(id)),
           ct.w2(BigInt(id)),
           ct.c2(BigInt(id)),
         ])
 
-        // 3) chunked queryFilter for the Started event
-        const deployBlock = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 33631502
-        const latestBlock = await provider.getBlockNumber()
-        const BATCH       = 500
-        let startArgs     = null
-
-        for (let start = deployBlock; start <= latestBlock; start += BATCH) {
-          const end = Math.min(start + BATCH - 1, latestBlock)
-          const evs = await ct.queryFilter(
-            ct.filters.Started(),
-            start,
-            end
-          )
-          // try to find our round
-          const found = evs.find(e => e.args.id.toString() === id)
-          if (found) {
-            startArgs = found.args
-            break
-          }
-        }
-        if (!startArgs) {
-          throw new Error(`Could not find Started event for round ${id}`)
-        }
-
-        // 4) recover which template user picked
+        // 3) get chosen template indices from localStorage
         const tplIx = Number(localStorage.getItem(`madfill-tplIdx-${id}`) || 0)
         const catIx = Number(localStorage.getItem(`madfill-catIdx-${id}`) || 0)
         const tpl   = categories[catIx].templates[tplIx]
 
-        // 5) decode both answer arrays
-        const origWords = onchain.pA.map(w => ethers.decodeBytes32String(w))
-        const chalWords = onchain.fA.map(w => ethers.decodeBytes32String(w))
+        // 4) fetch all submissions (paid vs free)
+        const subs = await ct.getSubmissions(BigInt(id))
+        const originalSub     = subs.find(s => s.paid)
+        const challengerSubs  = subs.filter(s => !s.paid)
 
+        // 5) decode words into strings
+        const original = originalSub
+          ? [ ethers.decodeBytes32String(originalSub.word) ]
+          : []
+        const challenger = challengerSubs.map(s =>
+          ethers.decodeBytes32String(s.word)
+        )
+
+        // 6) update state
         setClaimed(hasClaimed)
         setRoundData({
           tpl,
-          original:    origWords,
-          challenger:  chalWords,
+          original,
+          challenger,
           votes: {
             original:   onchain.vP.toString(),
             challenger: onchain.vF.toString(),
@@ -111,6 +98,7 @@ export default function RoundDetailPage() {
     })()
   }, [id])
 
+  // claim button handler
   async function handleClaim() {
     try {
       setStatus('Claiming…')
@@ -130,15 +118,14 @@ export default function RoundDetailPage() {
     }
   }
 
+  // card renderer
   function renderCard(parts, words, title, highlight) {
     return (
-      <Card className={
-        `bg-slate-900 text-white shadow-xl overflow-hidden transform transition
-         ${highlight ? 'scale-105 ring-4 ring-yellow-400' : ''}`
-      }>
-        <CardHeader className="bg-slate-800 text-center font-bold">
-          {title}
-        </CardHeader>
+      <Card
+        className={`bg-slate-900 text-white shadow-xl overflow-hidden transform transition
+          ${highlight ? 'scale-105 ring-4 ring-yellow-400' : ''}`}
+      >
+        <CardHeader className="bg-slate-800 text-center font-bold">{title}</CardHeader>
         <CardContent className="p-4 text-center font-mono text-lg">
           {parts.map((part, i) => (
             <span key={i}>
@@ -192,7 +179,6 @@ export default function RoundDetailPage() {
                 🎁 Claim Prize
               </Button>
             )}
-
             {claimed && <p className="text-green-400">✅ Prize Claimed!</p>}
             {status  && <p className="text-yellow-300">{status}</p>}
           </div>
