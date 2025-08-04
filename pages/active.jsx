@@ -19,80 +19,68 @@ export default function ActiveRoundsPage() {
   useEffect(() => {
     (async () => {
       try {
-        // ── 1) CONFIG ─────────────────────────────────────────────────────────
+        // ── 1) CONFIG
         const address = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
         const rpcUrl  = process.env.NEXT_PUBLIC_ALCHEMY_URL
         if (!address) throw new Error('Missing NEXT_PUBLIC_FILLIN_ADDRESS')
         if (!rpcUrl)   throw new Error('Missing NEXT_PUBLIC_ALCHEMY_URL')
 
-        // ── 2) FALLBACK PROVIDER ────────────────────────────────────────────
+        // ── 2) PROVIDERS
+        const alchemy = new ethers.JsonRpcProvider(rpcUrl)
         const fallback = new ethers.FallbackProvider([
-          new ethers.JsonRpcProvider(rpcUrl),                  // Alchemy
-          new ethers.JsonRpcProvider('https://mainnet.base.org') // Base RPC
+          alchemy,
+          new ethers.JsonRpcProvider('https://mainnet.base.org')
         ])
-
-        // ── 3) FETCH BLOCK RANGE ─────────────────────────────────────────────
-        const latestBlock = await fallback.getBlockNumber()
-        const fromEnv     = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 0
-        const fromBlock   = fromEnv > 0 ? fromEnv : 33631502
-
-        // ── 4) HELPER TO GET & PARSE LOGS ───────────────────────────────────
-        async function loadArgs(filter) {
-          const logs = await fallback.getLogs({
-            address,
-            topics:  filter.topics,
-            fromBlock,
-            toBlock: latestBlock
-          })
-          return logs.map(l => ethers.utils.defaultAbiCoder
-            .decode(
-              filter.fragment.inputs.map(i => i.type),
-              // slice off the first topic (signature) and read `data`
-              ethers.utils.hexConcat([l.data, ...l.topics.slice(1)])
-            )
-            // decode returns an array; we need named values, so re-parse via interface:
-            .map((_, i) => {
-              // we only really care about positional: we'll re-parse fully:
-              // simpler: use interface.parseLog
-              return null
-            })
-          )
-        }
-
-        // Actually, it's much simpler to re-parse each log via the contract interface:
         const contract = new ethers.Contract(address, abi, fallback)
-        async function parseArgs(filter) {
-          const logs = await fallback.getLogs({
-            address,
-            topics:  filter.topics,
-            fromBlock,
-            toBlock: latestBlock
-          })
-          return logs.map(l => contract.interface.parseLog(l).args)
+
+        // ── 3) BLOCK RANGE & BATCH
+        const latest = await fallback.getBlockNumber()
+        const fromEnv = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 0
+        const startBlock = fromEnv > 0 ? fromEnv : 33631502
+        const BATCH = 500
+
+        // ── 4) BATCH-FETCH & PARSE
+        async function fetchArgs(filter) {
+          const all = []
+          for (let b = startBlock; b <= latest; b += BATCH) {
+            const end = Math.min(b + BATCH - 1, latest)
+            const logs = await alchemy.getLogs({
+              address,
+              topics: filter.topics,
+              fromBlock: b,
+              toBlock: end
+            })
+            // re-parse via interface:
+            logs.forEach(log => {
+              const parsed = contract.interface.parseLog(log).args
+              all.push(parsed)
+            })
+          }
+          return all
         }
 
-        // ── 5) PULL BOTH EVENTS ───────────────────────────────────────────────
-        const startedArgs = await parseArgs(contract.filters.Started())
-        const paidArgs    = await parseArgs(contract.filters.Paid())
+        // ── 5) PULL EVENTS
+        const started = await fetchArgs(contract.filters.Started())
+        const paid    = await fetchArgs(contract.filters.Paid())
 
-        // ── 6) TALLY POOLS & BUILD OPEN ROUNDS ───────────────────────────────
-        const poolCounts = paidArgs.reduce((acc, ev) => {
+        // ── 6) TALLY & BUILD
+        const poolCounts = paid.reduce((acc, ev) => {
           const id = Number(ev.id)
-          acc[id] = (acc[id] || 0) + 1
+          acc[id] = (acc[id]||0) + 1
           return acc
         }, {})
 
-        const now = Math.floor(Date.now() / 1000)
-        const openRounds = startedArgs
+        const now = Math.floor(Date.now()/1000)
+        const open = started
           .map(ev => ({
             id:        Number(ev.id),
             blanks:    Number(ev.blanks),
             deadline:  Number(ev.deadline),
-            poolCount: poolCounts[Number(ev.id)] || 0
+            poolCount: poolCounts[Number(ev.id)]||0
           }))
           .filter(r => r.deadline > now)
 
-        setRounds(openRounds)
+        setRounds(open)
       } catch (e) {
         console.error(e)
         setError(e.message)
@@ -101,24 +89,23 @@ export default function ActiveRoundsPage() {
     })()
   }, [])
 
-  // ── FILTER & SORT ─────────────────────────────────────────────────────
-  const filtered = (rounds || []).filter(r =>
-    !search || String(r.id).includes(search.trim())
+  // ── FILTER & SORT
+  const filtered = (rounds||[]).filter(r =>
+    !search || String(r.id).includes(search)
   )
-  const sorted = [...filtered].sort((a, b) => {
-    switch (sortOption) {
-      case 'timeAsc':   return a.deadline  - b.deadline
-      case 'timeDesc':  return b.deadline  - a.deadline
-      case 'poolAsc':   return a.poolCount - b.poolCount
-      case 'poolDesc':  return b.poolCount - a.poolCount
-      default:          return 0
+  const sorted = [...filtered].sort((a,b) => {
+    switch(sortOption) {
+      case 'timeAsc':  return a.deadline  - b.deadline
+      case 'timeDesc': return b.deadline  - a.deadline
+      case 'poolAsc':  return a.poolCount - b.poolCount
+      case 'poolDesc': return b.poolCount - a.poolCount
+      default:         return 0
     }
   })
 
   return (
     <Layout>
       <Head><title>MadFill • Active Rounds</title></Head>
-
       <main className="max-w-5xl mx-auto p-6 space-y-8">
         <h1 className="text-4xl font-extrabold text-center bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-500">
           🏁 Active Rounds
@@ -136,12 +123,12 @@ export default function ActiveRoundsPage() {
             className="flex-1 bg-slate-900 text-white rounded-lg px-4 py-2"
             placeholder="🔍 Filter by Round ID"
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={e=>setSearch(e.target.value)}
           />
           <select
             className="w-48 bg-slate-900 text-white rounded-lg px-4 py-2"
             value={sortOption}
-            onChange={e => setSortOption(e.target.value)}
+            onChange={e=>setSortOption(e.target.value)}
           >
             <option value="timeAsc">⏱️ Time ↑</option>
             <option value="timeDesc">⏱️ Time ↓</option>
@@ -151,14 +138,14 @@ export default function ActiveRoundsPage() {
         </div>
 
         {/* Rounds Grid */}
-        {rounds === null ? (
+        {rounds===null ? (
           <p className="text-center text-slate-400">Loading active rounds…</p>
-        ) : sorted.length === 0 ? (
+        ) : sorted.length===0 ? (
           <p className="text-center text-slate-400">No open rounds found.</p>
         ) : (
           <div className="grid sm:grid-cols-2 gap-6">
-            {sorted.map(r => (
-              <motion.div key={r.id} whileHover={{ scale:1.02 }} transition={{ duration:0.2 }}>
+            {sorted.map(r=>(
+              <motion.div key={r.id} whileHover={{scale:1.02}} transition={{duration:0.2}}>
                 <Card className="bg-slate-800 text-white rounded-xl shadow-lg overflow-hidden">
                   <CardHeader className="flex justify-between items-start">
                     <div>
@@ -187,7 +174,6 @@ export default function ActiveRoundsPage() {
           </div>
         )}
       </main>
-
       <Footer />
     </Layout>
   )
