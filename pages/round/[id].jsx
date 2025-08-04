@@ -22,6 +22,7 @@ export default function RoundDetailPage() {
   const [claimed, setClaimed]     = useState(false)
   const { width, height }         = useWindowSize()
 
+  // prompt for wallet
   useEffect(() => {
     if (window.ethereum) {
       window.ethereum
@@ -38,6 +39,7 @@ export default function RoundDetailPage() {
 
     ;(async () => {
       try {
+        // 1) provider & contract
         const rpcUrl = process.env.NEXT_PUBLIC_ALCHEMY_URL
         const provider = new ethers.FallbackProvider([
           new ethers.JsonRpcProvider(rpcUrl),
@@ -49,34 +51,43 @@ export default function RoundDetailPage() {
           provider
         )
 
-        // read on-chain state
+        // 2) read on-chain state
         const [ onchain, winnerAddr, hasClaimed ] = await Promise.all([
           ct.rounds(BigInt(id)),
           ct.w2(BigInt(id)),
           ct.c2(BigInt(id)),
         ])
 
-        // fetch the single Started event by indexed round ID
-        const topic0  = ct.interface.getEventTopic('Started')
-        const idTopic = ethers.hexZeroPad(
-          ethers.hexlify(BigInt(id)),
-          32
-        )
-        const logs    = await provider.getLogs({
-          address: ct.address,
-          topics:  [ topic0, idTopic ]
-        })
-        if (!logs.length) {
-          throw new Error(`Started event not found for round ${id}`)
-        }
-        const startArgs = ct.interface.parseLog(logs[0]).args
+        // 3) chunked queryFilter for the Started event
+        const deployBlock = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 33631502
+        const latestBlock = await provider.getBlockNumber()
+        const BATCH       = 500
+        let startArgs     = null
 
-        // restore template choice
+        for (let start = deployBlock; start <= latestBlock; start += BATCH) {
+          const end = Math.min(start + BATCH - 1, latestBlock)
+          const evs = await ct.queryFilter(
+            ct.filters.Started(),
+            start,
+            end
+          )
+          // try to find our round
+          const found = evs.find(e => e.args.id.toString() === id)
+          if (found) {
+            startArgs = found.args
+            break
+          }
+        }
+        if (!startArgs) {
+          throw new Error(`Could not find Started event for round ${id}`)
+        }
+
+        // 4) recover which template user picked
         const tplIx = Number(localStorage.getItem(`madfill-tplIdx-${id}`) || 0)
         const catIx = Number(localStorage.getItem(`madfill-catIdx-${id}`) || 0)
         const tpl   = categories[catIx].templates[tplIx]
 
-        // decode answers
+        // 5) decode both answer arrays
         const origWords = onchain.pA.map(w => ethers.decodeBytes32String(w))
         const chalWords = onchain.fA.map(w => ethers.decodeBytes32String(w))
 
@@ -121,11 +132,10 @@ export default function RoundDetailPage() {
 
   function renderCard(parts, words, title, highlight) {
     return (
-      <Card
-        className={`bg-slate-900 text-white shadow-xl overflow-hidden transform transition ${
-          highlight ? 'scale-105 ring-4 ring-yellow-400' : ''
-        }`}
-      >
+      <Card className={
+        `bg-slate-900 text-white shadow-xl overflow-hidden transform transition
+         ${highlight ? 'scale-105 ring-4 ring-yellow-400' : ''}`
+      }>
         <CardHeader className="bg-slate-800 text-center font-bold">
           {title}
         </CardHeader>
