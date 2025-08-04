@@ -1,11 +1,10 @@
-// pages/active-rounds.jsx
+// pages/active‐rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
 import abi from '../abi/FillInStoryFull.json'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
-import { Button } from '@/components/ui/button'
 import Layout from '@/components/Layout'
 import Footer from '@/components/Footer'
 import Link from 'next/link'
@@ -22,22 +21,30 @@ export default function ActiveRoundsPage() {
         const address = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
         if (!address) throw new Error('Contract address not configured.')
 
-        // Primary RPC; if this fails the catch will trigger and show our friendly error.
-        const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-        const ct       = new ethers.Contract(address, abi, provider)
+        // 1) Try Base public RPC
+        let provider
+        try {
+          provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
+          await provider.getBlockNumber()
+        } catch {
+          // 2) Fallback to Alchemy
+          const alchemy = process.env.NEXT_PUBLIC_ALCHEMY_URL
+          if (!alchemy) throw new Error('No fallback RPC available.')
+          provider = new ethers.JsonRpcProvider(alchemy)
+        }
 
+        const ct          = new ethers.Contract(address, abi, provider)
         const latestBlock = await provider.getBlockNumber()
-        // Optional: you could read a START_BLOCK env var here, defaulting to zero
         const fromBlock   = Number(process.env.NEXT_PUBLIC_START_BLOCK || 0)
 
-        // 1) Pull all Started events
+        // Fetch Started events
         const startedEvs = await ct.queryFilter(
           ct.filters.Started(),
           fromBlock,
           latestBlock
         )
 
-        // 2) Pull all Paid events to build pool sizes
+        // Fetch Paid events
         const paidEvs = await ct.queryFilter(
           ct.filters.Paid(),
           fromBlock,
@@ -49,7 +56,7 @@ export default function ActiveRoundsPage() {
           return acc
         }, {})
 
-        // 3) Map + filter for still-open rounds
+        // Map + filter open rounds
         const now = Math.floor(Date.now() / 1000)
         const openRounds = startedEvs
           .map(e => {
@@ -67,7 +74,7 @@ export default function ActiveRoundsPage() {
         setRounds(openRounds)
       } catch (err) {
         console.error('Failed to load active rounds', err)
-        setRounds([]) // so we skip the loading state
+        setRounds([]) 
         setLoadError('⚠️ Unable to load active rounds right now. Please try again shortly.')
       }
     })()
