@@ -83,7 +83,7 @@ export default function Home() {
           tpl.blanks,
           ethers.parseEther(ENTRY_FEE),
           BigInt(duration * 86400),
-          { value: ethers.parseEther(ENTRY_FEE) } // ✅ Ensure fee is sent
+          { value: ethers.parseEther(ENTRY_FEE) } // ✅ ensure fee is sent
         )
         await tx.wait()
         const events = await ct.queryFilter(ct.filters.Started(), 0, 'latest')
@@ -127,7 +127,7 @@ export default function Home() {
     <Layout>
       <Head><title>MadFill</title></Head>
       {showConfetti && <Confetti width={width} height={height} />}
-      {/* rest unchanged */}
+      {/* The rest of your layout below this line remains unchanged */}
     </Layout>
   )
 }
