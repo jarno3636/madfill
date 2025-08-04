@@ -1,4 +1,4 @@
-// pages/active‐rounds.jsx
+// pages/active-rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -11,57 +11,82 @@ import Footer from '@/components/Footer'
 import Link from 'next/link'
 
 export default function ActiveRoundsPage() {
-  const [rounds, setRounds] = useState(null)
-  const [search, setSearch] = useState('')
+  const [rounds, setRounds]       = useState(null)
+  const [search, setSearch]       = useState('')
   const [sortOption, setSortOption] = useState('timeAsc')
 
   useEffect(() => {
     ;(async () => {
+      // 1) make sure we have the address & ABI
+      const address = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
+      if (!address) {
+        console.error('❌ NEXT_PUBLIC_FILLIN_ADDRESS is not set!')
+        return
+      }
+
+      // 2) connect to Base mainnet
       const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-      const ct       = new ethers.Contract(
-        process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
-        abi,
-        provider
+      const ct       = new ethers.Contract(address, abi, provider)
+
+      // 3) find our block range
+      const latestBlock = await provider.getBlockNumber()
+
+      // 4) fetch all Started events
+      const startedEvs = await ct.queryFilter(
+        ct.filters.Started(), 
+        0, 
+        latestBlock
       )
+      console.log('Started events:', startedEvs)
 
-      // 1) fetch all Started events
-      const startedEvs = await ct.queryFilter(ct.filters.Started(), 0, 'latest')
-      const now        = Math.floor(Date.now() / 1000)
+      // 5) fetch all Paid events to tally up pool sizes
+      const paidEvs = await ct.queryFilter(
+        ct.filters.Paid(), 
+        0, 
+        latestBlock
+      )
+      console.log('Paid events:', paidEvs)
 
-      // 2) fetch all Paid events to tally pool sizes
-      const paidEvs    = await ct.queryFilter(ct.filters.Paid(), 0, 'latest')
+      // build a simple poolCount map
       const poolCounts = paidEvs.reduce((acc, e) => {
         const id = e.args.id.toNumber()
         acc[id] = (acc[id] || 0) + 1
         return acc
       }, {})
 
-      // 3) map + filter open rounds
+      // 6) map into plain objects, only keep rounds whose deadline > now
+      const now = Math.floor(Date.now() / 1000)
       const openRounds = startedEvs
         .map(e => ({
-          id:         e.args.id.toNumber(),
-          blanks:     e.args.blanks.toNumber(),
-          deadline:   e.args.deadline.toNumber(),
-          poolCount:  poolCounts[e.args.id.toNumber()] || 0,
+          id:        e.args.id.toNumber(),
+          blanks:    e.args.blanks.toNumber(),
+          deadline:  e.args.deadline.toNumber(),
+          poolCount: poolCounts[e.args.id.toNumber()] || 0,
         }))
         .filter(r => r.deadline > now)
 
+      console.log('Open rounds:', openRounds)
       setRounds(openRounds)
-    })().catch(console.error)
+    })().catch(err => {
+      console.error('Failed to load active rounds', err)
+      setRounds([])
+    })
   }, [])
 
-  // Apply search
+  // apply search
   const filtered = (rounds || []).filter(r =>
     search === '' || String(r.id).includes(search.trim())
   )
 
-  // Apply sort
+  // apply sort
   const sorted = [...filtered].sort((a, b) => {
-    if (sortOption === 'timeAsc')   return a.deadline - b.deadline
-    if (sortOption === 'timeDesc')  return b.deadline - a.deadline
-    if (sortOption === 'poolAsc')   return a.poolCount - b.poolCount
-    if (sortOption === 'poolDesc')  return b.poolCount - a.poolCount
-    return 0
+    switch (sortOption) {
+      case 'timeAsc':  return a.deadline  - b.deadline
+      case 'timeDesc': return b.deadline  - a.deadline
+      case 'poolAsc':  return a.poolCount - b.poolCount
+      case 'poolDesc': return b.poolCount - a.poolCount
+      default:         return 0
+    }
   })
 
   return (
@@ -84,7 +109,6 @@ export default function ActiveRoundsPage() {
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
-
           <select
             className="bg-slate-900 text-white rounded px-3 py-2"
             value={sortOption}
@@ -104,17 +128,19 @@ export default function ActiveRoundsPage() {
           <p className="text-center text-slate-400">No open rounds found.</p>
         ) : (
           sorted.map(r => (
-            <Card key={r.id} className="bg-slate-800 text-white shadow-lg rounded-xl">
+            <Card
+              key={r.id}
+              className="bg-slate-800 text-white shadow-lg rounded-xl"
+            >
               <CardHeader className="flex justify-between items-center">
                 <div>
                   <h2 className="text-xl font-semibold">Round #{r.id}</h2>
                   <p className="text-sm opacity-75">
-                    {r.blanks} blank{r.blanks > 1 && 's'} &nbsp;|&nbsp; {r.poolCount} entry{r.poolCount !== 1 && 'ies'}
+                    {r.blanks} blank{r.blanks > 1 && 's'} • {r.poolCount} entr{r.poolCount === 1 ? 'y' : 'ies'}
                   </p>
                 </div>
                 <Countdown targetTimestamp={r.deadline} />
               </CardHeader>
-
               <CardContent className="flex justify-between items-center">
                 <Link href={`/round/${r.id}`}>
                   <a className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-4 py-2 rounded">
