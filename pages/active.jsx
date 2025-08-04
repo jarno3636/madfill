@@ -1,4 +1,4 @@
-// pages/active‐rounds.jsx
+// pages/active-rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -24,9 +24,9 @@ export default function ActiveRoundsPage() {
         if (!API_KEY) throw new Error('Missing BASESCAN API key')
         if (!ADDRESS) throw new Error('Missing contract address')
 
-        const iface = new ethers.Interface(abi)
+        // ← HERE’S THE FIX: pull Interface from ethers.utils
+        const iface = new ethers.utils.Interface(abi)
 
-        // fetch logs via BaseScan API
         async function fetchLogs(topic0) {
           const url = new URL('https://api.basescan.org/api')
           url.search = new URLSearchParams({
@@ -39,33 +39,28 @@ export default function ActiveRoundsPage() {
             apikey:    API_KEY,
           }).toString()
 
-          const res = await fetch(url)
+          const res  = await fetch(url)
           const data = await res.json()
           if (data.status !== '1') {
             throw new Error(data.message || 'No logs')
           }
           return data.result.map(log =>
-            iface.parseLog({
-              data:   log.data,
-              topics: log.topics,
-            }).args
+            iface.parseLog({ data: log.data, topics: log.topics }).args
           )
         }
 
-        // pull Started and Paid events
         const startedTopic = iface.getEventTopic('Started')
         const paidTopic    = iface.getEventTopic('Paid')
-        const startedArgs  = await fetchLogs(startedTopic)
-        const paidArgs     = await fetchLogs(paidTopic)
 
-        // tally pool sizes
+        const startedArgs = await fetchLogs(startedTopic)
+        const paidArgs    = await fetchLogs(paidTopic)
+
         const poolCounts = paidArgs.reduce((acc, ev) => {
           const id = Number(ev.id)
           acc[id] = (acc[id] || 0) + 1
           return acc
         }, {})
 
-        // build open‐round list
         const now = Math.floor(Date.now()/1000)
         const openRounds = startedArgs
           .map(ev => ({
@@ -85,7 +80,6 @@ export default function ActiveRoundsPage() {
     })()
   }, [])
 
-  // apply search & sort
   const filtered = (rounds || []).filter(r =>
     !search || String(r.id).includes(search.trim())
   )
@@ -103,11 +97,12 @@ export default function ActiveRoundsPage() {
     <Layout>
       <Head><title>MadFill • Active Rounds</title></Head>
       <main className="max-w-4xl mx-auto p-6 space-y-8">
+
         <h1 className="text-3xl font-extrabold text-center text-indigo-400">
           🏁 Active Rounds
         </h1>
 
-        {/* search & sort */}
+        {/* Search & Sort */}
         <div className="flex flex-col md:flex-row justify-between gap-4 mb-4">
           <input
             type="text"
@@ -128,9 +123,7 @@ export default function ActiveRoundsPage() {
           </select>
         </div>
 
-        {error && (
-          <p className="text-red-500 text-center">{error}</p>
-        )}
+        {error && <p className="text-red-500 text-center">{error}</p>}
 
         {rounds === null ? (
           <p className="text-center text-gray-500">Loading…</p>
@@ -158,6 +151,7 @@ export default function ActiveRoundsPage() {
             </Card>
           ))
         )}
+
       </main>
       <Footer />
     </Layout>
