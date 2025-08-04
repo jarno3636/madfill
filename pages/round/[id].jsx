@@ -22,7 +22,7 @@ export default function RoundDetailPage() {
   const [claimed, setClaimed]     = useState(false)
   const { width, height }         = useWindowSize()
 
-  // connect wallet
+  // Prompt user for their wallet address
   useEffect(() => {
     if (window.ethereum) {
       window.ethereum
@@ -41,14 +41,14 @@ export default function RoundDetailPage() {
       try {
         // 1) provider + contract
         const rpcUrl = process.env.NEXT_PUBLIC_ALCHEMY_URL
-        const fallback = new ethers.FallbackProvider([
+        const provider = new ethers.FallbackProvider([
           new ethers.JsonRpcProvider(rpcUrl),
           new ethers.JsonRpcProvider('https://mainnet.base.org'),
         ])
         const ct = new ethers.Contract(
           process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
           abi,
-          fallback
+          provider
         )
 
         // 2) read on-chain state
@@ -58,36 +58,32 @@ export default function RoundDetailPage() {
           ct.c2(BigInt(id)),
         ])
 
-        // 3) batch-fetch the single Started event for this round
-        const deployBlock = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 33631502
-        const latestBlock = await fallback.getBlockNumber()
-        const BATCH = 500
+        // 3) fetch Started event—but only looking at the last 10k blocks
+        const latestBlock = await provider.getBlockNumber()
+        const lookback    = 10_000
+        const scanFrom    = Math.max(latestBlock - lookback, Number(process.env.NEXT_PUBLIC_START_BLOCK) || 0)
+        const logFilter   = ct.filters.Started()
 
-        async function fetchStarted() {
-          const filter = ct.filters.Started()
-          for (let start = deployBlock; start <= latestBlock; start += BATCH) {
-            const end = Math.min(start + BATCH - 1, latestBlock)
-            const logs = await fallback.getLogs({
-              address:    ct.address,
-              topics:     filter.topics,
-              fromBlock:  start,
-              toBlock:    end,
-            })
-            for (let log of logs) {
-              const args = ct.interface.parseLog(log).args
-              if (args.id.toString() === id) return args
-            }
-          }
-          throw new Error('Started event not found')
+        const logs = await provider.getLogs({
+          address:   ct.address,
+          topics:    logFilter.topics,
+          fromBlock: scanFrom,
+          toBlock:   latestBlock,
+        })
+        const parsed = logs
+          .map(l => ct.interface.parseLog(l).args)
+          .find(a => a.id.toString() === id)
+
+        if (!parsed) {
+          throw new Error(`Started event for round ${id} not found in last ${lookback} blocks`)
         }
-        const startArgs = await fetchStarted()
 
-        // 4) pick up the template index & blanks that you stored
+        // 4) recover saved template choice
         const tplIx = Number(localStorage.getItem(`madfill-tplIdx-${id}`) || 0)
         const catIx = Number(localStorage.getItem(`madfill-catIdx-${id}`) || 0)
         const tpl   = categories[catIx].templates[tplIx]
 
-        // 5) decode words arrays
+        // 5) decode both word arrays
         const origWords = onchain.pA.map(w => ethers.decodeBytes32String(w))
         const chalWords = onchain.fA.map(w => ethers.decodeBytes32String(w))
 
@@ -98,9 +94,9 @@ export default function RoundDetailPage() {
           challenger:  chalWords,
           votes: {
             original: onchain.vP.toString(),
-            challenger: onchain.vF.toString()
+            challenger: onchain.vF.toString(),
           },
-          winner: winnerAddr.toLowerCase()
+          winner: winnerAddr.toLowerCase(),
         })
       } catch (e) {
         console.error(e)
@@ -133,10 +129,12 @@ export default function RoundDetailPage() {
 
   function renderCard(parts, words, title, highlight) {
     return (
-      <Card className={
-        `bg-slate-900 text-white shadow-xl overflow-hidden transform transition 
-         ${highlight ? 'scale-105 ring-4 ring-yellow-400' : ''}`
-      }>
+      <Card
+        className={
+          `bg-slate-900 text-white shadow-xl overflow-hidden transform transition 
+           ${highlight ? 'scale-105 ring-4 ring-yellow-400' : ''}`
+        }
+      >
         <CardHeader className="bg-slate-800 text-center font-bold">
           {title}
         </CardHeader>
@@ -180,12 +178,10 @@ export default function RoundDetailPage() {
 
           <div className="text-white space-y-2">
             <p>
-              🗳️ Votes — Original: <strong>{roundData.votes.original}</strong> | Challenger:{' '}
-              <strong>{roundData.votes.challenger}</strong>
+              🗳️ Votes — Original: <strong>{roundData.votes.original}</strong> | Challenger: <strong>{roundData.votes.challenger}</strong>
             </p>
             <p>
-              🏆 Winning address:{' '}
-              <code className="text-green-400">{roundData.winner}</code>
+              🏆 Winner: <code className="text-green-400">{roundData.winner}</code>
             </p>
 
             {address?.toLowerCase() === roundData.winner && !claimed && (
