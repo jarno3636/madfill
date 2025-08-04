@@ -10,55 +10,46 @@ import Footer from '@/components/Footer'
 import Link from 'next/link'
 
 export default function ActiveRoundsPage() {
-  const [rounds, setRounds]         = useState(null)
-  const [search, setSearch]         = useState('')
+  const [rounds, setRounds]       = useState(null)
+  const [search, setSearch]       = useState('')
   const [sortOption, setSortOption] = useState('timeAsc')
-  const [loadError, setLoadError]   = useState('')
+  const [loadError, setLoadError] = useState('')
 
   useEffect(() => {
     ;(async () => {
-      try {
-        const address = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
-        if (!address) throw new Error('Contract address not configured.')
+      const address = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
+      const alchemy = process.env.NEXT_PUBLIC_ALCHEMY_URL
+      if (!address) {
+        setLoadError('Contract address is not set.')
+        setRounds([])
+        return
+      }
+      if (!alchemy) {
+        setLoadError('Fallback RPC (Alchemy) is not set.')
+        setRounds([])
+        return
+      }
 
-        // 1) Try Base public RPC
-        let provider
-        try {
-          provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-          await provider.getBlockNumber()
-        } catch {
-          // 2) Fallback to Alchemy
-          const alchemy = process.env.NEXT_PUBLIC_ALCHEMY_URL
-          if (!alchemy) throw new Error('No fallback RPC available.')
-          provider = new ethers.JsonRpcProvider(alchemy)
-        }
-
+      // Helper to fetch events with a given provider
+      async function fetchRoundsFrom(provider) {
         const ct          = new ethers.Contract(address, abi, provider)
         const latestBlock = await provider.getBlockNumber()
         const fromBlock   = Number(process.env.NEXT_PUBLIC_START_BLOCK || 0)
 
-        // Fetch Started events
-        const startedEvs = await ct.queryFilter(
-          ct.filters.Started(),
-          fromBlock,
-          latestBlock
-        )
+        // get Started and Paid events
+        const [startedEvs, paidEvs] = await Promise.all([
+          ct.queryFilter(ct.filters.Started(),  fromBlock, latestBlock),
+          ct.queryFilter(ct.filters.Paid(),     fromBlock, latestBlock)
+        ])
 
-        // Fetch Paid events
-        const paidEvs = await ct.queryFilter(
-          ct.filters.Paid(),
-          fromBlock,
-          latestBlock
-        )
         const poolCounts = paidEvs.reduce((acc, e) => {
           const id = e.args.id.toNumber()
           acc[id] = (acc[id] || 0) + 1
           return acc
         }, {})
 
-        // Map + filter open rounds
-        const now = Math.floor(Date.now() / 1000)
-        const openRounds = startedEvs
+        const now = Math.floor(Date.now()/1000)
+        return startedEvs
           .map(e => {
             const id       = e.args.id.toNumber()
             const deadline = e.args.deadline.toNumber()
@@ -70,21 +61,34 @@ export default function ActiveRoundsPage() {
             }
           })
           .filter(r => r.deadline > now)
+      }
 
+      // Try Base public, then fallback to Alchemy if anything goes wrong
+      let provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
+      try {
+        await provider.getBlockNumber()
+        const openRounds = await fetchRoundsFrom(provider)
         setRounds(openRounds)
-      } catch (err) {
-        console.error('Failed to load active rounds', err)
-        setRounds([]) 
-        setLoadError('⚠️ Unable to load active rounds right now. Please try again shortly.')
+      } catch {
+        try {
+          provider = new ethers.JsonRpcProvider(alchemy)
+          await provider.getBlockNumber()
+          const openRounds = await fetchRoundsFrom(provider)
+          setRounds(openRounds)
+        } catch (err) {
+          console.error('Both RPCs failed:', err)
+          setLoadError('⚠️ Unable to load active rounds right now. Please try again shortly.')
+          setRounds([])
+        }
       }
     })()
   }, [])
 
-  // Filter + sort
+  // filter + sort
   const filtered = (rounds || []).filter(r =>
     !search || String(r.id).includes(search.trim())
   )
-  const sorted = [...filtered].sort((a, b) => {
+  const sorted = [...filtered].sort((a,b) => {
     switch (sortOption) {
       case 'timeAsc':  return a.deadline  - b.deadline
       case 'timeDesc': return b.deadline  - a.deadline
@@ -126,7 +130,7 @@ export default function ActiveRoundsPage() {
           </select>
         </div>
 
-        {/* Rounds List / Loading / Error */}
+        {/* Loading / Error / Rounds */}
         {rounds === null ? (
           <p className="text-center text-slate-400">Loading active rounds…</p>
         ) : loadError ? (
@@ -140,7 +144,7 @@ export default function ActiveRoundsPage() {
                 <div>
                   <h2 className="text-xl font-semibold">Round #{r.id}</h2>
                   <p className="text-sm opacity-75">
-                    {r.blanks} blank{r.blanks > 1 ? 's' : ''} • {r.poolCount} entr{r.poolCount === 1 ? 'y' : 'ies'}
+                    {r.blanks} blank{r.blanks>1?'s':''} • {r.poolCount} entr{r.poolCount===1?'y':'ies'}
                   </p>
                 </div>
                 <Countdown targetTimestamp={r.deadline} />
