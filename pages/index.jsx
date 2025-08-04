@@ -1,7 +1,7 @@
 import { useState, useEffect, Fragment } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
-import Confetti from 'react-confetti'
+// import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
 import abi from '../abi/FillInStoryFull.json'
 import { Button } from '@/components/ui/button'
@@ -9,7 +9,7 @@ import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
 import { categories } from '../data/templates'
 import Layout from '@/components/Layout'
-import { motion } from 'framer-motion'
+// import { motion } from 'framer-motion'
 import { Tooltip } from '@/components/ui/tooltip'
 import Link from 'next/link'
 
@@ -18,7 +18,6 @@ export default function Home() {
   const [roundId, setRoundId] = useState('')
   const [blankIndex, setBlankIndex] = useState('0')
   const [roundName, setRoundName] = useState('')
-  const [word, setWord] = useState('')
   const [duration, setDuration] = useState(1)
   const [showConfetti, setShowConfetti] = useState(false)
   const [deadline, setDeadline] = useState(null)
@@ -71,12 +70,13 @@ export default function Home() {
     try {
       setBusy(true)
       setStatus('')
+
       const modal = new ethers.BrowserProvider(window.ethereum)
       const signer = await modal.getSigner()
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
       let newId = roundId
 
-      // 1) Create round if needed (no ETH sent)
+      // 1) CREATE ROUND (only gas)
       if (!roundId) {
         setStatus('⏳ Creating round…')
         const tx = await ct.start(
@@ -85,19 +85,25 @@ export default function Home() {
           BigInt(duration * 86400)
         )
         await tx.wait()
-        const events = await ct.queryFilter(ct.filters.Started(), 0, 'latest')
-        newId = events[events.length - 1].args.id.toString()
+        const ev = await ct.queryFilter(ct.filters.Started(), 0, 'latest')
+        newId = ev[ev.length - 1].args.id.toString()
         setRoundId(newId)
         const info = await ct.rounds(BigInt(newId))
         setDeadline(info.sd.toNumber())
         localStorage.setItem(`madfill-roundname-${newId}`, roundName || '')
-        setShowConfetti(true)
-        setTimeout(() => setShowConfetti(false), 5000)
+        // setShowConfetti(true)  // comment out for crash debugging
+        // setTimeout(() => setShowConfetti(false), 5000)
       }
 
-      // 2) Submit entry (pay fee)
+      // 2) POPUP FOR WORD + FEE
+      const userWord = window.prompt(`Enter your word for blank #${blankIndex} (cost: ${ENTRY_FEE} BASE)`)
+      if (!userWord) {
+        setStatus('❌ Submission cancelled.')
+        return
+      }
+
       setStatus('⏳ Submitting entry…')
-      const data = ethers.encodeBytes32String(word)
+      const data = ethers.encodeBytes32String(userWord)
       const tx2 = await ct.submitPaid(
         BigInt(newId),
         Number(blankIndex),
@@ -107,10 +113,9 @@ export default function Home() {
       await tx2.wait()
 
       setStatus(`✅ Round ${newId} entry submitted!`)
-      // prepare share
       const preview = tpl.parts.map((part, i) =>
         i < tpl.blanks
-          ? `${part}${i === Number(blankIndex) ? word : '____'}`
+          ? `${part}${i === Number(blankIndex) ? userWord : '____'}`
           : part
       ).join('')
       setShareText(encodeURIComponent(
@@ -118,11 +123,10 @@ export default function Home() {
       ))
 
     } catch (e) {
-      // Friendly error messages
       const msg = (e?.message || '').toLowerCase()
       if (msg.includes('denied')) {
         setStatus('❌ Transaction cancelled by you.')
-      } else if (msg.includes('execution reverted')) {
+      } else if (msg.includes('execution reverted') || msg.includes('require(false)')) {
         setStatus('❌ Transaction failed on-chain.')
       } else {
         setStatus('❌ ' + (e.message || 'Unknown error'))
@@ -140,21 +144,31 @@ export default function Home() {
   return (
     <Layout>
       <Head><title>MadFill</title></Head>
-      {showConfetti && <Confetti width={width} height={height} />}
+
+      {/* --- Fee breakdown banner --- */}
+      <Card className="bg-slate-700 text-white rounded p-4 mb-6">
+        <p><strong>Fees:</strong></p>
+        <ul className="list-disc list-inside text-sm">
+          <li>Create round ➡️ gas only</li>
+          <li>Enter pool ➡️ <strong>{ENTRY_FEE} BASE</strong> each entry</li>
+        </ul>
+      </Card>
+
+      {/* {showConfetti && <Confetti width={width} height={height} />} */}
       <main className="max-w-3xl mx-auto p-6 space-y-8">
 
         {/* Info Section */}
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }}>
+        {/* <motion.div …> */}
           <Card className="bg-gradient-to-tr from-purple-800 to-indigo-900 text-white shadow-2xl rounded-xl">
             <CardHeader>
               <h2 className="text-xl font-bold">🎮 What Is MadFill?</h2>
             </CardHeader>
             <CardContent className="text-sm space-y-2">
               <p>MadFill is an on-chain word game where you create hilarious sentence mashups by filling in blanks on funny templates.</p>
-              <p>Each round costs <strong>{ENTRY_FEE} BASE</strong> to create and play. Winner takes the pool!</p>
+              <p>Create a round (gas only), then enter with <strong>{ENTRY_FEE} BASE</strong> per blank. Winner takes the pool.</p>
             </CardContent>
           </Card>
-        </motion.div>
+        {/* </motion.div> */}
 
         {/* Round Setup */}
         <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
@@ -163,23 +177,22 @@ export default function Home() {
             <Tooltip text="0.5% fees | Winner claims prize | All on-chain!" />
           </CardHeader>
           <CardContent className="space-y-4">
-
-            {/* Dropdowns */}
+            {/* … selectors, inputs and template preview as before … */}
             <div className="grid md:grid-cols-3 gap-4">
               {[
                 ['Category', catIdx, setCatIdx, categories.map((c,i)=>({label:c.name,value:i}))],
                 ['Template', tplIdx, setTplIdx, selectedCategory.templates.map((t,i)=>({label:t.name,value:i}))],
                 ['Duration', duration, setDuration, durations]
-              ].map(([label, val, setVal, opts]) => (
-                <div key={label}>
-                  <label>{label}</label>
+              ].map(([lbl, val, setter, opts]) => (
+                <div key={lbl}>
+                  <label>{lbl}</label>
                   <select
                     className="w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1"
                     value={val}
-                    onChange={e => setVal(+e.target.value)}
+                    onChange={e => setter(+e.target.value)}
                     disabled={busy}
                   >
-                    {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    {opts.map(o=> <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                 </div>
               ))}
@@ -203,34 +216,20 @@ export default function Home() {
                     <span
                       className={blankStyle(i===+blankIndex)}
                       onClick={()=>setBlankIndex(String(i))}
-                    >
-                      {i}
-                    </span>
+                    >{i}</span>
                   )}
                 </Fragment>
               ))}
             </div>
 
             <p className="text-sm">Selected Blank: <strong>{blankIndex}</strong></p>
-            <input
-              type="text"
-              placeholder="Your Word"
-              value={word}
-              onChange={e => setWord(e.target.value)}
-              className="w-full bg-slate-900 text-white border rounded px-2 py-1"
-              disabled={busy}
-            />
-
-            {deadline && (
-              <p className="text-sm">⏱️ Submissions close in: <Countdown targetTimestamp={deadline} /></p>
-            )}
 
             <Button
               onClick={handleUnifiedSubmit}
-              disabled={!word || busy}
+              disabled={busy}
               className="bg-indigo-600 hover:bg-indigo-500"
             >
-              {!roundId ? '🚀 Create & Submit' : '✏️ Submit Entry'}
+              {!roundId ? '🚀 Create Round' : '🪪 Enter Pool'}
             </Button>
 
             {status && <p className="text-sm mt-2">{status}</p>}
@@ -244,17 +243,13 @@ export default function Home() {
                     target="_blank"
                     rel="noopener noreferrer"
                     className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded"
-                  >
-                    🐦 Twitter
-                  </a>
+                  >🐦 Twitter</a>
                   <a
                     href={`https://warpcast.com/~/compose?text=${shareText}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded"
-                  >
-                    🌀 Farcaster
-                  </a>
+                  >🌀 Farcaster</a>
                   <Link href={`/round/${roundId}`}>
                     <a className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded">
                       📜 View Round
@@ -268,15 +263,13 @@ export default function Home() {
 
         {/* Recent Winners */}
         <Card className="bg-gradient-to-br from-slate-800 to-indigo-800 text-white shadow-xl rounded-xl">
-          <CardHeader>
-            <h2 className="text-xl font-bold">🎉 Recent Winners</h2>
-          </CardHeader>
+          <CardHeader><h2 className="text-xl font-bold">🎉 Recent Winners</h2></CardHeader>
           <CardContent className="text-sm space-y-1">
             {recentWinners.length === 0
               ? <p>No winners yet.</p>
-              : recentWinners.map((w,i) => {
-                  const name = localStorage.getItem(`madfill-roundname-${w.roundId}`)
-                    || `Round #${w.roundId}`
+              : recentWinners.map((w,i)=> {
+                  const name = localStorage.getItem(`madfill-roundname-${w.roundId}`) ||
+                               `Round #${w.roundId}`
                   return (
                     <p key={i}>
                       <strong>{name}</strong> → <code>{w.winner}</code>
