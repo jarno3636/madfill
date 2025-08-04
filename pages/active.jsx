@@ -1,7 +1,7 @@
 // pages/active-rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
-import { utils } from 'ethers'
+import { Interface } from 'ethers'                       // ← correct import
 import abi from '../abi/FillInStoryFull.json'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
@@ -14,19 +14,18 @@ export default function ActiveRoundsPage() {
   const [error, setError]   = useState('')
 
   useEffect(() => {
-    ;(async () => {
+    async function load() {
       try {
         const API_KEY = process.env.NEXT_PUBLIC_BASESCAN_API_KEY
         const ADDRESS = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
         const FROM    = process.env.NEXT_PUBLIC_START_BLOCK || '33631502'
-        if (!API_KEY || !ADDRESS) {
-          throw new Error('Missing API key or contract address')
-        }
+        if (!API_KEY) throw new Error('BaseScan API key is missing')
+        if (!ADDRESS) throw new Error('Contract address is missing')
 
-        // create an ethers Interface so we can decode logs
-        const iface = new utils.Interface(abi)
+        // build our ABI parser
+        const iface = new Interface(abi)
 
-        // helper: fetch logs from BaseScan
+        // generic fetch-and-parse
         async function fetchLogs(topic0) {
           const params = new URLSearchParams({
             module:    'logs',
@@ -37,22 +36,24 @@ export default function ActiveRoundsPage() {
             topic0,
             apikey:    API_KEY,
           })
+
           const resp = await fetch(`https://api.basescan.org/api?${params}`)
           const json = await resp.json()
-          if (json.status !== '1' || !json.result) {
-            throw new Error(json.message || 'No logs returned')
+          if (json.status !== '1' || !Array.isArray(json.result)) {
+            throw new Error(json.message || 'no logs result')
           }
-          // each log is a raw object; parse and return the .args
+
+          // parse each returned log
           return json.result.map(log => iface.parseLog(log).args)
         }
 
-        // pull Started() events
-        const TOPIC_STARTED = iface.getEventTopic('Started')
-        const startedArgs   = await fetchLogs(TOPIC_STARTED)
+        // pull Started events
+        const startedTopic = iface.getEventTopic('Started')
+        const startedArgs  = await fetchLogs(startedTopic)
 
-        // pull Paid() events
-        const TOPIC_PAID    = iface.getEventTopic('Paid')
-        const paidArgs      = await fetchLogs(TOPIC_PAID)
+        // pull Paid events
+        const paidTopic    = iface.getEventTopic('Paid')
+        const paidArgs     = await fetchLogs(paidTopic)
 
         // tally pool sizes
         const poolCounts = paidArgs.reduce((acc, ev) => {
@@ -61,14 +62,14 @@ export default function ActiveRoundsPage() {
           return acc
         }, {})
 
-        // build only “open” rounds
+        // build “open” rounds
         const now = Math.floor(Date.now() / 1000)
         const openRounds = startedArgs
           .map(ev => ({
             id:        Number(ev.id),
             blanks:    Number(ev.blanks),
             deadline:  Number(ev.deadline),
-            poolCount: poolCounts[Number(ev.id)] || 0
+            poolCount: poolCounts[Number(ev.id)] || 0,
           }))
           .filter(r => r.deadline > now)
 
@@ -78,7 +79,9 @@ export default function ActiveRoundsPage() {
         setError(`⚠️ Unable to load active rounds: ${e.message}`)
         setRounds([])
       }
-    })()
+    }
+
+    load()
   }, [])
 
   return (
@@ -88,7 +91,9 @@ export default function ActiveRoundsPage() {
         <h1 className="text-3xl font-extrabold text-center text-indigo-400">
           🏁 Active Rounds
         </h1>
+
         {error && <p className="text-red-500 text-center">{error}</p>}
+
         {rounds === null ? (
           <p className="text-center text-gray-500">Loading…</p>
         ) : rounds.length === 0 ? (
@@ -100,7 +105,7 @@ export default function ActiveRoundsPage() {
                 <div>
                   <h2 className="text-xl">Round #{r.id}</h2>
                   <p className="text-sm opacity-75">
-                    {r.blanks} blank{r.blanks > 1 ? 's' : ''} • {r.poolCount} entr{r.poolCount === 1 ? 'y' : 'ies'}
+                    {r.blanks} blank{r.blanks>1?'s':''} • {r.poolCount} entr{r.poolCount===1?'y':'ies'}
                   </p>
                 </div>
                 <Countdown targetTimestamp={r.deadline} />
