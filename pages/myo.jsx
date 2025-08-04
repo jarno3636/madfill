@@ -1,9 +1,8 @@
+'use client'
 import Layout from '@/components/Layout'
 import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import clsx from 'clsx'
-import { toast } from 'react-hot-toast'
-import { ethers } from 'ethers'
 
 const defaultStickers = ['🐸', '💥', '🌈', '🧠', '🔥', '✨', '🌀', '🎉', '🍕', '👾']
 const defaultTheme = 'retro'
@@ -83,25 +82,7 @@ export default function MyoPage() {
     setTheme(pick)
   }
 
-  async function handleSubmit() {
-    try {
-      const modal = new ethers.BrowserProvider(window.ethereum)
-      const signer = await modal.getSigner()
-      const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
-      const value = ethers.parseEther('0.001')
-      const partsEncoded = parts.map(p => p === '____' ? '' : p) // adjust this logic based on contract needs
-
-      const tx = await contract.submitPaid(partsEncoded, { value })
-      await tx.wait()
-      toast.success('🎉 Card submitted with fee!')
-    } catch (e) {
-      if (e?.code === 4001) {
-        toast.error('❌ Transaction cancelled by user')
-      } else {
-        toast.error(`❌ ${e.message || 'Submission failed'}`)
-      }
-    }
-  }
+  const shareText = encodeURIComponent(`🧠 I made a custom MadFill!\n\n${parts.join(' ')}\n\nTry it here: https://madfill.vercel.app/myo`)
 
   return (
     <Layout>
@@ -181,11 +162,12 @@ export default function MyoPage() {
           </p>
         </div>
 
-        <div className="text-center mt-6">
-          <Button onClick={handleSubmit} className="bg-blue-600 hover:bg-blue-500">
-            🚀 Submit with 0.001 ETH
-          </Button>
-          <p className="text-xs mt-2 text-slate-400 italic">Small fee helps build the game. Canceling is okay too!</p>
+        <div className="text-center mt-6 space-y-3">
+          <Button disabled className="bg-gray-700 cursor-not-allowed">⛓️ Mint Coming Soon</Button>
+          <div className="flex justify-center gap-3">
+            <a href={`https://warpcast.com/~/compose?text=${shareText}`} target="_blank" className="bg-purple-600 hover:bg-purple-500 px-4 py-2 rounded text-white">🌀 Share</a>
+            <a href={`https://twitter.com/intent/tweet?text=${shareText}`} target="_blank" className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded text-white">🐦 Tweet</a>
+          </div>
         </div>
       </div>
 
