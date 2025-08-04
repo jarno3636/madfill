@@ -1,3 +1,4 @@
+// pages/round/[id].jsx
 import { useRouter } from 'next/router'
 import { useEffect, useState } from 'react'
 import Head from 'next/head'
@@ -11,83 +12,115 @@ import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
 
 export default function RoundDetailPage() {
-  const router = useRouter()
-  const { id } = router.query
-  const [round, setRound] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [winner, setWinner] = useState(null)
-  const [claimable, setClaimable] = useState(false)
-  const [status, setStatus] = useState('')
-  const [address, setAddress] = useState(null)
-  const [claimed, setClaimed] = useState(false)
-  const { width, height } = useWindowSize()
+  const { query } = useRouter()
+  const id = query.id
+  const [loading, setLoading]   = useState(true)
+  const [error, setError]       = useState(null)
+  const [roundData, setRoundData] = useState(null)
+  const [address, setAddress]   = useState(null)
+  const [status, setStatus]     = useState('')
+  const [claimed, setClaimed]   = useState(false)
+  const { width, height }       = useWindowSize()
 
+  // connect wallet
   useEffect(() => {
     if (window.ethereum) {
       window.ethereum.request({ method: 'eth_requestAccounts' })
-        .then(accounts => setAddress(accounts[0]))
+        .then(accts => setAddress(accts[0]))
         .catch(console.error)
     }
   }, [])
 
   useEffect(() => {
     if (!id) return
-    async function fetchRound() {
-      setLoading(true)
+    setLoading(true)
+    setError(null)
+
+    ;(async () => {
       try {
-        const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-        const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
-        const r = await contract.rounds(id)
-        const template = categories[0].templates[0] // optionally track dynamic template
+        // provider & contract
+        const rpcUrl = process.env.NEXT_PUBLIC_ALCHEMY_URL
+        const fallback = new ethers.FallbackProvider([
+          new ethers.JsonRpcProvider(rpcUrl),
+          new ethers.JsonRpcProvider('https://mainnet.base.org'),
+        ])
+        const ct = new ethers.Contract(
+          process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
+          abi,
+          fallback
+        )
 
-        const winnerAddr = await contract.w2(id)
-        const alreadyClaimed = await contract.c2(id)
+        // fetch on‐chain data
+        const [r, winnerAddr, isClaimed] = await Promise.all([
+          ct.rounds(BigInt(id)),
+          ct.w2(BigInt(id)),
+          ct.c2(BigInt(id))
+        ])
 
-        setRound({
-          id,
-          template,
-          original: r.pA || [],
-          challenger: r.fA || [],
-          vP: r.vP.toString(),
-          vF: r.vF.toString(),
+        // load the Started event to get template index & blanks count
+        const startedLogs = await fallback.getLogs({
+          address: ct.address,
+          topics: ct.filters.Started().topics,
+          fromBlock: Number(process.env.NEXT_PUBLIC_START_BLOCK) || 0,
+          toBlock: 'latest'
         })
-        setWinner(winnerAddr)
-        setClaimed(alreadyClaimed)
-        setClaimable(winnerAddr?.toLowerCase() === address?.toLowerCase() && !alreadyClaimed)
+        const startEvt = startedLogs
+          .map(log => ct.interface.parseLog(log).args)
+          .find(a => a.id.toString() === id)
+        const blanks     = startEvt.blanks.toNumber()
+        const templateIx = startEvt.blanks.toNumber()  // if you encoded template into event
+
+        // pick template slot (here I assume you stored the tpl index in localStorage)
+        const tplIx = Number(localStorage.getItem(`madfill-tplIdx-${id}`) || 0)
+        const catIx = Number(localStorage.getItem(`madfill-catIdx-${id}`) || 0)
+        const tpl   = categories[catIx].templates[tplIx]
+
+        // decode the two word arrays (original vs challenger)
+        const origWords = r.pA.map(w => ethers.decodeBytes32String(w))
+        const chalWords = r.fA.map(w => ethers.decodeBytes32String(w))
+
+        setClaimed(isClaimed)
+        setRoundData({
+          tpl,
+          original: origWords,
+          challenger: chalWords,
+          votes: { original: r.vP.toString(), challenger: r.vF.toString() },
+          winner: winnerAddr.toLowerCase(),
+        })
       } catch (e) {
-        console.error('Failed to load round:', e)
+        console.error(e)
+        setError(e.message)
+      } finally {
+        setLoading(false)
       }
-      setLoading(false)
-    }
-    fetchRound()
-  }, [id, address])
+    })()
+  }, [id])
 
   async function handleClaim() {
     try {
-      setStatus('Claiming your prize...')
-      const modal = new ethers.BrowserProvider(window.ethereum)
-      const signer = await modal.getSigner()
-      const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
-      const tx = await contract.claim2(id)
+      setStatus('Claiming…')
+      const provider = new ethers.BrowserProvider(window.ethereum)
+      const signer   = await provider.getSigner()
+      const ct       = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
+      const tx       = await ct.claim2(BigInt(id))
       await tx.wait()
-      setStatus('🎉 Prize claimed!')
       setClaimed(true)
+      setStatus('✅ Claimed!')
     } catch (e) {
+      console.error(e)
       setStatus('❌ ' + (e.message || 'Claim failed'))
     }
   }
 
-  function renderCard(parts, words, title, isWinner) {
+  function renderCard(parts, words, title, highlight) {
     return (
-      <Card className={`bg-slate-900 text-white shadow-xl transition-all duration-300 ease-in-out ${isWinner ? 'border-2 border-yellow-400 scale-105' : 'border border-slate-700'}`}>
-        <CardHeader className="font-bold text-lg text-center">{title}</CardHeader>
-        <CardContent className="text-lg px-4 py-2 text-center">
+      <Card className={`bg-slate-900 text-white shadow-xl p-0 overflow-hidden transform transition ${highlight ? 'scale-105 ring-4 ring-yellow-400' : ''}`}>
+        <CardHeader className="bg-slate-800 text-center font-bold">{title}</CardHeader>
+        <CardContent className="p-4 text-center font-mono text-lg">
           {parts.map((part, i) => (
             <span key={i}>
               {part}
-              {i < words.length && (
-                <span className="text-yellow-300 font-semibold">{words[i]}</span>
-              )}
+              {i < words.length && <span className="text-yellow-300">{words[i]}</span>}
             </span>
           ))}
         </CardContent>
@@ -98,37 +131,41 @@ export default function RoundDetailPage() {
   return (
     <Layout>
       <Head><title>MadFill Round #{id}</title></Head>
-      <h1 className="text-3xl font-bold text-white mb-6">📖 Round #{id} Details</h1>
+      {loading && <p className="text-white">Loading round…</p>}
+      {error &&   <p className="text-red-400">Error: {error}</p>}
 
-      {loading && <p className="text-white">Loading round...</p>}
-
-      {!loading && round && (
+      {roundData && (
         <>
-          <div className="grid md:grid-cols-2 gap-4">
-            {renderCard(round.template.parts, round.original, 'Original Card', Number(round.vP) >= Number(round.vF))}
-            {renderCard(round.template.parts, round.challenger, 'Challenger Card', Number(round.vF) > Number(round.vP))}
+          <div className="grid md:grid-cols-2 gap-6 my-6">
+            {renderCard(
+              roundData.tpl.parts,
+              roundData.original,
+              'Original Card',
+              Number(roundData.votes.original) >= Number(roundData.votes.challenger)
+            )}
+            {renderCard(
+              roundData.tpl.parts,
+              roundData.challenger,
+              'Challenger Card',
+              Number(roundData.votes.challenger) > Number(roundData.votes.original)
+            )}
           </div>
 
-          <div className="mt-6 text-white text-sm">
-            <p>🗳️ Votes — <strong>Original:</strong> {round.vP} | <strong>Challenger:</strong> {round.vF}</p>
-            {winner && (
-              <p className="mt-2">🏆 Winning Voter: <span className="text-green-400">{winner}</span></p>
-            )}
+          <div className="text-white space-y-2">
+            <p>🗳️ Votes — Original: <strong>{roundData.votes.original}</strong> | Challenger: <strong>{roundData.votes.challenger}</strong></p>
+            <p>🏆 Winning address: <code className="text-green-400">{roundData.winner}</code></p>
 
-            {claimable && !claimed && (
-              <Button onClick={handleClaim} className="bg-green-600 hover:bg-green-500 mt-4">
-                🎁 Claim Your Prize
+            {address?.toLowerCase() === roundData.winner && !claimed && (
+              <Button onClick={handleClaim} className="bg-green-600 hover:bg-green-500">
+                🎁 Claim Prize
               </Button>
             )}
 
-            {claimed && (
-              <p className="mt-2 text-green-400">✅ Prize Claimed</p>
-            )}
-
-            {status && <p className="mt-2 text-yellow-300">{status}</p>}
+            {claimed && <p className="text-green-400">✅ Prize Claimed!</p>}
+            {status &&  <p className="text-yellow-300">{status}</p>}
           </div>
 
-          {status.includes('claimed') && <Confetti width={width} height={height} />}
+          {claimed && <Confetti width={width} height={height} />}
         </>
       )}
     </Layout>
