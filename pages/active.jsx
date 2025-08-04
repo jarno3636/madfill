@@ -1,4 +1,4 @@
-// pages/active-rounds.jsx
+// pages/active‐rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -11,10 +11,10 @@ import Footer from '@/components/Footer'
 import Link from 'next/link'
 
 export default function ActiveRoundsPage() {
-  const [rounds, setRounds]         = useState(null)
-  const [search, setSearch]         = useState('')
+  const [rounds, setRounds] = useState(null)
+  const [search, setSearch] = useState('')
   const [sortOption, setSortOption] = useState('timeAsc')
-  const [error, setError]           = useState('')
+  const [error, setError] = useState('')
 
   useEffect(() => {
     (async () => {
@@ -22,51 +22,56 @@ export default function ActiveRoundsPage() {
         const address = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
         const rpcUrl  = process.env.NEXT_PUBLIC_ALCHEMY_URL
         if (!address || !rpcUrl) {
-          throw new Error('Please set both NEXT_PUBLIC_FILLIN_ADDRESS and NEXT_PUBLIC_ALCHEMY_URL in your environment.')
+          throw new Error('Missing NEXT_PUBLIC_FILLIN_ADDRESS or NEXT_PUBLIC_ALCHEMY_URL')
         }
 
-        // single Alchemy provider (fastest) + chain fallback
         const provider = new ethers.FallbackProvider([
           new ethers.JsonRpcProvider(rpcUrl),
           new ethers.JsonRpcProvider('https://mainnet.base.org'),
         ])
-
         const contract = new ethers.Contract(address, abi, provider)
 
-        // block window and chunk size
         const latestBlock = await provider.getBlockNumber()
         const fromEnv     = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 0
         const fromBlock   = fromEnv > 0 ? fromEnv : 33631502
         const chunkSize   = 499
 
-        // helper: build an array of [start, end] chunks
+        // build chunks
         const chunks = []
-        for (let start = fromBlock; start <= latestBlock; start += chunkSize) {
-          chunks.push([start, Math.min(start + chunkSize - 1, latestBlock)])
+        for (let s = fromBlock; s <= latestBlock; s += chunkSize) {
+          chunks.push([s, Math.min(s + chunkSize - 1, latestBlock)])
         }
 
-        // fetch & parse logs for a given filter in parallel
+        // single filter fetch helper (sequential)
         async function fetchAll(filter) {
-          const calls = chunks.map(async ([start, end]) => {
-            const logs = await provider.getLogs({ address, topics: filter.topics, fromBlock: start, toBlock: end })
-            return logs.map(l => contract.interface.parseLog(l).args)
-          })
-          const pages = await Promise.all(calls)
-          return pages.flat()
+          const allArgs = []
+          for (const [start, end] of chunks) {
+            const logs = await provider.getLogs({
+              address,
+              topics: filter.topics,
+              fromBlock: start,
+              toBlock: end,
+            })
+            for (const l of logs) {
+              const args = contract.interface.parseLog(l).args
+              allArgs.push(args)
+            }
+          }
+          return allArgs
         }
 
-        // pull events in parallel
-        const [startedArgs, paidArgs] = await Promise.all([
-          fetchAll(contract.filters.Started()),
-          fetchAll(contract.filters.Paid()),
-        ])
+        // 1) Started events
+        const startedArgs = await fetchAll(contract.filters.Started())
 
-        // tally pools
-        const poolCounts = paidArgs.reduce((acc, ev) => {
+        // 2) Paid events (after Started finishes)
+        const paidArgs = await fetchAll(contract.filters.Paid())
+
+        // tally pool sizes
+        const poolCounts = {}
+        for (const ev of paidArgs) {
           const id = Number(ev.id)
-          acc[id] = (acc[id] || 0) + 1
-          return acc
-        }, {})
+          poolCounts[id] = (poolCounts[id] || 0) + 1
+        }
 
         // build open rounds
         const now = Math.floor(Date.now() / 1000)
@@ -82,7 +87,7 @@ export default function ActiveRoundsPage() {
         setRounds(openRounds)
       } catch (err) {
         console.error(err)
-        setError(err.message || 'Failed to load active rounds.')
+        setError(err.message || 'Failed to load active rounds')
         setRounds([])
       }
     })()
