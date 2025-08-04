@@ -1,4 +1,4 @@
-// pages/active-rounds.jsx
+// pages/active‐rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -37,7 +37,8 @@ export default function ActiveRoundsPage() {
         const latestBlock = await fallbackProvider.getBlockNumber()
         const fromEnv     = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 0
         const fromBlock   = fromEnv > 0 ? fromEnv : 33631502
-        const batchSize   = 2000
+        // ** lowered to 500 to satisfy Alchemy's 500‐block getLogs limit **
+        const batchSize   = 500
 
         // ── BATCH GETLOGS ──────────────────────────────────────────────────
         async function fetchAndParse(filter) {
@@ -46,7 +47,7 @@ export default function ActiveRoundsPage() {
             const end = Math.min(start + batchSize - 1, latestBlock)
             const logs = await alchemyProvider.getLogs({
               address,
-              topics: filter.topics,
+              topics:  filter.topics,
               fromBlock: start,
               toBlock:   end
             })
@@ -60,7 +61,6 @@ export default function ActiveRoundsPage() {
         // ── PULL EVENTS ────────────────────────────────────────────────────
         const startedArgs = await fetchAndParse(contract.filters.Started())
         const paidArgs    = await fetchAndParse(contract.filters.Paid())
-
         setDebug(d => ({ ...d, started: startedArgs.length, paid: paidArgs.length }))
 
         // ── BUILD ROUNDS ───────────────────────────────────────────────────
@@ -106,8 +106,8 @@ export default function ActiveRoundsPage() {
   return (
     <Layout>
       <Head><title>MadFill • Active Rounds</title></Head>
-      <main className="max-w-5xl mx-auto p-6 space-y-8">
 
+      <main className="max-w-5xl mx-auto p-6 space-y-8">
         <h1 className="text-4xl font-extrabold text-center bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-500">
           🏁 Active Rounds
         </h1>
@@ -118,9 +118,7 @@ export default function ActiveRoundsPage() {
           <CardContent className="text-sm space-y-1">
             {debug.error
               ? <p className="text-red-600">Error: {debug.error}</p>
-              : <>
-                  <p>Events fetched: Started {debug.started}, Paid {debug.paid} (parsed {debug.fetched})</p>
-                </>
+              : <p>Events fetched: Started {debug.started}, Paid {debug.paid} (parsed {debug.fetched})</p>
             }
           </CardContent>
         </Card>
@@ -151,22 +149,28 @@ export default function ActiveRoundsPage() {
           : sorted.length === 0
             ? <p className="text-center text-slate-400">No open rounds found.</p>
             : <div className="grid sm:grid-cols-2 gap-6">
-                {sorted.map(r=>(
+                {sorted.map(r => (
                   <motion.div key={r.id} whileHover={{ scale:1.02 }} transition={{ duration:0.2 }}>
                     <Card className="bg-slate-800 text-white rounded-xl shadow-lg overflow-hidden">
                       <CardHeader className="flex justify-between items-start">
                         <div>
                           <h2 className="text-2xl font-semibold">#{r.id}</h2>
                           <div className="mt-1 flex gap-2">
-                            <span className="bg-indigo-600 px-2 py-1 rounded-full text-xs">{r.blanks} blank{r.blanks>1?'s':''}</span>
-                            <span className="bg-emerald-600 px-2 py-1 rounded-full text-xs">{r.poolCount} entr{r.poolCount===1?'y':'ies'}</span>
+                            <span className="bg-indigo-600 px-2 py-1 rounded-full text-xs">
+                              {r.blanks} blank{r.blanks>1?'s':''}
+                            </span>
+                            <span className="bg-emerald-600 px-2 py-1 rounded-full text-xs">
+                              {r.poolCount} entr{r.poolCount===1?'y':'ies'}
+                            </span>
                           </div>
                         </div>
                         <Countdown targetTimestamp={r.deadline} className="text-sm" />
                       </CardHeader>
                       <CardContent className="flex justify-end">
                         <Link href={`/round/${r.id}`}>
-                          <a className="bg-gradient-to-r from-indigo-500 to-purple-500 px-4 py-2 rounded-lg">View & Enter</a>
+                          <a className="bg-gradient-to-r from-indigo-500 to-purple-500 px-4 py-2 rounded-lg">
+                            View & Enter
+                          </a>
                         </Link>
                       </CardContent>
                     </Card>
@@ -174,8 +178,8 @@ export default function ActiveRoundsPage() {
                 ))}
               </div>
         }
-
       </main>
+
       <Footer />
     </Layout>
   )
