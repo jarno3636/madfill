@@ -1,10 +1,11 @@
-// pages/active‐rounds.jsx
+// pages/active-rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
 import abi from '../abi/FillInStoryFull.json'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
+import { Button } from '@/components/ui/button'
 import Layout from '@/components/Layout'
 import Footer from '@/components/Footer'
 import Link from 'next/link'
@@ -13,43 +14,65 @@ export default function ActiveRoundsPage() {
   const [rounds, setRounds]       = useState(null)
   const [search, setSearch]       = useState('')
   const [sortOption, setSortOption] = useState('timeAsc')
-  const [loadError, setLoadError] = useState('')
+  const [debug, setDebug]         = useState({
+    address:       null,
+    fromBlock:     null,
+    latestBlock:   null,
+    startedIds:    [],
+    paidIds:       [],
+    openIds:       [],
+    error:         null
+  })
 
   useEffect(() => {
     ;(async () => {
-      const address = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
-      const alchemy = process.env.NEXT_PUBLIC_ALCHEMY_URL
-      if (!address) {
-        setLoadError('Contract address is not set.')
-        setRounds([])
-        return
-      }
-      if (!alchemy) {
-        setLoadError('Fallback RPC (Alchemy) is not set.')
-        setRounds([])
-        return
-      }
+      try {
+        // 1) Contract address
+        const address   = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
+        if (!address) throw new Error('NEXT_PUBLIC_FILLIN_ADDRESS not set')
 
-      // Helper to fetch events with a given provider
-      async function fetchRoundsFrom(provider) {
-        const ct          = new ethers.Contract(address, abi, provider)
+        // 2) Connect to Base mainnet (fallback to Alchemy if needed)
+        const providerBase    = new ethers.JsonRpcProvider('https://mainnet.base.org')
+        let   provider        = providerBase
+        try {
+          await providerBase.getBlockNumber()
+        } catch {
+          const alchemyUrl = process.env.NEXT_PUBLIC_ALCHEMY_URL
+          provider = new ethers.JsonRpcProvider(alchemyUrl)
+          await provider.getBlockNumber()
+        }
+
+        const ct = new ethers.Contract(address, abi, provider)
+
+        // 3) Block range
         const latestBlock = await provider.getBlockNumber()
         const fromBlock   = Number(process.env.NEXT_PUBLIC_START_BLOCK || 0)
 
-        // get Started and Paid events
-        const [startedEvs, paidEvs] = await Promise.all([
-          ct.queryFilter(ct.filters.Started(),  fromBlock, latestBlock),
-          ct.queryFilter(ct.filters.Paid(),     fromBlock, latestBlock)
-        ])
+        // 4) Started events
+        const startedEvs = await ct.queryFilter(
+          ct.filters.Started(),
+          fromBlock,
+          latestBlock
+        )
+        const startedIds = startedEvs.map(e => e.args.id.toNumber())
 
-        const poolCounts = paidEvs.reduce((acc, e) => {
-          const id = e.args.id.toNumber()
+        // 5) Paid events
+        const paidEvs = await ct.queryFilter(
+          ct.filters.Paid(),
+          fromBlock,
+          latestBlock
+        )
+        const paidIds = paidEvs.map(e => e.args.id.toNumber())
+
+        // tally pool sizes
+        const poolCounts = paidIds.reduce((acc, id) => {
           acc[id] = (acc[id] || 0) + 1
           return acc
         }, {})
 
-        const now = Math.floor(Date.now()/1000)
-        return startedEvs
+        // 6) Filter open
+        const now = Math.floor(Date.now() / 1000)
+        const openRounds = startedEvs
           .map(e => {
             const id       = e.args.id.toNumber()
             const deadline = e.args.deadline.toNumber()
@@ -61,25 +84,23 @@ export default function ActiveRoundsPage() {
             }
           })
           .filter(r => r.deadline > now)
-      }
+        const openIds = openRounds.map(r => r.id)
 
-      // Try Base public, then fallback to Alchemy if anything goes wrong
-      let provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-      try {
-        await provider.getBlockNumber()
-        const openRounds = await fetchRoundsFrom(provider)
+        // Update state
         setRounds(openRounds)
-      } catch {
-        try {
-          provider = new ethers.JsonRpcProvider(alchemy)
-          await provider.getBlockNumber()
-          const openRounds = await fetchRoundsFrom(provider)
-          setRounds(openRounds)
-        } catch (err) {
-          console.error('Both RPCs failed:', err)
-          setLoadError('⚠️ Unable to load active rounds right now. Please try again shortly.')
-          setRounds([])
-        }
+        setDebug({
+          address,
+          fromBlock,
+          latestBlock,
+          startedIds,
+          paidIds,
+          openIds,
+          error: null
+        })
+      } catch (err) {
+        console.error(err)
+        setRounds([])
+        setDebug(d => ({ ...d, error: err.message }))
       }
     })()
   }, [])
@@ -88,26 +109,41 @@ export default function ActiveRoundsPage() {
   const filtered = (rounds || []).filter(r =>
     !search || String(r.id).includes(search.trim())
   )
-  const sorted = [...filtered].sort((a,b) => {
+  const sorted = [...filtered].sort((a, b) => {
     switch (sortOption) {
-      case 'timeAsc':  return a.deadline  - b.deadline
-      case 'timeDesc': return b.deadline  - a.deadline
-      case 'poolAsc':  return a.poolCount - b.poolCount
-      case 'poolDesc': return b.poolCount - a.poolCount
-      default:         return 0
+      case 'timeAsc':   return a.deadline  - b.deadline
+      case 'timeDesc':  return b.deadline  - a.deadline
+      case 'poolAsc':   return a.poolCount - b.poolCount
+      case 'poolDesc':  return b.poolCount - a.poolCount
+      default:          return 0
     }
   })
 
   return (
     <Layout>
-      <Head>
-        <title>MadFill • Active Rounds</title>
-      </Head>
+      <Head><title>MadFill • Active Rounds</title></Head>
 
       <main className="max-w-4xl mx-auto p-6 space-y-8">
         <h1 className="text-3xl font-extrabold text-center text-indigo-400">
           🏁 Active Rounds
         </h1>
+
+        {/* 🔧 Debug Panel — remove or hide me once you’ve fixed your RPC/events */}
+        <Card className="bg-slate-200 text-slate-800">
+          <CardHeader><h2 className="font-bold">🔧 Debug Info</h2></CardHeader>
+          <CardContent className="text-sm space-y-1">
+            {debug.error
+              ? <p className="text-red-600">Error: {debug.error}</p>
+              : <>
+                  <p><strong>Contract:</strong> {debug.address}</p>
+                  <p><strong>Blocks:</strong> from {debug.fromBlock} to {debug.latestBlock}</p>
+                  <p><strong>Started IDs:</strong> {debug.startedIds.join(', ') || '—'}</p>
+                  <p><strong>Paid IDs:</strong> {debug.paidIds.join(', ') || '—'}</p>
+                  <p><strong>Open IDs:</strong> {debug.openIds.join(', ') || '—'}</p>
+                </>
+            }
+          </CardContent>
+        </Card>
 
         {/* Search & Sort */}
         <div className="flex flex-col md:flex-row justify-between gap-4">
@@ -130,35 +166,31 @@ export default function ActiveRoundsPage() {
           </select>
         </div>
 
-        {/* Loading / Error / Rounds */}
+        {/* Rounds List */}
         {rounds === null ? (
           <p className="text-center text-slate-400">Loading active rounds…</p>
-        ) : loadError ? (
-          <p className="text-center text-red-600">{loadError}</p>
         ) : sorted.length === 0 ? (
           <p className="text-center text-slate-400">No open rounds found.</p>
-        ) : (
-          sorted.map(r => (
-            <Card key={r.id} className="bg-slate-800 text-white shadow-lg rounded-xl">
-              <CardHeader className="flex justify-between items-center">
-                <div>
-                  <h2 className="text-xl font-semibold">Round #{r.id}</h2>
-                  <p className="text-sm opacity-75">
-                    {r.blanks} blank{r.blanks>1?'s':''} • {r.poolCount} entr{r.poolCount===1?'y':'ies'}
-                  </p>
-                </div>
-                <Countdown targetTimestamp={r.deadline} />
-              </CardHeader>
-              <CardContent className="flex justify-end">
-                <Link href={`/round/${r.id}`}>
-                  <a className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-4 py-2 rounded">
-                    View & Enter
-                  </a>
-                </Link>
-              </CardContent>
-            </Card>
-          ))
-        )}
+        ) : sorted.map(r => (
+          <Card key={r.id} className="bg-slate-800 text-white shadow-lg rounded-xl">
+            <CardHeader className="flex justify-between items-center">
+              <div>
+                <h2 className="text-xl font-semibold">Round #{r.id}</h2>
+                <p className="text-sm opacity-75">
+                  {r.blanks} blank{r.blanks > 1 && 's'} • {r.poolCount} entr{r.poolCount === 1 ? 'y' : 'ies'}
+                </p>
+              </div>
+              <Countdown targetTimestamp={r.deadline} />
+            </CardHeader>
+            <CardContent className="flex justify-end">
+              <Link href={`/round/${r.id}`}>
+                <a className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-4 py-2 rounded">
+                  View & Enter
+                </a>
+              </Link>
+            </CardContent>
+          </Card>
+        ))}
       </main>
 
       <Footer />
