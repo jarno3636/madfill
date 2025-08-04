@@ -1,82 +1,72 @@
 // pages/active-rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
+import { ethers } from 'ethers'
+import abi from '../abi/FillInStoryFull.json'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
 import Layout from '@/components/Layout'
 import Footer from '@/components/Footer'
 import Link from 'next/link'
-import { Interface } from 'ethers/lib/utils'
-import abi from '../abi/FillInStoryFull.json'
 
 export default function ActiveRoundsPage() {
   const [rounds, setRounds] = useState(null)
-  const [error, setError]   = useState('')
+  const [error,  setError]  = useState('')
 
   useEffect(() => {
     ;(async () => {
       try {
-        const API_KEY = process.env.NEXT_PUBLIC_BASESCAN_API_KEY
-        const ADDRESS = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
-        if (!API_KEY) throw new Error('Missing BASESCAN API key')
-        if (!ADDRESS) throw new Error('Missing contract address')
-        const iface = new Interface(abi)
+        // 1) config
+        const address = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
+        const rpcUrl  = process.env.NEXT_PUBLIC_ALCHEMY_URL
+        if (!address) throw new Error('Missing contract address')
+        if (!rpcUrl)  throw new Error('Missing Alchemy URL')
 
-        // figure out our “safe window” of blocks to scan
-        const nowBlockRes = await fetch(`https://api.basescan.org/api?module=proxy&action=eth_blockNumber&apikey=${API_KEY}`)
-        const latestBlock = parseInt(await nowBlockRes.json().then(d => d.result), 16)
-        const windowSize  = 200_000
-        const deployed    = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 0
-        const fromBlock   = Math.max(deployed, latestBlock - windowSize)
+        // 2) fallback provider
+        const alch   = new ethers.JsonRpcProvider(rpcUrl)
+        const poaPub = new ethers.JsonRpcProvider('https://mainnet.base.org')
+        const provider = new ethers.FallbackProvider([alch, poaPub])
+        const contract = new ethers.Contract(address, abi, provider)
 
-        async function fetchLogs(eventName) {
-          const topic0 = iface.getEventTopic(eventName)
-          const url = new URL('https://api.basescan.org/api')
-          url.searchParams.set('module',    'logs')
-          url.searchParams.set('action',    'getLogs')
-          url.searchParams.set('fromBlock', fromBlock.toString())
-          url.searchParams.set('toBlock',   'latest')
-          url.searchParams.set('address',   ADDRESS)
-          url.searchParams.set('topic0',    topic0)
-          url.searchParams.set('apikey',    API_KEY)
+        // 3) block range
+        const latest     = await provider.getBlockNumber()
+        const fromEnv    = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 0
+        const fromBlock  = fromEnv > 0 ? fromEnv : 33631502
+        const BATCH_SIZE = 500
 
-          const res = await fetch(url)
-          const json = await res.json()
-          if (json.status !== '1') {
-            // no logs or error
-            return []
+        // 4) fetchLogs in chunks
+        async function fetchArgs(eventFilter) {
+          let all = []
+          for (let start = fromBlock; start <= latest; start += BATCH_SIZE) {
+            const end = Math.min(start + BATCH_SIZE - 1, latest)
+            const logs = await provider.getLogs({
+              address,
+              topics:   eventFilter.topics,
+              fromBlock: start,
+              toBlock:   end
+            })
+            const parsed = logs.map(log => contract.interface.parseLog(log).args)
+            all = all.concat(parsed)
           }
-          return json.result.map(log =>
-            iface.parseLog({
-              topics:    log.topics,
-              data:      log.data,
-              // ethers needs these two to parse, but it only cares about topics+data
-              address:   ADDRESS,
-              blockHash: log.blockHash,
-              blockNumber: parseInt(log.blockNumber,16),
-              transactionHash: log.transactionHash,
-              logIndex: parseInt(log.logIndex,16),
-              transactionIndex: 0
-            }).args
-          )
+          return all
         }
 
-        // pull events
-        const [startedArgs, paidArgs] = await Promise.all([
-          fetchLogs('Started'),
-          fetchLogs('Paid')
+        // 5) pull Started & Paid
+        const [started, paid] = await Promise.all([
+          fetchArgs(contract.filters.Started()),
+          fetchArgs(contract.filters.Paid())
         ])
 
-        // tally pools
-        const poolCounts = paidArgs.reduce((m, ev) => {
+        // 6) tally pools
+        const poolCounts = paid.reduce((m, ev) => {
           const id = Number(ev.id)
           m[id] = (m[id] || 0) + 1
           return m
         }, {})
 
-        // build your open rounds list
-        const now = Math.floor(Date.now()/1000)
-        const open = startedArgs
+        // 7) build open rounds
+        const now = Math.floor(Date.now() / 1000)
+        const open = started
           .map(ev => ({
             id:        Number(ev.id),
             blanks:    Number(ev.blanks),
@@ -88,7 +78,7 @@ export default function ActiveRoundsPage() {
         setRounds(open)
       } catch (e) {
         console.error(e)
-        setError(e.message || 'Failed to load rounds')
+        setError(e.message || 'Could not load active rounds.')
         setRounds([])
       }
     })()
@@ -104,12 +94,12 @@ export default function ActiveRoundsPage() {
 
         {error && (
           <p className="text-center text-red-500">
-            ⚠️ Unable to load active rounds: {error}
+            ⚠️ {error}
           </p>
         )}
 
         {rounds === null ? (
-          <p className="text-center text-gray-500">Loading…</p>
+          <p className="text-center text-gray-500">Loading active rounds…</p>
         ) : rounds.length === 0 ? (
           <p className="text-center text-gray-500">No open rounds found.</p>
         ) : (
@@ -119,7 +109,7 @@ export default function ActiveRoundsPage() {
                 <div>
                   <h2 className="text-xl">Round #{r.id}</h2>
                   <p className="text-sm opacity-75">
-                    {r.blanks} blank{r.blanks>1?'s':''} • {r.poolCount} entr{r.poolCount===1?'y':'ies'}
+                    {r.blanks} blank{r.blanks > 1 ? 's' : ''} • {r.poolCount} entr{r.poolCount === 1 ? 'y' : 'ies'}
                   </p>
                 </div>
                 <Countdown targetTimestamp={r.deadline} />
