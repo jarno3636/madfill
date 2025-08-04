@@ -1,16 +1,15 @@
-// pages/index.jsx
 import React, { Component, useState, useEffect, Fragment } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
-import { useWindowSize } from 'react-use'
+// import { useWindowSize } from 'react-use'
 import abi from '../abi/FillInStoryFull.json'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
-import { Countdown } from '@/components/Countdown'
+// import { Countdown } from '@/components/Countdown'
 import { categories, durations } from '../data/templates'
 import Layout from '@/components/Layout'
-import { Tooltip } from '@/components/ui/tooltip'
-import Link from 'next/link'
+// import { Tooltip } from '@/components/ui/tooltip'
+// import Link from 'next/link'
 
 // --- ErrorBoundary to catch any render errors ---
 class ErrorBoundary extends Component {
@@ -50,7 +49,7 @@ export default function Home() {
   const [recentWinners, setRecentWinners] = useState([])
   const [shareText, setShareText] = useState('')
   const [busy, setBusy] = useState(false)
-  const { width, height } = useWindowSize()
+  // const { width, height } = useWindowSize()
   const ENTRY_FEE = '0.001'
 
   const [catIdx, setCatIdx] = useState(0)
@@ -190,7 +189,7 @@ export default function Home() {
           <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
             <CardHeader className="flex items-center gap-2">
               <h2 className="text-xl font-bold">{!roundId ? 'Start a New Round' : `Round #${roundId}`}</h2>
-              <Tooltip text="0.5% cut each way" />
+              {/* <Tooltip text="0.5% cut each way" /> */}
             </CardHeader>
             <CardContent className="space-y-4">
               {/* Category / Template / Duration */}
@@ -260,15 +259,13 @@ export default function Home() {
                 <div className="mt-4 space-y-2">
                   <p className="font-semibold">📣 Share:</p>
                   <div className="flex gap-2">
-                    <a href={`https://twitter.com/intent/tweet?text=${shareText}`}
+                    {/* <a href={`https://twitter.com/intent/tweet?text=${shareText}`}
                        target="_blank" rel="noopener noreferrer"
                        className="bg-blue-600 px-4 py-2 rounded">🐦 Twitter</a>
                     <a href={`https://warpcast.com/~/compose?text=${shareText}`}
                        target="_blank" rel="noopener noreferrer"
                        className="bg-purple-600 px-4 py-2 rounded">🌀 Farcaster</a>
-                    <Link href={`/round/${roundId}`}>
-                      <a className="bg-slate-700 px-4 py-2 rounded">📜 View</a>
-                    </Link>
+                    <Link href={`/round/${roundId}"><a className="bg-slate-700 px-4 py-2 rounded">📜 View</a></Link> */}
                   </div>
                 </div>
               )}
