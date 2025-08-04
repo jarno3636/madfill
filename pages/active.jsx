@@ -1,7 +1,7 @@
 // pages/active-rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
-import { ethers, Interface } from 'ethers'
+import { ethers } from 'ethers'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
 import Layout from '@/components/Layout'
@@ -24,8 +24,8 @@ export default function ActiveRoundsPage() {
         if (!API_KEY) throw new Error('Missing BASESCAN API key')
         if (!ADDRESS) throw new Error('Missing contract address')
 
-        // ethers v6: import Interface directly
-        const iface = new Interface(abi)
+        // use utils.Interface
+        const iface = new ethers.utils.Interface(abi)
 
         async function fetchLogs(topic0) {
           const params = new URLSearchParams({
@@ -42,26 +42,28 @@ export default function ActiveRoundsPage() {
           if (data.status !== '1') {
             throw new Error(data.message || 'no logs')
           }
+          // parse each raw log
           return data.result.map(log =>
             iface.parseLog({ data: log.data, topics: log.topics }).args
           )
         }
 
+        // topics
         const startedTopic = iface.getEventTopic('Started')
         const paidTopic    = iface.getEventTopic('Paid')
 
-        // fetch both in parallel
+        // fetch in parallel
         const [startedArgs, paidArgs] =
           await Promise.all([fetchLogs(startedTopic), fetchLogs(paidTopic)])
 
-        // tally pool sizes
+        // tally pools
         const poolCounts = paidArgs.reduce((acc, ev) => {
           const id = Number(ev.id)
           acc[id] = (acc[id] || 0) + 1
           return acc
         }, {})
 
-        const now = Math.floor(Date.now()/1000)
+        const now = Math.floor(Date.now() / 1000)
         const openRounds = startedArgs
           .map(ev => ({
             id:        Number(ev.id),
@@ -84,13 +86,13 @@ export default function ActiveRoundsPage() {
   const filtered = (rounds || []).filter(r =>
     !search || String(r.id).includes(search.trim())
   )
-  const sorted = [...filtered].sort((a,b) => {
+  const sorted = [...filtered].sort((a, b) => {
     switch (sortOption) {
-      case 'timeAsc':   return a.deadline  - b.deadline
-      case 'timeDesc':  return b.deadline  - a.deadline
-      case 'poolAsc':   return a.poolCount - b.poolCount
-      case 'poolDesc':  return b.poolCount - a.poolCount
-      default:          return 0
+      case 'timeAsc':  return a.deadline  - b.deadline
+      case 'timeDesc': return b.deadline  - a.deadline
+      case 'poolAsc':  return a.poolCount - b.poolCount
+      case 'poolDesc': return b.poolCount - a.poolCount
+      default:         return 0
     }
   })
 
@@ -136,7 +138,7 @@ export default function ActiveRoundsPage() {
                 <div>
                   <h2 className="text-xl">Round #{r.id}</h2>
                   <p className="text-sm opacity-75">
-                    {r.blanks} blank{r.blanks>1?'s':''} • {r.poolCount} entr{r.poolCount===1?'y':'ies'}
+                    {r.blanks} blank{r.blanks > 1 ? 's' : ''} • {r.poolCount} entr{r.poolCount === 1 ? 'y' : 'ies'}
                   </p>
                 </div>
                 <Countdown targetTimestamp={r.deadline} />
