@@ -1,4 +1,3 @@
-// pages/index.jsx
 import React, { Component, useState, useEffect, Fragment } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -12,7 +11,7 @@ import Layout from '@/components/Layout'
 import { Tooltip } from '@/components/ui/tooltip'
 import Link from 'next/link'
 
-// --- ErrorBoundary to catch any render errors ---
+// ErrorBoundary to catch render errors
 class ErrorBoundary extends Component {
   constructor(props) {
     super(props)
@@ -45,6 +44,7 @@ export default function Home() {
   const [roundId, setRoundId] = useState('')
   const [blankIndex, setBlankIndex] = useState('0')
   const [roundName, setRoundName] = useState('')
+  const [word, setWord] = useState('')           // restored inline word input
   const [duration, setDuration] = useState(durations[0].value)
   const [deadline, setDeadline] = useState(null)
   const [recentWinners, setRecentWinners] = useState([])
@@ -64,7 +64,7 @@ export default function Home() {
     const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
     const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
     ct.rounds(BigInt(roundId))
-      .then(info => setDeadline(Number(info.sd)))       // ← cast BigInt to Number
+      .then(info => setDeadline(info.sd.toNumber()))
       .catch(() => setDeadline(null))
   }, [roundId])
 
@@ -77,7 +77,7 @@ export default function Home() {
         const evs = await ct.queryFilter(ct.filters.Draw1(), 0, 'latest')
         setRecentWinners(
           evs.slice(-5).reverse().map(e => ({
-            roundId: Number(e.args.id),          // ← cast BigInt to Number
+            roundId: e.args.id.toNumber(),
             winner: e.args.winner,
           }))
         )
@@ -91,7 +91,6 @@ export default function Home() {
     try {
       setBusy(true)
       setStatus('')
-
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer   = await provider.getSigner()
       const ct       = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
@@ -106,47 +105,35 @@ export default function Home() {
           BigInt(duration * 86400)
         )
         await tx.wait()
-
         const ev = await ct.queryFilter(ct.filters.Started(), 0, 'latest')
         newId = ev[ev.length - 1].args.id.toString()
         setRoundId(newId)
-
         const info = await ct.rounds(BigInt(newId))
-        setDeadline(Number(info.sd))                  // ← cast BigInt to Number
+        setDeadline(info.sd.toNumber())
         localStorage.setItem(`madfill-roundname-${newId}`, roundName || '')
       }
 
-      // 2) Prompt user for word + fee
-      const userWord = window.prompt(
-        `Round #${newId} – enter your word for blank #${blankIndex} (fee: ${ENTRY_FEE} BASE)`
-      )
-      if (!userWord) {
-        setStatus('❌ Submission cancelled.')
-        return
-      }
-
+      // 2) Submit entry (pay fee)
       setStatus('⏳ Submitting entry…')
-      const data = ethers.encodeBytes32String(userWord)
+      const data = ethers.encodeBytes32String(word)
       const tx2  = await ct.submitPaid(
         BigInt(newId),
         Number(blankIndex),
         data,
-        { value: ethers.parseEther(ENTRY_FEE) }
+        { value: ethers.parseEther(ENTRY_FE E) }
       )
       await tx2.wait()
 
       setStatus(`✅ Round ${newId} entry submitted!`)
-
       // share preview
       const preview = tpl.parts.map((part, i) =>
         i < tpl.blanks
-          ? `${part}${i === Number(blankIndex) ? userWord : '____'}`
+          ? `${part}${i === Number(blankIndex) ? word : '____'}`
           : part
       ).join('')
       setShareText(encodeURIComponent(
         `I just entered MadFill!\n\n${preview}\n\nPlay: https://madfill.vercel.app`
       ))
-
     } catch (e) {
       const msg = (e?.message || '').toLowerCase()
       if (msg.includes('denied')) {
@@ -194,28 +181,26 @@ export default function Home() {
           {/* Setup */}
           <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
             <CardHeader className="flex items-center gap-2">
-              <h2 className="text-xl font-bold">
-                {!roundId ? 'Start a New Round' : `Round #${roundId}`}
-              </h2>
+              <h2 className="text-xl font-bold">{!roundId ? 'Start a New Round' : `Round #${roundId}`}</h2>
               <Tooltip text="0.5% cut each way" />
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Category / Template / Duration */}
+              {/* selectors */}
               <div className="grid md:grid-cols-3 gap-4">
-                {[
+                {[ 
                   ['Category', catIdx, setCatIdx, categories],
                   ['Template', tplIdx, setTplIdx, selectedCategory.templates],
                   ['Duration', duration, setDuration, durations]
-                ].map(([lbl, val, fn, opts]) => (
+                ].map(([lbl,val,fn,opts])=>(
                   <div key={lbl}>
                     <label>{lbl}</label>
                     <select
                       className="w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1"
                       value={val}
-                      onChange={e => fn(+e.target.value)}
+                      onChange={e=>fn(+e.target.value)}
                       disabled={busy}
                     >
-                      {opts.map((o, i) => (
+                      {opts.map((o,i)=>(
                         <option key={i} value={o.value ?? i}>
                           {o.label ?? o.name}
                         </option>
@@ -227,40 +212,42 @@ export default function Home() {
 
               {/* Card name */}
               <input
-                type="text"
-                maxLength={10}
-                placeholder="Card Name"
+                type="text" maxLength={10} placeholder="Card Name"
                 className="w-full bg-slate-900 text-white border rounded px-2 py-1"
-                value={roundName}
-                onChange={e => setRoundName(e.target.value)}
+                value={roundName} onChange={e=>setRoundName(e.target.value)}
                 disabled={busy}
               />
 
               {/* Template preview */}
               <div className="bg-slate-900 border border-slate-700 rounded p-4 font-mono text-sm">
-                {tpl.parts.map((part, i) => (
+                {tpl.parts.map((part,i)=>(
                   <Fragment key={i}>
                     <span>{part}</span>
                     {i < tpl.blanks && (
                       <span
-                        className={blankStyle(i === +blankIndex)}
-                        onClick={() => setBlankIndex(String(i))}
-                      >
-                        {i}
-                      </span>
+                        className={blankStyle(i===+blankIndex)}
+                        onClick={()=>setBlankIndex(String(i))}
+                      >{i}</span>
                     )}
                   </Fragment>
                 ))}
               </div>
 
-              <p className="text-sm">
-                Selected Blank: <strong>{blankIndex}</strong>
-              </p>
+              <p className="text-sm">Selected Blank: <strong>{blankIndex}</strong></p>
+
+              {/* Word input */}
+              <input
+                type="text" placeholder="Your Word"
+                className="w-full bg-slate-900 text-white border rounded px-2 py-1"
+                value={word}
+                onChange={e=>setWord(e.target.value)}
+                disabled={busy}
+              />
 
               {/* Create / Enter */}
               <Button
                 onClick={handleUnifiedSubmit}
-                disabled={busy}
+                disabled={!word || busy}
                 className="bg-indigo-600 hover:bg-indigo-500 w-full"
               >
                 {!roundId ? '🚀 Create Round' : '🪪 Enter Pool'}
@@ -269,25 +256,17 @@ export default function Home() {
               {/* Status */}
               {status && <p className="text-sm mt-2">{status}</p>}
 
-              {/* Sharing */}
+              {/* Share */}
               {roundId && shareText && (
                 <div className="mt-4 space-y-2">
                   <p className="font-semibold">📣 Share:</p>
                   <div className="flex gap-2">
-                    <a
-                      href={`https://twitter.com/intent/tweet?text=${shareText}`}
-                      target="_blank" rel="noopener noreferrer"
-                      className="bg-blue-600 px-4 py-2 rounded"
-                    >
-                      🐦 Twitter
-                    </a>
-                    <a
-                      href={`https://warpcast.com/~/compose?text=${shareText}`}
-                      target="_blank" rel="noopener noreferrer"
-                      className="bg-purple-600 px-4 py-2 rounded"
-                    >
-                      🌀 Farcaster
-                    </a>
+                    <a href={`https://twitter.com/intent/tweet?text=${shareText}`}
+                       target="_blank" rel="noopener noreferrer"
+                       className="bg-blue-600 px-4 py-2 rounded">🐦 Twitter</a>
+                    <a href={`https://warpcast.com/~/compose?text=${shareText}`}
+                       target="_blank" rel="noopener noreferrer"
+                       className="bg-purple-600 px-4 py-2 rounded">🌀 Farcaster</a>
                     <Link href={`/round/${roundId}`}>
                       <a className="bg-slate-700 px-4 py-2 rounded">📜 View</a>
                     </Link>
@@ -299,21 +278,13 @@ export default function Home() {
 
           {/* Recent Winners */}
           <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
-            <CardHeader>
-              <h2 className="text-xl font-bold">🎉 Recent Winners</h2>
-            </CardHeader>
+            <CardHeader><h2 className="text-xl font-bold">🎉 Recent Winners</h2></CardHeader>
             <CardContent className="text-sm space-y-1">
               {recentWinners.length === 0
                 ? <p>No winners yet.</p>
-                : recentWinners.map((w, i) => {
-                    const nm =
-                      localStorage.getItem(`madfill-roundname-${w.roundId}`) ||
-                      `Round #${w.roundId}`
-                    return (
-                      <p key={i}>
-                        <strong>{nm}</strong> → <code>{w.winner}</code>
-                      </p>
-                    )
+                : recentWinners.map((w,i)=> {
+                    const nm = localStorage.getItem(`madfill-roundname-${w.roundId}`) || `Round #${w.roundId}`
+                    return <p key={i}><strong>{nm}</strong> → <code>{w.winner}</code></p>
                   })}
             </CardContent>
           </Card>
