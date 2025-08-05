@@ -129,18 +129,19 @@ export default function ActiveRoundsPage() {
         ) : (
           <div className="grid md:grid-cols-2 gap-6">
             {sorted.map(r => (
-              <div key={r.id} className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-xl shadow-md p-4">
+              <div key={r.id} className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-xl shadow-md p-5 border border-slate-700">
                 <div className="flex justify-between items-start mb-2">
                   <div>
-                    <h2 className="text-lg font-semibold text-white">{r.name}</h2>
+                    <h2 className="text-lg font-semibold text-white truncate max-w-xs">{r.name}</h2>
                     <p className="text-sm text-slate-300">
-                      {r.blanks} blank{r.blanks > 1 ? 's' : ''} • {r.poolCount} entr{r.poolCount === 1 ? 'y' : 'ies'}
+                      📝 {r.blanks} blank{r.blanks > 1 ? 's' : ''}<br/>
+                      👥 {r.poolCount} entr{r.poolCount === 1 ? 'y' : 'ies'}
                     </p>
                   </div>
                   <Countdown targetTimestamp={r.deadline} className="text-xs text-white" />
                 </div>
-                <div className="text-sm text-green-400 font-bold mb-2">
-                  ≈ ${(r.poolCount * 0.001 * basePrice).toFixed(2)} USD in pot
+                <div className="text-sm text-green-400 font-bold mb-3">
+                  💰 ≈ ${(r.poolCount * 0.001 * basePrice).toFixed(2)} USD in pot
                 </div>
                 <div className="text-right">
                   <Link href={`/round/${r.id}`}>
