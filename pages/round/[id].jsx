@@ -1,12 +1,13 @@
-// pages/round/[id].jsx
+'use client'
+
 import { useRouter } from 'next/router'
 import { useEffect, useState } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
 import abi from '@/abi/FillInStoryFull.json'
 import Layout from '@/components/Layout'
-import Footer from '@/components/Footer'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
+import { categories } from '@/data/templates'
 import { Button } from '@/components/ui/button'
 import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
@@ -16,16 +17,18 @@ export default function RoundDetailPage() {
   const id = query.id
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState(null)
-  const [round, setRound]         = useState(null)
+  const [roundData, setRoundData] = useState(null)
   const [address, setAddress]     = useState(null)
   const [status, setStatus]       = useState('')
   const [claimed, setClaimed]     = useState(false)
+  const [basePrice, setBasePrice] = useState(0)
   const { width, height }         = useWindowSize()
 
+  // connect wallet
   useEffect(() => {
     if (window.ethereum) {
       window.ethereum.request({ method: 'eth_requestAccounts' })
-        .then(([acct]) => setAddress(acct.toLowerCase()))
+        .then(accts => setAddress(accts[0]))
         .catch(console.error)
     }
   }, [])
@@ -37,34 +40,64 @@ export default function RoundDetailPage() {
 
     ;(async () => {
       try {
+        const rpcUrl = process.env.NEXT_PUBLIC_ALCHEMY_URL
         const provider = new ethers.FallbackProvider([
-          new ethers.JsonRpcProvider(process.env.NEXT_PUBLIC_ALCHEMY_URL),
-          new ethers.JsonRpcProvider('https://mainnet.base.org')
+          new ethers.JsonRpcProvider(rpcUrl),
+          new ethers.JsonRpcProvider('https://mainnet.base.org'),
         ])
-        const contract = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
+        const ct = new ethers.Contract(
+          process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
+          abi,
+          provider
+        )
 
-        const [onchain, winner, hasClaimed] = await Promise.all([
-          contract.rounds(BigInt(id)),
-          contract.w2(BigInt(id)),
-          contract.c2(BigInt(id))
+        const [round, winner, claimedStatus] = await Promise.all([
+          ct.rounds(BigInt(id)),
+          ct.w2(BigInt(id)),
+          ct.c2(BigInt(id)),
         ])
 
-        const original = onchain.pA.map(w => ethers.decodeBytes32String(w))
-        const challenger = onchain.fA.map(w => ethers.decodeBytes32String(w))
+        // template metadata from localStorage
+        const tplIx = Number(localStorage.getItem(`madfill-tplIdx-${id}`)) || 0
+        const catIx = Number(localStorage.getItem(`madfill-catIdx-${id}`)) || 0
+        const name  = localStorage.getItem(`madfill-name-${id}`) || 'Untitled'
+        const tpl   = categories?.[catIx]?.templates?.[tplIx]
 
-        setRound({
-          original,
-          challenger,
+        // original & challenger words
+        const allSubs = await ct.getSubmissions(BigInt(id))
+        const originalSub = allSubs.find(s => s.paid)
+        const challengers = allSubs.filter(s => !s.paid)
+
+        const originalWords = originalSub
+          ? [ethers.decodeBytes32String(originalSub.word)]
+          : []
+        const challengerWords = challengers.map(s =>
+          ethers.decodeBytes32String(s.word)
+        )
+
+        // fetch BASE price from CoinGecko
+        const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
+        const json = await res.json()
+        setBasePrice(json.base?.usd || 0)
+
+        // state
+        setClaimed(claimedStatus)
+        setRoundData({
+          tpl,
+          name,
+          deadline: round.deadline.toNumber(),
+          originalWords,
+          challengerWords,
           votes: {
-            original: onchain.vP.toString(),
-            challenger: onchain.vF.toString(),
+            original: round.vP.toString(),
+            challenger: round.vF.toString(),
           },
           winner: winner.toLowerCase(),
+          prizeCount: challengers.length,
         })
-        setClaimed(hasClaimed)
-      } catch (err) {
-        console.error(err)
-        setError(err.message || 'Failed to load round')
+      } catch (e) {
+        console.error(e)
+        setError(e.message || 'Failed to load round')
       } finally {
         setLoading(false)
       }
@@ -73,25 +106,41 @@ export default function RoundDetailPage() {
 
   async function handleClaim() {
     try {
-      setStatus('Claiming…')
+      setStatus('Claiming...')
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer   = await provider.getSigner()
-      const ct       = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
+      const ct       = new ethers.Contract(
+        process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
+        abi,
+        signer
+      )
       await (await ct.claim2(BigInt(id))).wait()
       setClaimed(true)
-      setStatus('✅ Prize Claimed!')
-    } catch (err) {
-      console.error(err)
-      setStatus('❌ ' + (err.message || 'Claim failed'))
+      setStatus('✅ Claimed!')
+    } catch (e) {
+      console.error(e)
+      setStatus('❌ ' + (e.message || 'Claim failed'))
     }
   }
 
-  function renderCard(words, label, highlight) {
+  function renderCard(parts, words, title, highlight) {
     return (
-      <Card className={`bg-slate-900 text-white shadow-lg p-4 ${highlight ? 'ring-4 ring-yellow-400' : ''}`}>
-        <CardHeader className="font-bold text-center text-xl">{label}</CardHeader>
-        <CardContent className="mt-2 space-x-1 text-center text-yellow-300 font-mono">
-          {words.map((w, i) => <span key={i}>{w}</span>)}
+      <Card
+        className={`bg-slate-900 text-white shadow-xl overflow-hidden transition
+          ${highlight ? 'ring-4 ring-yellow-400' : ''}`}
+      >
+        <CardHeader className="bg-slate-800 text-center font-bold text-white">
+          {title}
+        </CardHeader>
+        <CardContent className="p-4 text-center font-mono text-lg leading-relaxed">
+          {parts.map((part, i) => (
+            <span key={i}>
+              {part}
+              {i < words.length && (
+                <span className="text-yellow-300">{words[i]}</span>
+              )}
+            </span>
+          ))}
         </CardContent>
       </Card>
     )
@@ -100,42 +149,65 @@ export default function RoundDetailPage() {
   return (
     <Layout>
       <Head><title>MadFill Round #{id}</title></Head>
-      <main className="max-w-4xl mx-auto p-6 space-y-8">
-        <h1 className="text-3xl text-indigo-400 font-bold text-center">Round #{id}</h1>
 
-        {loading && <p className="text-white">Loading round…</p>}
+      <main className="max-w-3xl mx-auto p-4 space-y-6 text-white">
+        {loading && <p>Loading round…</p>}
         {error   && <p className="text-red-400">Error: {error}</p>}
 
-        {round && (
+        {roundData && (
           <>
+            <h1 className="text-3xl font-bold text-center text-indigo-300">
+              Round #{id} — {roundData.name}
+            </h1>
+
             <div className="grid md:grid-cols-2 gap-6">
               {renderCard(
-                round.original,
+                roundData.tpl?.parts || ['Missing template'],
+                roundData.originalWords,
                 'Original Card',
-                Number(round.votes.original) >= Number(round.votes.challenger)
+                Number(roundData.votes.original) >= Number(roundData.votes.challenger)
               )}
               {renderCard(
-                round.challenger,
+                roundData.tpl?.parts || ['Missing template'],
+                roundData.challengerWords,
                 'Challenger Card',
-                Number(round.votes.challenger) > Number(round.votes.original)
+                Number(roundData.votes.challenger) > Number(roundData.votes.original)
               )}
             </div>
 
-            <div className="text-white text-center space-y-2">
-              <p>🗳️ Votes — Original: <strong>{round.votes.original}</strong> | Challenger: <strong>{round.votes.challenger}</strong></p>
-              <p className="break-all">🏆 Winner: <code className="text-green-400">{round.winner}</code></p>
+            <div className="space-y-2">
+              <p>
+                🗳️ Votes — Original: <strong>{roundData.votes.original}</strong> | Challenger: <strong>{roundData.votes.challenger}</strong>
+              </p>
+              <p>
+                💰 Prize pool:{' '}
+                <strong>
+                  {roundData.prizeCount} entry{roundData.prizeCount !== 1 ? 'ies' : ''} × 0.001 BASE ={' '}
+                  {(roundData.prizeCount * 0.001).toFixed(3)} BASE (${(roundData.prizeCount * 0.001 * basePrice).toFixed(2)})
+                </strong>
+              </p>
+              <p className="break-all">
+                🏆 Winner address:{' '}
+                <code className="text-green-400">
+                  {roundData.winner}
+                </code>
+              </p>
 
-              {address === round.winner && !claimed && (
-                <Button onClick={handleClaim} className="bg-green-600 hover:bg-green-500">🎁 Claim Prize</Button>
+              {Number(roundData.deadline) < Date.now()/1000 &&
+               address?.toLowerCase() === roundData.winner &&
+               !claimed && (
+                <Button onClick={handleClaim} className="bg-green-600 hover:bg-green-500">
+                  🎁 Claim Prize
+                </Button>
               )}
               {claimed && <p className="text-green-400">✅ Prize Claimed!</p>}
-              {status && <p className="text-yellow-300">{status}</p>}
+              {status  && <p className="text-yellow-300">{status}</p>}
             </div>
-            {claimed && <Confetti width={width} height={height} />}          
+
+            {claimed && <Confetti width={width} height={height} />}
           </>
         )}
       </main>
-      <Footer />
     </Layout>
   )
 }
