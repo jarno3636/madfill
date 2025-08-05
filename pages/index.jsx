@@ -49,7 +49,7 @@ export default function Home() {
   const [roundName, setRoundName] = useState('')
   const [word, setWord] = useState('')
   const [duration, setDuration] = useState(durations[0].value)
-  const [feeUsd, setFeeUsd] = useState(1)
+  const [feeUsd, setFeeUsd] = useState(1.0)
   const [deadline, setDeadline] = useState(null)
   const [recentWinners, setRecentWinners] = useState([])
   const [shareText, setShareText] = useState('')
@@ -83,7 +83,7 @@ export default function Home() {
       let newId = roundId
 
       if (!roundId) {
-        setStatus('🚀 Creating new round...')
+        setStatus('🚀 Creating new round & submitting…')
         const tx = await ct.createPool1(
           roundName || `Untitled`,
           tpl.parts,
@@ -100,7 +100,7 @@ export default function Home() {
         setDeadline(Number(info.deadline))
         localStorage.setItem(`madfill-roundname-${newId}`, roundName)
       } else {
-        setStatus('✍️ Submitting your entry...')
+        setStatus('✍️ Submitting your entry…')
         const tx2 = await ct.joinPool1(newId, word, signer.address.slice(0, 6), {
           value: ethers.parseEther('0.001')
         })
@@ -123,20 +123,27 @@ export default function Home() {
   return (
     <ErrorBoundary>
       <Layout>
-        <Head>
-          <title>MadFill</title>
-        </Head>
+        <Head><title>MadFill</title></Head>
         {shareText && <Confetti width={width} height={height} />}
 
         <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+          <Card className="bg-purple-800 text-white rounded p-6 mb-6 shadow-xl">
+            <h3 className="text-xl font-extrabold mb-3">🧠 What is MadFill?</h3>
+            <ul className="list-disc list-inside text-sm space-y-1">
+              <li><strong>Create a Round:</strong> Pick a template, add your first word, and launch the game. Your word sets the tone.</li>
+              <li><strong>Join a Round:</strong> Other players jump in and fill in the remaining blanks. Each entry costs a small fee (you set it!).</li>
+              <li><strong>Win:</strong> At the end of the round, a random participant is chosen to win the prize pool.</li>
+              <li><strong>Pool 2 Showdown:</strong> Think you can beat the original? Submit a challenger card and let the community vote!</li>
+            </ul>
+          </Card>
+
           <Card className="bg-gradient-to-r from-yellow-500 to-red-500 text-white rounded p-6 mb-6 shadow-lg">
-            <h3 className="text-lg font-bold mb-2">💰 Game Details</h3>
+            <h3 className="text-lg font-bold mb-2">💰 Fee Structure</h3>
             <ul className="list-disc list-inside text-sm">
-              <li><strong>Step 1:</strong> Pick a template and create your round with your first word.</li>
-              <li><strong>Step 2:</strong> Other players submit one word each for a small fee.</li>
-              <li><strong>Step 3:</strong> Winner is chosen randomly from all entries!</li>
-              <li><strong>Pool 2:</strong> Challenge completed cards and let the community vote.</li>
-              <li><strong>Fees:</strong> You choose the entry fee in USD. A 0.5% fee is collected on entries and payouts.</li>
+              <li><strong>Entry Fee:</strong> Set in USD when you create the round. Automatically converted to BASE.</li>
+              <li><strong>Claim Fee:</strong> 0.5% of the winnings.</li>
+              <li><strong>Dev Cut:</strong> 0.5% of all submissions and claims go to the dev wallet to support the game.</li>
+              <li><strong>Flexibility:</strong> You choose how expensive the round is, from 0.25 to 10 USD.</li>
             </ul>
           </Card>
         </motion.div>
@@ -150,7 +157,7 @@ export default function Home() {
               <Tooltip text="0.5% cut on entry & claim" />
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid md:grid-cols-3 gap-4">
+              <div className="grid md:grid-cols-4 gap-4">
                 {[['Category', catIdx, setCatIdx, categories], ['Template', tplIdx, setTplIdx, selectedCategory.templates], ['Duration', duration, setDuration, durations]].map(([lbl, val, fn, opts]) => (
                   <div key={lbl}>
                     <label className="block text-sm mb-1">{lbl}</label>
@@ -160,8 +167,12 @@ export default function Home() {
                   </div>
                 ))}
                 <div>
-                  <label className="block text-sm mb-1">Entry Fee (USD)</label>
-                  <input type="number" min="0.25" max="10" step="0.25" className="w-full bg-slate-900 text-white border rounded px-2 py-1" value={feeUsd} onChange={e => setFeeUsd(Number(e.target.value))} disabled={busy} />
+                  <label className="block text-sm mb-1">💵 Entry Fee</label>
+                  <select className="w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1" value={feeUsd} onChange={e => setFeeUsd(Number(e.target.value))} disabled={busy}>
+                    {[0.25, 0.5, 1, 2, 3, 5, 10].map(val => (
+                      <option key={val} value={val}>${val.toFixed(2)}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
