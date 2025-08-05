@@ -22,79 +22,88 @@ export default function RoundDetailPage() {
   const [claimed, setClaimed]     = useState(false)
   const { width, height }         = useWindowSize()
 
-  // ask user to connect wallet
+  // 1) Ask for wallet
   useEffect(() => {
     if (window.ethereum) {
       window.ethereum
         .request({ method: 'eth_requestAccounts' })
-        .then(accts => setAddress(accts[0]))
+        .then(a=> setAddress(a[0]))
         .catch(console.error)
     }
   }, [])
 
-  // load round
+  // 2) Load everything on-chain + events
   useEffect(() => {
     if (!id) return
     setLoading(true)
     setError(null)
 
-    ;(async () => {
+    (async () => {
       try {
-        // 1) provider & contract
+        // — provider & contract
         const rpcUrl = process.env.NEXT_PUBLIC_ALCHEMY_URL
         const provider = new ethers.FallbackProvider([
           new ethers.JsonRpcProvider(rpcUrl),
           new ethers.JsonRpcProvider('https://mainnet.base.org'),
         ])
         const ct = new ethers.Contract(
-          process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
-          abi,
-          provider
+          process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider
         )
 
-        // 2) on-chain state, winner, claim status
-        const [ onchain, winnerAddr, hasClaimed ] = await Promise.all([
+        // — on-chain state
+        const [ info, winnerAddr, hasClaimed ] = await Promise.all([
           ct.rounds(BigInt(id)),
           ct.w2(BigInt(id)),
           ct.c2(BigInt(id)),
         ])
 
-        // 3) find the Started event to know blanks/template (if needed)
-        const deployBlock = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 33631502
-        const latestBlock = await provider.getBlockNumber()
-        const BATCH       = 500
-        let startEvtArgs  = null
-
-        for (let start = deployBlock; start <= latestBlock; start += BATCH) {
-          const end = Math.min(start + BATCH - 1, latestBlock)
-          const evs = await ct.queryFilter(ct.filters.Started(), start, end)
-          const found = evs.find(e => e.args.id.toString() === id)
-          if (found) {
-            startEvtArgs = found.args
-            break
-          }
-        }
-        if (!startEvtArgs) {
-          throw new Error(`Started event not found for round ${id}`)
-        }
-
-        // 4) recover chosen template from localStorage
+        // — figure out which template the creator chose
         const tplIx = Number(localStorage.getItem(`madfill-tplIdx-${id}`) || 0)
         const catIx = Number(localStorage.getItem(`madfill-catIdx-${id}`) || 0)
         const tpl   = categories[catIx].templates[tplIx]
 
-        // 5) decode the two on-chain arrays pA (paid/original) and fA (free/challenger)
-        const origWords = onchain.pA.map(w => ethers.decodeBytes32String(w))
-        const chalWords = onchain.fA.map(w => ethers.decodeBytes32String(w))
+        // — fetch submissions by querying the logs
+        const deployBlock = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 33631502
+        const latestBlock = await provider.getBlockNumber()
 
+        // helper to batch-fetch at most 500 blocks at a time
+        async function fetchAllLogs(filter) {
+          let all = []
+          for (let start = deployBlock; start <= latestBlock; start += 500) {
+            const end = Math.min(start + 499, latestBlock)
+            const logs = await provider.getLogs({
+              address: ct.address,
+              topics:  filter.topics,
+              fromBlock: start,
+              toBlock:   end
+            })
+            all.push(...logs.map(l => ct.interface.parseLog(l).args))
+          }
+          return all
+        }
+
+        // — paid submissions = “original”
+        const paidArgs = await fetchAllLogs(ct.filters.SubmitPaid(id))
+        // each args is [ id, blankIndex, wordBytes32 ]
+        const originals = paidArgs.map(a =>
+          ethers.decodeBytes32String(a[2])
+        )
+
+        // — free submissions = “challenger”
+        const freeArgs = await fetchAllLogs(ct.filters.SubmitFree(id))
+        const challengers = freeArgs.map(a =>
+          ethers.decodeBytes32String(a[2])
+        )
+
+        // — done
         setClaimed(hasClaimed)
         setRoundData({
           tpl,
-          original:    origWords,
-          challenger:  chalWords,
+          original:    originals,
+          challenger:  challengers,
           votes: {
-            original:   onchain.vP.toString(),
-            challenger: onchain.vF.toString(),
+            original:   info.vP.toString(),
+            challenger: info.vF.toString(),
           },
           winner: winnerAddr.toLowerCase(),
         })
@@ -107,17 +116,13 @@ export default function RoundDetailPage() {
     })()
   }, [id])
 
-  // claim prize
+  // 3) Claim handler
   async function handleClaim() {
     try {
       setStatus('Claiming…')
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      const signer   = await provider.getSigner()
-      const ct       = new ethers.Contract(
-        process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
-        abi,
-        signer
-      )
+      const p = new ethers.BrowserProvider(window.ethereum)
+      const s = await p.getSigner()
+      const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, s)
       await (await ct.claim2(BigInt(id))).wait()
       setClaimed(true)
       setStatus('✅ Claimed!')
@@ -127,7 +132,7 @@ export default function RoundDetailPage() {
     }
   }
 
-  // render one card
+  // 4) Card renderer
   function renderCard(parts, words, title, highlight) {
     return (
       <Card
@@ -136,12 +141,10 @@ export default function RoundDetailPage() {
       >
         <CardHeader className="bg-slate-800 text-center font-bold">{title}</CardHeader>
         <CardContent className="p-4 text-center font-mono text-lg">
-          {parts.map((part, i) => (
+          {parts.map((part,i) => (
             <span key={i}>
               {part}
-              {i < words.length && (
-                <span className="text-yellow-300">{words[i]}</span>
-              )}
+              {i < words.length && <span className="text-yellow-300">{words[i]}</span>}
             </span>
           ))}
         </CardContent>
@@ -152,7 +155,6 @@ export default function RoundDetailPage() {
   return (
     <Layout>
       <Head><title>MadFill Round #{id}</title></Head>
-
       {loading && <p className="text-white">Loading round…</p>}
       {error   && <p className="text-red-400">Error: {error}</p>}
 
@@ -178,10 +180,7 @@ export default function RoundDetailPage() {
               🗳️ Votes — Original: <strong>{roundData.votes.original}</strong> | Challenger:{' '}
               <strong>{roundData.votes.challenger}</strong>
             </p>
-            <p>
-              🏆 Winning address:{' '}
-              <code className="text-green-400">{roundData.winner}</code>
-            </p>
+            <p>🏆 Winner: <code className="text-green-400">{roundData.winner}</code></p>
 
             {address?.toLowerCase() === roundData.winner && !claimed && (
               <Button onClick={handleClaim} className="bg-green-600 hover:bg-green-500">
