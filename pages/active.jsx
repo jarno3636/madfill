@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
 import abi from '@/abi/FillInStoryFull.json'
+import { categories } from '@/data/templates'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Countdown } from '@/components/Countdown'
 import Layout from '@/components/Layout'
@@ -11,75 +12,72 @@ import Link from 'next/link'
 
 export default function ActiveRoundsPage() {
   const [rounds, setRounds] = useState(null)
-  const [error, setError]   = useState('')
+  const [error,  setError]  = useState('')
 
   useEffect(() => {
     ;(async () => {
       try {
-        // 1) Load config
         const address = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
         const rpcUrl  = process.env.NEXT_PUBLIC_ALCHEMY_URL
-        if (!address) throw new Error('Missing contract address')
-        if (!rpcUrl)  throw new Error('Missing RPC URL')
+        const entryFee = Number(process.env.NEXT_PUBLIC_ENTRY_FEE) || 0.001
 
-        // 2) Fallback provider (Alchemy + Base public)
-        const alchProv  = new ethers.JsonRpcProvider(rpcUrl)
-        const baseProv  = new ethers.JsonRpcProvider('https://mainnet.base.org')
-        const provider  = new ethers.FallbackProvider([alchProv, baseProv])
-        const contract  = new ethers.Contract(address, abi, provider)
+        if (!address || !rpcUrl) throw new Error('Missing config')
 
-        // 3) Determine block range
+        const alch    = new ethers.JsonRpcProvider(rpcUrl)
+        const base    = new ethers.JsonRpcProvider('https://mainnet.base.org')
+        const provider = new ethers.FallbackProvider([alch, base])
+        const contract = new ethers.Contract(address, abi, provider)
+
         const latest     = await provider.getBlockNumber()
-        const fromEnv    = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 0
-        const fromBlock  = fromEnv > 0 ? fromEnv : 33631502
+        const fromBlock  = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 33631502
         const BATCH_SIZE = 500
 
-        // 4) Helper: fetch & parse all logs for a given filter in 500-block chunks
         async function fetchAllArgs(eventFilter) {
           let all = []
           for (let start = fromBlock; start <= latest; start += BATCH_SIZE) {
             const end = Math.min(start + BATCH_SIZE - 1, latest)
-            const logs = await provider.getLogs({
-              address,
-              topics:   eventFilter.topics,
-              fromBlock: start,
-              toBlock:   end
-            })
-            // parse each raw log back into { args }
+            const logs = await provider.getLogs({ address, topics: eventFilter.topics, fromBlock: start, toBlock: end })
             const parsed = logs.map(l => contract.interface.parseLog(l).args)
-            all = all.concat(parsed)
+            all.push(...parsed)
           }
           return all
         }
 
-        // 5) Fetch Started & Paid events in parallel
-        const [ startedEvents, paidEvents ] = await Promise.all([
+        const [started, paid] = await Promise.all([
           fetchAllArgs(contract.filters.Started()),
           fetchAllArgs(contract.filters.Paid())
         ])
 
-        // 6) Tally up poolSizes by roundId
-        const poolCounts = paidEvents.reduce((m, ev) => {
+        const poolCounts = paid.reduce((m, ev) => {
           const id = Number(ev.id)
           m[id] = (m[id] || 0) + 1
           return m
         }, {})
 
-        // 7) Build only‐still-open rounds
-        const now = Math.floor(Date.now()/1000)
-        const openRounds = startedEvents
-          .map(ev => ({
-            id:        Number(ev.id),
-            blanks:    Number(ev.blanks),
-            deadline:  Number(ev.deadline),
-            poolCount: poolCounts[Number(ev.id)] || 0
-          }))
+        const now = Math.floor(Date.now() / 1000)
+        const open = started
+          .map(ev => {
+            const id = Number(ev.id)
+            const blanks = Number(ev.blanks)
+            const deadline = Number(ev.deadline)
+            const cat = Number(ev.cat || 0)
+            const tpl = Number(ev.tpl || 0)
+            const card = categories?.[cat]?.templates?.[tpl]
+            return {
+              id,
+              blanks,
+              deadline,
+              poolCount: poolCounts[id] || 0,
+              cardTitle: card?.title || 'Untitled',
+              cardPreview: card?.parts?.slice(0, 2)?.join('____') || 'No preview'
+            }
+          })
           .filter(r => r.deadline > now)
 
-        setRounds(openRounds)
+        setRounds(open)
       } catch (e) {
         console.error(e)
-        setError(e.message || 'Failed to load active rounds')
+        setError(e.message || 'Failed to load rounds')
         setRounds([])
       }
     })()
@@ -93,9 +91,7 @@ export default function ActiveRoundsPage() {
           🏁 Active Rounds
         </h1>
 
-        {error && (
-          <p className="text-center text-red-500">⚠️ {error}</p>
-        )}
+        {error && <p className="text-center text-red-500">⚠️ {error}</p>}
 
         {rounds === null ? (
           <p className="text-center text-gray-500">Loading active rounds…</p>
@@ -103,12 +99,13 @@ export default function ActiveRoundsPage() {
           <p className="text-center text-gray-500">No open rounds found.</p>
         ) : (
           rounds.map(r => (
-            <Card key={r.id} className="bg-slate-800 text-white rounded-lg shadow">
-              <CardHeader className="flex justify-between items-center">
+            <Card key={r.id} className="bg-slate-800 text-white rounded-lg shadow mb-4">
+              <CardHeader className="flex justify-between items-start">
                 <div>
-                  <h2 className="text-xl">Round #{r.id}</h2>
-                  <p className="text-sm opacity-75">
-                    {r.blanks} blank{r.blanks > 1 ? 's' : ''} • {r.poolCount} entr{r.poolCount === 1 ? 'y' : 'ies'}
+                  <h2 className="text-xl font-semibold">#{r.id} — {r.cardTitle}</h2>
+                  <p className="text-sm opacity-80 mb-1 italic">“{r.cardPreview}…”</p>
+                  <p className="text-sm text-indigo-300">
+                    {r.blanks} blank{r.blanks > 1 ? 's' : ''} • {r.poolCount} entr{r.poolCount === 1 ? 'y' : 'ies'} • 💰 {(r.poolCount * 0.001).toFixed(3)} BASE
                   </p>
                 </div>
                 <Countdown targetTimestamp={r.deadline} />
