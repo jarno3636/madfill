@@ -1,4 +1,4 @@
-// pages/active-rounds.jsx
+// pages/active‐rounds.jsx
 import React, { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -22,49 +22,49 @@ export default function ActiveRoundsPage() {
         if (!address) throw new Error('Missing contract address')
         if (!rpcUrl)  throw new Error('Missing Alchemy URL')
 
-        // 2) fallback provider
-        const alch   = new ethers.JsonRpcProvider(rpcUrl)
-        const poaPub = new ethers.JsonRpcProvider('https://mainnet.base.org')
-        const provider = new ethers.FallbackProvider([alch, poaPub])
+        // 2) fallback provider (Alchemy + public Base)
+        const alch    = new ethers.JsonRpcProvider(rpcUrl)
+        const basePub = new ethers.JsonRpcProvider('https://mainnet.base.org')
+        const provider = new ethers.FallbackProvider([alch, basePub])
         const contract = new ethers.Contract(address, abi, provider)
 
-        // 3) block range
+        // 3) block range + batch size
         const latest     = await provider.getBlockNumber()
         const fromEnv    = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 0
         const fromBlock  = fromEnv > 0 ? fromEnv : 33631502
         const BATCH_SIZE = 500
 
-        // 4) fetchLogs in chunks
-        async function fetchArgs(eventFilter) {
+        // 4) helper to fetch & parse logs in chunks
+        async function fetchArgs(filter) {
           let all = []
           for (let start = fromBlock; start <= latest; start += BATCH_SIZE) {
             const end = Math.min(start + BATCH_SIZE - 1, latest)
             const logs = await provider.getLogs({
               address,
-              topics:   eventFilter.topics,
+              topics:   filter.topics,
               fromBlock: start,
               toBlock:   end
             })
-            const parsed = logs.map(log => contract.interface.parseLog(log).args)
+            const parsed = logs.map(l => contract.interface.parseLog(l).args)
             all = all.concat(parsed)
           }
           return all
         }
 
-        // 5) pull Started & Paid
-        const [started, paid] = await Promise.all([
+        // 5) fetch Started() and Paid() args
+        const [ started, paid ] = await Promise.all([
           fetchArgs(contract.filters.Started()),
           fetchArgs(contract.filters.Paid())
         ])
 
-        // 6) tally pools
-        const poolCounts = paid.reduce((m, ev) => {
+        // 6) tally pool sizes
+        const poolCounts = paid.reduce((acc, ev) => {
           const id = Number(ev.id)
-          m[id] = (m[id] || 0) + 1
-          return m
+          acc[id] = (acc[id] || 0) + 1
+          return acc
         }, {})
 
-        // 7) build open rounds
+        // 7) build “open” rounds list
         const now = Math.floor(Date.now() / 1000)
         const open = started
           .map(ev => ({
@@ -93,9 +93,7 @@ export default function ActiveRoundsPage() {
         </h1>
 
         {error && (
-          <p className="text-center text-red-500">
-            ⚠️ {error}
-          </p>
+          <p className="text-center text-red-500">⚠️ {error}</p>
         )}
 
         {rounds === null ? (
