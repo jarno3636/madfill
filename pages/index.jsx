@@ -94,7 +94,7 @@ export default function Home() {
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
 
       const usdAmount = Math.floor(feeUsd * 1_000_000)
-      const feeInBase = await ct.usdToBase(ethers.parseUnits(feeUsd.toString(), 6))
+      const feeInBase = await ct.usdToBase(ethers.parseUnits(feeUsd.toString(), 8))
       let newId = roundId
 
       if (!roundId) {
