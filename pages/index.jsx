@@ -1,5 +1,5 @@
 // pages/index.jsx
-import React, { Component, useState, useEffect, Fragment } from 'react'
+import React, { Component, useState, useEffect, Fragment, useRef } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
 import Confetti from 'react-confetti'
@@ -7,12 +7,10 @@ import { useWindowSize } from 'react-use'
 import abi from '../abi/FillInStoryV2_ABI.json'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
-import { Countdown } from '@/components/Countdown'
 import { categories, durations } from '../data/templates'
 import Layout from '@/components/Layout'
 import { motion } from 'framer-motion'
 import { Tooltip } from '@/components/ui/tooltip'
-import Link from 'next/link'
 import Footer from '@/components/Footer'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 
@@ -43,8 +41,17 @@ class ErrorBoundary extends Component {
   }
 }
 
+// 💰 Convert USD to BASE (mock rate)
+const parseUsdToBase = (usd) => {
+  const mockRate = 350 // 1 BASE = $350
+  return ethers.parseEther((usd / mockRate).toFixed(6))
+}
+
 export default function Home() {
   const [status, setStatus] = useState('')
+  const [logs, setLogs] = useState([])
+  const loggerRef = useRef(null)
+
   const [roundId, setRoundId] = useState('')
   const [blankIndex, setBlankIndex] = useState('0')
   const [roundName, setRoundName] = useState('')
@@ -63,12 +70,21 @@ export default function Home() {
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx]
 
+  const log = (msg) => {
+    setLogs(prev => [...prev, msg])
+    setTimeout(() => {
+      if (loggerRef.current) {
+        loggerRef.current.scrollTop = loggerRef.current.scrollHeight
+      }
+    }, 100)
+  }
+
   useEffect(() => {
     if (!roundId) return setDeadline(null)
     const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
     const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
-    ct.getPool1Info(BigInt(roundId))
-      .then(info => setDeadline(Number(info.deadline)))
+    ct.rounds(BigInt(roundId))
+      .then(info => setDeadline(Number(info.sd)))
       .catch(() => setDeadline(null))
   }, [roundId])
 
@@ -85,86 +101,110 @@ export default function Home() {
     async function loadTotalRounds() {
       const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
-      const count = await ct.pool1Count()
+      const count = await ct.rounds.length()
       setTotalRounds(Number(count))
     }
     loadTotalRounds()
   }, [])
 
   async function handleUnifiedSubmit() {
-    if (!word) return setStatus('❌ Please enter a word.')
+    const cleanedParts = tpl.parts.map(p => p.trim())
+
+    if (!word || word.length > 32) {
+      setStatus('❌ Word must be 1–32 characters long.')
+      log('Invalid word input')
+      return
+    }
+
+    if (feeUsd < 0.25) {
+      setStatus('❌ Entry fee must be at least $0.25')
+      log('Fee too low')
+      return
+    }
+
+    if (tpl.blanks < 1 || tpl.blanks > 10) {
+      setStatus('❌ Template must have 1–10 blanks')
+      log('Blanks out of bounds')
+      return
+    }
 
     try {
       setBusy(true)
       setStatus('')
+      log('🔍 Connecting to wallet…')
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
+      const feeInBase = parseUsdToBase(feeUsd)
+      const encodedWord = ethers.encodeBytes32String(word)
 
       let newId = roundId
 
       if (!roundId) {
-        setStatus('🚀 Creating new round & submitting…')
-        const tx = await ct.createPool1(
-          roundName || `Untitled`,
-          tpl.parts,
-          word,
-          signer.address.slice(0, 6),
-          feeUsd,
+        log(`🚀 Starting round: ${roundName || 'Untitled'} with ${tpl.blanks} blanks`)
+        const tx = await ct.start(
+          tpl.blanks,
+          feeInBase,
           duration * 86400
         )
+        log('📡 Waiting for round creation...')
         await tx.wait()
-        const poolCount = await ct.pool1Count()
-        newId = (Number(poolCount) - 1).toString()
+        const count = await ct.rounds.length()
+        newId = (Number(count) - 1).toString()
         setRoundId(newId)
-        const info = await ct.getPool1Info(newId)
-        setDeadline(Number(info.deadline))
-        localStorage.setItem(`madfill-roundname-${newId}`, roundName)
-      } else {
-        setStatus('✍️ Submitting your entry…')
-        const tx2 = await ct.joinPool1(newId, word, signer.address.slice(0, 6), {
-          value: ethers.parseEther('0.001')
-        })
-        await tx2.wait()
+        log(`✅ Round ${newId} created.`)
       }
 
-      setStatus(`✅ Entry for Round ${newId} submitted!`)
-      const preview = tpl.parts.map((part, i) => i < tpl.blanks ? `${part}${i === +blankIndex ? word : '____'}` : part).join('')
-      setShareText(encodeURIComponent(`I just entered MadFill Round #${newId} 💥\n\n${preview}\n\nPlay: https://madfill.vercel.app`))
+      log(`✍️ Submitting word "${word}" at index ${blankIndex} to round ${newId}`)
+      const tx2 = await ct.submitPaid(
+        newId,
+        parseInt(blankIndex),
+        encodedWord,
+        { value: feeInBase }
+      )
+      log('⏳ Waiting for submission confirmation...')
+      await tx2.wait()
+      log(`✅ Submission confirmed for Round ${newId}`)
 
+      setStatus(`✅ Entry submitted to Round ${newId}!`)
+      const preview = cleanedParts.map((p, i) =>
+        i < tpl.blanks ? `${p}${i === +blankIndex ? word : '____'}` : p
+      ).join('')
+      setShareText(encodeURIComponent(`I just entered MadFill Round #${newId} 💥\n\n${preview}\n\nPlay: https://madfill.vercel.app`))
     } catch (e) {
-      const message = e?.message?.split('(')[0]?.trim() || 'Something went wrong.'
-      setStatus(`❌ ${message}`)
+      console.error('[ERROR]', e)
+      log(`❌ ${e.message}`)
+      setStatus(`❌ ${e?.message?.split('(')[0] || 'Something went wrong'}`)
     } finally {
       setBusy(false)
     }
   }
 
-  const blankStyle = active => `inline-block w-10 text-center border-b-2 ${active ? 'border-yellow-300' : 'border-slate-400'} cursor-pointer mx-1 text-lg`
+  const blankStyle = active =>
+    `inline-block w-16 text-center border-b-2 font-bold text-lg ${
+      active ? 'border-white' : 'border-slate-400'
+    } cursor-pointer mx-1`
 
   const renderTemplatePreview = () => (
-    <div className="text-base bg-gradient-to-r from-indigo-900 to-purple-900 text-white p-5 rounded-xl shadow-inner border border-indigo-500">
-      <h4 className="font-bold text-lg mb-2">📄 Story Preview</h4>
-      <p className="leading-relaxed">
-        {tpl.parts.map((p, i) => {
-          if (i < tpl.blanks) {
-            return (
-              <Fragment key={i}>
-                {p}
-                <span
-                  className={blankStyle(i === +blankIndex)}
-                  onClick={() => setBlankIndex(i.toString())}
-                >
-                  {i === +blankIndex ? (word || '____') : '____'}
-                </span>
-              </Fragment>
-            )
-          } else {
-            return p
-          }
-        })}
-      </p>
-    </div>
+    <p className="text-base bg-slate-700 p-4 rounded-xl leading-relaxed shadow-md border border-indigo-400">
+      📄 {tpl.parts.map((p, i) => {
+        if (i < tpl.blanks) {
+          return (
+            <Fragment key={i}>
+              {p}
+              <span
+                className={blankStyle(i === +blankIndex)}
+                onClick={() => setBlankIndex(i.toString())}
+              >
+                {i === +blankIndex ? (word || '____') : '____'}
+              </span>
+            </Fragment>
+          )
+        } else {
+          return p
+        }
+      })}
+    </p>
   )
 
   return (
@@ -177,9 +217,9 @@ export default function Home() {
           <Card className="bg-purple-800 text-white rounded p-6 mb-6 shadow-xl">
             <h3 className="text-xl font-extrabold mb-3">🧠 What is MadFill?</h3>
             <ul className="list-disc list-inside text-sm space-y-1">
-              <li><strong>Create a Round:</strong> Pick a template, add your first word, and launch the game.</li>
-              <li><strong>Join a Round:</strong> Fill in the blanks. Pay a small fee. Win the prize.</li>
-              <li><strong>Pool 2:</strong> Submit a challenger. Let the community vote!</li>
+              <li><strong>Create a Round:</strong> Pick a template, start a round with $BASE prize pool.</li>
+              <li><strong>Join a Round:</strong> Fill in a blank and enter the prize pool.</li>
+              <li><strong>Win:</strong> Random draw at deadline. Winner takes the pot.</li>
             </ul>
             {profile && (
               <div className="mt-4 flex items-center gap-2">
