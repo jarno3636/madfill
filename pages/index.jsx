@@ -52,7 +52,6 @@ export default function Home() {
   const [duration, setDuration] = useState(durations[0].value)
   const [feeUsd, setFeeUsd] = useState(1.0)
   const [deadline, setDeadline] = useState(null)
-  const [recentWinners, setRecentWinners] = useState([])
   const [shareText, setShareText] = useState('')
   const [busy, setBusy] = useState(false)
   const { width, height } = useWindowSize()
@@ -167,17 +166,6 @@ export default function Home() {
             {totalRounds !== null && (
               <p className="text-xs text-pink-200 mt-2">🔥 {totalRounds} rounds created so far. Join the madness!</p>
             )}
-          </Card>
-
-          <Card className="bg-gradient-to-r from-yellow-500 to-red-500 text-white rounded p-6 mb-6 shadow-lg">
-            <h3 className="text-lg font-bold mb-2">💰 Fee Structure</h3>
-            <ul className="list-disc list-inside text-sm">
-              <li><strong>Entry Fee:</strong> Set in USD when you create the round. Automatically converted to BASE.</li>
-              <li><strong>Claim Fee:</strong> 0.5% of the winnings.</li>
-              <li><strong>Dev Cut:</strong> 0.5% of all submissions and claims go to the dev wallet to support the game.</li>
-              <li><strong>Flexibility:</strong> You choose how expensive the round is, from 0.25 to 10 USD.</li>
-            </ul>
-            <p className="text-sm mt-4 text-white/80">🧩 Want to play with friends? Create your round and tag them on Farcaster!</p>
           </Card>
         </motion.div>
 
