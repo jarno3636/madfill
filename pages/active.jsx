@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Countdown } from '@/components/Countdown'
 import Link from 'next/link'
 import Image from 'next/image'
+import { fetchFarcasterProfile } from '@/lib/neynar'
 
 export default function ActivePools() {
   const [rounds, setRounds] = useState([])
@@ -37,17 +38,30 @@ export default function ActivePools() {
 
           if (!info.claimed && deadline > now) {
             const poolUsd = Number(info.feeUsd) * info.participants.length
+
+            // Farcaster avatars
+            const avatars = await Promise.all(
+              info.participants.slice(0, 5).map(async (addr) => {
+                const res = await fetchFarcasterProfile(addr)
+                return {
+                  address: addr,
+                  avatar: res?.pfp_url || `https://effigy.im/a/${addr.toLowerCase()}`,
+                  username: res?.username || addr.slice(2, 6).toUpperCase()
+                }
+              })
+            )
+
             all.push({
               id: i,
               name: localStorage.getItem(`madfill-roundname-${i}`) || info.name || 'Untitled',
               feeUsd: Number(info.feeUsd),
               feeBase: (Number(info.feeUsd) / basePrice).toFixed(4),
               deadline,
-              participants: info.participants,
+              participants: avatars,
               count: info.participants.length,
               usd: poolUsd.toFixed(2),
               badge: deadline - now < 3600 ? '🔥 Ends Soon' : poolUsd > 10 ? '💰 Top Pool' : null,
-              thumbnail: `/thumbnails/thumb${i % 5}.jpg`, // mock images cycle
+              thumbnail: `/thumbnails/thumb${i % 5}.jpg`,
             })
           }
         } catch (e) {
@@ -140,10 +154,16 @@ export default function ActivePools() {
                 <p><strong>Participants:</strong> {r.count}</p>
                 <p><strong>Total Pool:</strong> ${r.usd}</p>
                 <div className="flex -space-x-2">
-                  {r.participants.slice(0, 5).map((p, i) => (
-                    <div key={i} className="w-8 h-8 rounded-full bg-indigo-600 text-white text-xs flex items-center justify-center border border-white">
-                      {p.slice(2, 4).toUpperCase()}
-                    </div>
+                  {r.participants.map((p, i) => (
+                    <Image
+                      key={i}
+                      src={p.avatar}
+                      alt={p.username}
+                      title={`@${p.username}`}
+                      width={32}
+                      height={32}
+                      className="rounded-full border border-white"
+                    />
                   ))}
                 </div>
                 <Link href={`/round/${r.id}`}>
