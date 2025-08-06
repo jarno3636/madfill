@@ -14,6 +14,7 @@ import { motion } from 'framer-motion'
 import { Tooltip } from '@/components/ui/tooltip'
 import Link from 'next/link'
 import Footer from '@/components/Footer'
+import { fetchFarcasterProfile } from '@/lib/neynar'
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -31,7 +32,7 @@ class ErrorBoundary extends Component {
       return (
         <div className="p-6 max-w-lg mx-auto">
           <h2 className="text-2xl font-bold text-red-600">Something went wrong.</h2>
-          <pre className="mt-4 p-4 bg-slate-100 text-sm text-red-800 rounded">
+          <pre className="mt-4 p-4 bg-slate-100 text-sm text-red-800 rounded overflow-x-auto">
             {this.state.error?.toString()}
           </pre>
           <Button onClick={() => window.location.reload()}>Reload Page</Button>
@@ -55,9 +56,11 @@ export default function Home() {
   const [shareText, setShareText] = useState('')
   const [busy, setBusy] = useState(false)
   const { width, height } = useWindowSize()
+  const [totalRounds, setTotalRounds] = useState(null)
 
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
+  const [profile, setProfile] = useState(null)
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx]
 
@@ -69,6 +72,25 @@ export default function Home() {
       .then(info => setDeadline(Number(info.deadline)))
       .catch(() => setDeadline(null))
   }, [roundId])
+
+  useEffect(() => {
+    async function loadProfile() {
+      const fid = localStorage.getItem('fc_fid')
+      if (fid) {
+        const p = await fetchFarcasterProfile(fid)
+        setProfile(p)
+      }
+    }
+    loadProfile()
+
+    async function loadTotalRounds() {
+      const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
+      const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
+      const count = await ct.pool1Count()
+      setTotalRounds(Number(count))
+    }
+    loadTotalRounds()
+  }, [])
 
   async function handleUnifiedSubmit() {
     if (!word) return setStatus('❌ Please enter a word.')
@@ -112,7 +134,8 @@ export default function Home() {
       setShareText(encodeURIComponent(`I just entered MadFill Round #${newId} 💥\n\n${preview}\n\nPlay: https://madfill.vercel.app`))
 
     } catch (e) {
-      setStatus('❌ ' + (e.message || 'Unknown error'))
+      const message = e?.message?.split('(')[0]?.trim() || 'Something went wrong.'
+      setStatus(`❌ ${message}`)
     } finally {
       setBusy(false)
     }
@@ -135,6 +158,15 @@ export default function Home() {
               <li><strong>Win:</strong> At the end of the round, a random participant is chosen to win the prize pool.</li>
               <li><strong>Pool 2 Showdown:</strong> Think you can beat the original? Submit a challenger card and let the community vote!</li>
             </ul>
+            {profile && (
+              <div className="mt-4 flex items-center gap-2">
+                <img src={profile.pfp_url} alt="Avatar" className="w-8 h-8 rounded-full border border-white" />
+                <p className="text-sm text-yellow-200">🎉 Welcome back @{profile.username}!</p>
+              </div>
+            )}
+            {totalRounds !== null && (
+              <p className="text-xs text-pink-200 mt-2">🔥 {totalRounds} rounds created so far. Join the madness!</p>
+            )}
           </Card>
 
           <Card className="bg-gradient-to-r from-yellow-500 to-red-500 text-white rounded p-6 mb-6 shadow-lg">
@@ -145,6 +177,7 @@ export default function Home() {
               <li><strong>Dev Cut:</strong> 0.5% of all submissions and claims go to the dev wallet to support the game.</li>
               <li><strong>Flexibility:</strong> You choose how expensive the round is, from 0.25 to 10 USD.</li>
             </ul>
+            <p className="text-sm mt-4 text-white/80">🧩 Want to play with friends? Create your round and tag them on Farcaster!</p>
           </Card>
         </motion.div>
 
@@ -157,57 +190,26 @@ export default function Home() {
               <Tooltip text="0.5% cut on entry & claim" />
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid md:grid-cols-4 gap-4">
-                {[['Category', catIdx, setCatIdx, categories], ['Template', tplIdx, setTplIdx, selectedCategory.templates], ['Duration', duration, setDuration, durations]].map(([lbl, val, fn, opts]) => (
-                  <div key={lbl}>
-                    <label className="block text-sm mb-1">{lbl}</label>
-                    <select className="w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1" value={val} onChange={e => fn(+e.target.value)} disabled={busy}>
-                      {opts.map((o, i) => <option key={i} value={o.value ?? i}>{o.label ?? o.name}</option>)}
-                    </select>
-                  </div>
-                ))}
-                <div>
-                  <label className="block text-sm mb-1">💵 Entry Fee</label>
-                  <select className="w-full mt-1 bg-slate-900 text-white border rounded px-2 py-1" value={feeUsd} onChange={e => setFeeUsd(Number(e.target.value))} disabled={busy}>
-                    {[0.25, 0.5, 1, 2, 3, 5, 10].map(val => (
-                      <option key={val} value={val}>${val.toFixed(2)}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <input type="text" maxLength={12} placeholder="Round Name (optional)" className="w-full bg-slate-900 text-white border rounded px-2 py-1" value={roundName} onChange={e => setRoundName(e.target.value)} disabled={busy} />
-
-              <div className="bg-slate-900 border border-slate-700 rounded p-4 font-mono text-sm">
-                {tpl.parts.map((part, i) => (
-                  <Fragment key={i}>
-                    <span>{part}</span>
-                    {i < tpl.blanks && (
-                      <span className={blankStyle(i === +blankIndex)} onClick={() => setBlankIndex(String(i))}>{i}</span>
-                    )}
-                  </Fragment>
-                ))}
-              </div>
-
-              <p className="text-sm">Selected blank: <strong>{blankIndex}</strong></p>
-
-              <input type="text" placeholder="Type your wild word here!" value={word} onChange={e => setWord(e.target.value)} className="w-full bg-slate-900 text-white border rounded px-2 py-1" disabled={busy} />
-
-              <Button onClick={handleUnifiedSubmit} disabled={busy || !word} className="bg-indigo-600 hover:bg-indigo-500 w-full">
-                {!roundId ? '🚀 Create Round & Submit' : '🪪 Submit Entry'}
-              </Button>
-
-              {status && <p className="text-sm mt-2 text-yellow-300">{status}</p>}
-              {shareText && (
-                <div className="mt-4 space-y-2">
-                  <p className="font-semibold">📣 Spread the word:</p>
-                  <div className="flex flex-wrap gap-2">
-                    <a href={`https://twitter.com/intent/tweet?text=${shareText}`} target="_blank" rel="noopener noreferrer" className="bg-blue-600 px-4 py-2 rounded">🐦 Twitter</a>
-                    <a href={`https://warpcast.com/~/compose?text=${shareText}`} target="_blank" rel="noopener noreferrer" className="bg-purple-600 px-4 py-2 rounded">🌀 Farcaster</a>
-                    <Link href={`/round/${roundId}`}><a className="bg-slate-700 px-4 py-2 rounded">📜 View</a></Link>
-                  </div>
-                </div>
+              {status && (
+                <motion.div
+                  className="bg-slate-700 text-white p-3 rounded text-sm max-w-full overflow-x-auto"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  {status}
+                </motion.div>
               )}
+
+              <input
+                type="text"
+                maxLength={12}
+                placeholder="Round Name (optional)"
+                className="w-full bg-slate-900 text-white border rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all duration-200"
+                value={roundName}
+                onChange={e => setRoundName(e.target.value)}
+                disabled={busy}
+              />
             </CardContent>
           </Card>
         </main>
