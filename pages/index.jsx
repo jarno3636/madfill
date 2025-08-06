@@ -142,6 +142,28 @@ export default function Home() {
 
   const blankStyle = active => `inline-block w-8 text-center border-b-2 ${active ? 'border-white' : 'border-slate-400'} cursor-pointer mx-1`
 
+  const renderTemplatePreview = () => (
+    <p className="text-sm bg-slate-700 p-3 rounded">
+      📄 {tpl.parts.map((p, i) => {
+        if (i < tpl.blanks) {
+          return (
+            <Fragment key={i}>
+              {p}
+              <span
+                className={blankStyle(i === +blankIndex)}
+                onClick={() => setBlankIndex(i.toString())}
+              >
+                {i === +blankIndex ? (word || '____') : '____'}
+              </span>
+            </Fragment>
+          )
+        } else {
+          return p
+        }
+      })}
+    </p>
+  )
+
   return (
     <ErrorBoundary>
       <Layout>
@@ -171,7 +193,7 @@ export default function Home() {
 
         <main className="max-w-4xl mx-auto p-6 space-y-8">
           <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
-            <CardHeader className="flex items-center justify-between">
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <h2 className="text-xl font-bold">
                 {!roundId ? '🚀 Create Round & Submit' : `🔄 Round #${roundId}`}
               </h2>
@@ -199,11 +221,11 @@ export default function Home() {
                 disabled={busy}
               />
 
-              <div className="flex gap-4">
-                <div>
+              <div className="flex flex-col sm:flex-row sm:gap-4">
+                <div className="flex-1">
                   <label className="text-sm block mb-1">📚 Category</label>
                   <select
-                    className="bg-slate-900 text-white border rounded px-2 py-1"
+                    className="w-full bg-slate-900 text-white border rounded px-2 py-1"
                     value={catIdx}
                     onChange={e => setCatIdx(+e.target.value)}
                     disabled={busy}
@@ -211,10 +233,10 @@ export default function Home() {
                     {categories.map((c, i) => <option key={i} value={i}>{c.name}</option>)}
                   </select>
                 </div>
-                <div>
+                <div className="flex-1 mt-4 sm:mt-0">
                   <label className="text-sm block mb-1">📝 Template</label>
                   <select
-                    className="bg-slate-900 text-white border rounded px-2 py-1"
+                    className="w-full bg-slate-900 text-white border rounded px-2 py-1"
                     value={tplIdx}
                     onChange={e => setTplIdx(+e.target.value)}
                     disabled={busy}
@@ -224,18 +246,7 @@ export default function Home() {
                 </div>
               </div>
 
-              <p className="text-sm bg-slate-700 p-3 rounded">📄 {tpl.parts.map((p, i) => i < tpl.blanks ? `${p}____` : p).join('')}</p>
-
-              <div className="flex flex-wrap gap-2 items-center">
-                <span className="text-sm">💬 Select blank position:</span>
-                {Array.from({ length: tpl.blanks }).map((_, i) => (
-                  <span
-                    key={i}
-                    className={blankStyle(i === +blankIndex)}
-                    onClick={() => setBlankIndex(i.toString())}
-                  >{i + 1}</span>
-                ))}
-              </div>
+              {renderTemplatePreview()}
 
               <input
                 type="text"
@@ -246,11 +257,11 @@ export default function Home() {
                 disabled={busy}
               />
 
-              <div className="flex gap-4 flex-wrap">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm block mb-1">🕓 Duration (days)</label>
                   <select
-                    className="bg-slate-900 text-white border rounded px-2 py-1"
+                    className="w-full bg-slate-900 text-white border rounded px-2 py-1"
                     value={duration}
                     onChange={e => setDuration(Number(e.target.value))}
                     disabled={busy}
@@ -263,15 +274,16 @@ export default function Home() {
                 <div>
                   <label className="text-sm block mb-1">💵 Entry Fee (USD)</label>
                   <input
-                    type="number"
-                    step="0.01"
+                    type="range"
                     min="0.25"
                     max="10"
+                    step="0.25"
                     value={feeUsd}
                     onChange={e => setFeeUsd(Number(e.target.value))}
-                    className="bg-slate-900 text-white border rounded px-2 py-1"
+                    className="w-full"
                     disabled={busy}
                   />
+                  <p className="text-sm mt-1">Current: ${feeUsd.toFixed(2)}</p>
                 </div>
               </div>
 
