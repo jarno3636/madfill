@@ -8,6 +8,9 @@ import { Button } from '@/components/ui/button'
 import abi from '@/abi/FillInStoryV2_ABI.json'
 import { categories } from '@/data/templates'
 import Link from 'next/link'
+import { fetchFarcasterProfile } from '@/lib/neynar'
+import Confetti from 'react-confetti'
+import { useWindowSize } from 'react-use'
 
 export default function ChallengePage() {
   const [roundId, setRoundId] = useState('')
@@ -18,9 +21,23 @@ export default function ChallengePage() {
   const [word, setWord] = useState('')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
+  const [profile, setProfile] = useState(null)
+  const [showConfetti, setShowConfetti] = useState(false)
+  const { width, height } = useWindowSize()
 
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx]
+
+  useEffect(() => {
+    async function loadProfile() {
+      const fid = localStorage.getItem('fc_fid')
+      if (fid) {
+        const p = await fetchFarcasterProfile(fid)
+        setProfile(p)
+      }
+    }
+    loadProfile()
+  }, [])
 
   useEffect(() => {
     if (!roundId) {
@@ -50,18 +67,18 @@ export default function ChallengePage() {
         setOriginalPreview(preview)
       } catch (err) {
         console.warn('Failed to load original submission:', err)
-        setOriginalPreview('Couldn’t fetch original submission.')
+        setOriginalPreview('❌ Couldn’t fetch original submission.')
       }
     })()
   }, [roundId, tpl])
 
   async function handleSubmit() {
-    if (!roundId || !word) return
+    if (!roundId || !word) return setStatus('❌ Please fill in all fields.')
     if (!window.ethereum) return setStatus('❌ No web3 provider')
 
     try {
       setBusy(true)
-      setStatus('Submitting your challenger card…')
+      setStatus('⏳ Submitting your challenger card…')
 
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer = await provider.getSigner()
@@ -72,9 +89,12 @@ export default function ChallengePage() {
       await tx.wait()
 
       setStatus(`✅ Challenger submitted to round #${roundId}`)
+      setShowConfetti(true)
+      setTimeout(() => setShowConfetti(false), 3000)
     } catch (err) {
       console.error(err)
-      setStatus('❌ ' + (err.message || 'Submission failed'))
+      const message = err?.message?.split('(')[0]?.trim() || 'Submission failed'
+      setStatus(`❌ ${message}`)
     } finally {
       setBusy(false)
     }
@@ -82,11 +102,15 @@ export default function ChallengePage() {
 
   const blankStyle = active => `inline-block w-8 text-center border-b-2 ${active ? 'border-white' : 'border-slate-400'} cursor-pointer mx-1`
 
+  const shareText = encodeURIComponent(`I just submitted a challenger card for Round #${roundId}! 😂
+Vote here: https://madfill.vercel.app/vote`)
+
   return (
     <Layout>
       <Head>
         <title>Submit a Challenger | MadFill</title>
       </Head>
+      {showConfetti && <Confetti width={width} height={height} />} 
       <div className="min-h-screen bg-gradient-to-br from-slate-900 to-indigo-950 text-white px-4 py-6">
         <h1 className="text-3xl font-bold mb-4">😆 Submit a Challenger Card</h1>
 
@@ -100,6 +124,12 @@ export default function ChallengePage() {
               Want to vote instead?{' '}
               <Link href="/vote" className="underline text-indigo-300">Go to Community Vote</Link>
             </p>
+            {profile && (
+              <div className="mt-3 flex items-center gap-2">
+                <img src={profile.pfp_url} alt="Avatar" className="w-6 h-6 rounded-full border border-white" />
+                <span className="text-xs text-yellow-200">Hi @{profile.username}</span>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -149,6 +179,23 @@ export default function ChallengePage() {
               🚀 Submit Challenger Card
             </Button>
             {status && <p className="text-sm mt-2">{status}</p>}
+
+            {status.includes('✅') && (
+              <div className="text-sm mt-4">
+                Share your card:
+                <a
+                  href={`https://twitter.com/intent/tweet?text=${shareText}`}
+                  target="_blank"
+                  className="ml-2 underline text-blue-400"
+                >🐦 Twitter</a>
+                <span className="mx-2">|</span>
+                <a
+                  href={`https://warpcast.com/~/compose?text=${shareText}`}
+                  target="_blank"
+                  className="underline text-purple-400"
+                >🌀 Warpcast</a>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
