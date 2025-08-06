@@ -12,6 +12,7 @@ import { categories } from '@/data/templates'
 import { Button } from '@/components/ui/button'
 import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
+import Link from 'next/link'
 
 export default function RoundDetailPage() {
   const { query } = useRouter()
@@ -97,7 +98,7 @@ export default function RoundDetailPage() {
         abi,
         signer
       )
-      await (await ct.claimPool1(BigInt(id))).wait()
+      await (await ct.claim1(BigInt(id))).wait()
       setClaimed(true)
       setStatus('✅ Claimed!')
     } catch (e) {
