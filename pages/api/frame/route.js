@@ -1,5 +1,3 @@
-// pages/api/frame/route.js
-
 import { ethers } from 'ethers'
 import abi from '@/abi/FillInStoryV2_ABI.json'
 
@@ -28,12 +26,17 @@ export default async function handler(req, res) {
     })
     await tx.wait()
 
+    // Choose image for result
+    const imagePath = votedFor
+      ? `${siteUrl}/og/VOTE CONFIRMED.PNG`
+      : `${siteUrl}/og/CHALLENGER CONFIRMED.PNG`  // ← Your new image
+
     // Return Farcaster confirmation frame
     res.setHeader('Content-Type', 'application/json')
     return res.status(200).json({
       title: '✅ Vote Recorded!',
       description: `You voted for ${votedFor ? 'Original' : 'Challenger'} in Round ${roundId}.`,
-      image: `${siteUrl}/og/VOTE CONFIRMED.PNG`, // ← UPPERCASE
+      image: imagePath,
       imageAspectRatio: '1.91:1',
       buttons: [
         {
