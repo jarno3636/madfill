@@ -98,7 +98,7 @@ export default function VotePage() {
   async function vote(id, supportPaid) {
     try {
       if (!address) throw new Error('Connect your wallet first')
-      setStatus('⏳ Submitting vote...')
+      setStatus('⏳ Submitting vote…')
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
@@ -111,7 +111,8 @@ export default function VotePage() {
       setTimeout(() => setSuccess(false), 3000)
     } catch (e) {
       console.error(e)
-      setStatus('❌ ' + (e.message || 'Vote failed'))
+      const msg = e?.message?.split('(')[0] || 'Vote failed'
+      setStatus('❌ ' + msg)
     }
   }
 
@@ -133,83 +134,84 @@ export default function VotePage() {
       <Head><title>Community Vote | MadFill</title></Head>
       {success && <Confetti width={width} height={height} />}
 
-      <h1 className="text-3xl font-bold text-white mb-6">🗳️ Community Vote</h1>
+      <div className="max-w-4xl mx-auto p-6 text-white">
+        <h1 className="text-3xl font-bold mb-4">🗳️ Community Vote</h1>
+        <p className="mb-4 text-slate-300">
+          Welcome to the Pool 2 Showdown! When a round ends, a challenger can submit their own version of the story.
+          You decide which version is better. Each vote costs 0.001 BASE. Voters on the winning side split the prize pool!
+        </p>
+        <Link href="/challenge" className="inline-block mb-6 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded font-medium">
+          ➕ Submit a Challenger Card
+        </Link>
 
-      <div className="flex flex-wrap gap-4 mb-6 text-white">
-        <select
-          className="bg-slate-800 border p-2 rounded"
-          value={filter}
-          onChange={e => setFilter(e.target.value)}
-        >
-          <option value="all">All</option>
-          <option value="high">🔥 Most Voted</option>
-          <option value="close">⚖️ Close Vote</option>
-          <option value="big">💰 Big Prize</option>
-        </select>
-        <select
-          className="bg-slate-800 border p-2 rounded"
-          value={sortBy}
-          onChange={e => setSortBy(e.target.value)}
-        >
-          <option value="recent">📅 Newest</option>
-          <option value="votes">📊 Top Votes</option>
-          <option value="prize">💰 Largest Pool</option>
-        </select>
-      </div>
-
-      {loading ? (
-        <p className="text-white">Loading voting rounds…</p>
-      ) : sorted.length === 0 ? (
-        <p className="text-white">No active voting rounds right now.</p>
-      ) : (
-        <div className="grid gap-6">
-          {sorted.map(r => {
-            const isClose = Math.abs(r.vP - r.vF) <= 2
-            const emoji = ['🐸', '🦊', '🦄', '🐢', '🐙'][r.id % 5]
-            return (
-              <Card key={r.id} className="bg-slate-800 text-white shadow-lg">
-                <CardHeader className="flex justify-between items-center">
-                  <div>
-                    <h3 className="font-bold text-lg">{emoji} Round #{r.id}</h3>
-                    <p className="text-sm text-slate-300">Votes – Original: {r.vP} | Challenger: {r.vF}</p>
-                    {isClose && <span className="text-yellow-300 text-xs">⚖️ Close Match!</span>}
-                    <p className="text-xs mt-1 text-green-300">💰 Pool: ${r.usd}</p>
-                  </div>
-                  <Link href={`/round/${r.id}`} className="text-indigo-400 underline text-sm">🔍 View</Link>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <CompareCards roundId={r.id} />
-                  <p>Cast your vote 👇</p>
-                  <div className="flex gap-4">
-                    <Button onClick={() => vote(r.id, true)} className="bg-green-600 hover:bg-green-500">
-                      😂 Original
-                    </Button>
-                    <Button onClick={() => vote(r.id, false)} className="bg-blue-600 hover:bg-blue-500">
-                      😆 Challenger
-                    </Button>
-                  </div>
-                  <div className="text-xs text-slate-400 mt-3">
-                    Share this round:
-                    <a
-                      href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(`Vote on MadFill Round #${r.id}! https://madfill.vercel.app/round/${r.id}`)}`}
-                      target="_blank"
-                      className="ml-2 underline text-blue-400"
-                    >🐦 Twitter</a>
-                    <span className="mx-2">|</span>
-                    <a
-                      href={`https://warpcast.com/~/compose?text=${encodeURIComponent(`Vote on MadFill Round #${r.id}! https://madfill.vercel.app/round/${r.id}`)}`}
-                      target="_blank"
-                      className="underline text-purple-400"
-                    >🌀 Warpcast</a>
-                  </div>
-                </CardContent>
-              </Card>
-            )
-          })}
+        <div className="flex flex-wrap gap-4 mb-6">
+          <select className="bg-slate-800 border p-2 rounded" value={filter} onChange={e => setFilter(e.target.value)}>
+            <option value="all">All</option>
+            <option value="high">🔥 Most Voted</option>
+            <option value="close">⚖️ Close Vote</option>
+            <option value="big">💰 Big Prize</option>
+          </select>
+          <select className="bg-slate-800 border p-2 rounded" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+            <option value="recent">📅 Newest</option>
+            <option value="votes">📊 Top Votes</option>
+            <option value="prize">💰 Largest Pool</option>
+          </select>
         </div>
-      )}
 
-      {status && <p className="text-white text-sm mt-4">{status}</p>}
+        {loading ? (
+          <p>Loading voting rounds…</p>
+        ) : sorted.length === 0 ? (
+          <p>No active voting rounds right now.</p>
+        ) : (
+          <div className="grid gap-6">
+            {sorted.map(r => {
+              const isClose = Math.abs(r.vP - r.vF) <= 2
+              const emoji = ['🐸', '🦊', '🦄', '🐢', '🐙'][r.id % 5]
+              return (
+                <Card key={r.id} className="bg-slate-800 text-white shadow-lg">
+                  <CardHeader className="flex justify-between items-center">
+                    <div>
+                      <h3 className="font-bold text-lg">{emoji} Round #{r.id}</h3>
+                      <p className="text-sm text-slate-300">Votes – Original: {r.vP} | Challenger: {r.vF}</p>
+                      {isClose && <span className="text-yellow-300 text-xs">⚖️ Close Match!</span>}
+                      <p className="text-xs mt-1 text-green-300">💰 Pool: ${r.usd}</p>
+                    </div>
+                    <Link href={`/round/${r.id}`} className="text-indigo-400 underline text-sm">🔍 View</Link>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <CompareCards roundId={r.id} />
+                    <p>Cast your vote 👇</p>
+                    <div className="flex gap-4">
+                      <Button onClick={() => vote(r.id, true)} className="bg-green-600 hover:bg-green-500">
+                        😂 Original
+                      </Button>
+                      <Button onClick={() => vote(r.id, false)} className="bg-blue-600 hover:bg-blue-500">
+                        😆 Challenger
+                      </Button>
+                    </div>
+                    <div className="text-xs text-slate-400 mt-3">
+                      Share this round:
+                      <a
+                        href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(`Vote on MadFill Round #${r.id}! https://madfill.vercel.app/round/${r.id}`)}`}
+                        target="_blank"
+                        className="ml-2 underline text-blue-400"
+                      >🐦 Twitter</a>
+                      <span className="mx-2">|</span>
+                      <a
+                        href={`https://warpcast.com/~/compose?text=${encodeURIComponent(`Vote on MadFill Round #${r.id}! https://madfill.vercel.app/round/${r.id}`)}`}
+                        target="_blank"
+                        className="underline text-purple-400"
+                      >🌀 Warpcast</a>
+                    </div>
+                  </CardContent>
+                </Card>
+              )
+            })}
+          </div>
+        )}
+
+        {status && <p className="text-sm mt-4 text-white">{status}</p>}
+      </div>
     </Layout>
   )
 }
