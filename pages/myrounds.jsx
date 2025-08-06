@@ -9,6 +9,7 @@ import { useWindowSize } from 'react-use'
 import abi from '@/abi/FillInStoryV2_ABI.json'
 import Link from 'next/link'
 import Countdown from '@/components/Countdown'
+import { fetchFarcasterProfile } from '@/lib/neynar'
 
 export default function MyRounds() {
   const [address, setAddress] = useState(null)
@@ -17,6 +18,7 @@ export default function MyRounds() {
   const [claimedId, setClaimedId] = useState(null)
   const [filter, setFilter] = useState('all')
   const [sortBy, setSortBy] = useState('newest')
+  const [profile, setProfile] = useState(null)
   const { width, height } = useWindowSize()
 
   useEffect(() => {
@@ -29,21 +31,26 @@ export default function MyRounds() {
   }, [])
 
   useEffect(() => {
+    async function loadProfile() {
+      const fid = localStorage.getItem('fc_fid')
+      if (fid) {
+        const p = await fetchFarcasterProfile(fid)
+        setProfile(p)
+      }
+    }
+    loadProfile()
+  }, [])
+
+  useEffect(() => {
     if (!address) return
     setLoading(true)
 
     ;(async () => {
       try {
         const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-        const ct = new ethers.Contract(
-          process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
-          abi,
-          provider
-        )
-
+        const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
         const poolCount = await ct.pool1Count()
         const entries = await ct.getEntries(address)
-
         const priceRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
         const basePrice = (await priceRes.json()).base.usd
 
@@ -64,7 +71,8 @@ export default function MyRounds() {
               usd: ((info.entryFee / 1e6) * userEntries.length * basePrice).toFixed(2),
               isWinner,
               claimed,
-              deadline: Number(info.deadline) * 1000
+              deadline: Number(info.deadline) * 1000,
+              winnerAddress: info.winner
             })
           }
         }
@@ -82,11 +90,7 @@ export default function MyRounds() {
     try {
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer = await provider.getSigner()
-      const ct = new ethers.Contract(
-        process.env.NEXT_PUBLIC_FILLIN_ADDRESS,
-        abi,
-        signer
-      )
+      const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
       const tx = await ct.claim1(BigInt(id))
       await tx.wait()
       setClaimedId(id)
@@ -94,27 +98,17 @@ export default function MyRounds() {
       setRounds(rs => rs.map(r => (r.id === id ? { ...r, claimed: true } : r)))
     } catch (err) {
       console.error('Claim failed:', err)
-      alert('Error claiming prize')
+      alert('❌ Error claiming prize')
     }
   }
 
   function filteredSortedRounds() {
     let rs = [...rounds]
-
-    if (filter === 'unclaimed') {
-      rs = rs.filter(r => r.isWinner && !r.claimed)
-    } else if (filter === 'won') {
-      rs = rs.filter(r => r.isWinner)
-    }
-
-    if (sortBy === 'oldest') {
-      rs.sort((a, b) => a.id - b.id)
-    } else if (sortBy === 'prize') {
-      rs.sort((a, b) => parseFloat(b.usd) - parseFloat(a.usd))
-    } else {
-      rs.sort((a, b) => b.id - a.id)
-    }
-
+    if (filter === 'unclaimed') rs = rs.filter(r => r.isWinner && !r.claimed)
+    else if (filter === 'won') rs = rs.filter(r => r.isWinner)
+    if (sortBy === 'oldest') rs.sort((a, b) => a.id - b.id)
+    else if (sortBy === 'prize') rs.sort((a, b) => parseFloat(b.usd) - parseFloat(a.usd))
+    else rs.sort((a, b) => b.id - a.id)
     return rs
   }
 
@@ -122,6 +116,7 @@ export default function MyRounds() {
     <Layout>
       <Head>
         <title>My Rounds | MadFill</title>
+        {profile && <meta name="fc:creator" content={`@${profile.username}`} />}
       </Head>
 
       <div className="max-w-3xl mx-auto p-6">
@@ -152,44 +147,56 @@ export default function MyRounds() {
           <p className="text-white">No rounds to show based on selected filter.</p>
         )}
 
-        {filteredSortedRounds().map(r => (
-          <Card key={r.id} className="mb-4 bg-slate-800 text-white shadow-lg">
-            <CardHeader className="flex justify-between items-center">
-              <div>
-                <h3 className="font-bold">#{r.id} — {r.name}</h3>
-                <p className="text-sm text-indigo-300">
-                  💰 {r.prize} BASE (${r.usd}) — {r.entries} entr{r.entries === 1 ? 'y' : 'ies'}
-                </p>
-              </div>
-              <Link href={`/round/${r.id}`} className="text-indigo-400 underline text-sm">🔍 View</Link>
-            </CardHeader>
+        {filteredSortedRounds().map(r => {
+          const baseLink = `https://madfill.vercel.app/round/${r.id}`
+          const text = encodeURIComponent(`I just played MadFill Round #${r.id}! Join me: ${baseLink}`)
+          return (
+            <Card key={r.id} className="mb-4 bg-slate-800 text-white shadow-lg">
+              <CardHeader className="flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                  {profile?.pfp_url && (
+                    <img src={profile.pfp_url} alt="avatar" className="w-7 h-7 rounded-full border border-white" />
+                  )}
+                  <div>
+                    <h3 className="font-bold">#{r.id} — {r.name}</h3>
+                    <p className="text-sm text-indigo-300">
+                      💰 {r.prize} BASE (${r.usd}) — {r.entries} entr{r.entries === 1 ? 'y' : 'ies'}
+                    </p>
+                  </div>
+                </div>
+                <Link href={`/round/${r.id}`} className="text-indigo-400 underline text-sm">🔍 View</Link>
+              </CardHeader>
 
-            <CardContent className="space-y-2 text-sm">
-              <p>⏰ Ends in: <Countdown endTime={r.deadline} /></p>
+              <CardContent className="space-y-2 text-sm">
+                <p>⏰ Ends in: <Countdown endTime={r.deadline} /></p>
 
-              {r.isWinner && !r.claimed && (
-                <Button onClick={() => handleClaim(r.id)} className="bg-green-600 hover:bg-green-500 mt-2">
-                  🎉 Claim Prize
-                </Button>
-              )}
-              {r.isWinner && r.claimed && (
-                <p className="text-green-400">✅ Prize Claimed</p>
-              )}
-              {!r.isWinner && r.entries > 0 && (
-                <p className="text-slate-300">🎮 You entered {r.entries} time{r.entries > 1 ? 's' : ''}</p>
-              )}
+                {r.isWinner && !r.claimed && (
+                  <Button onClick={() => handleClaim(r.id)} className="bg-green-600 hover:bg-green-500 mt-2">
+                    🎉 Claim Prize
+                  </Button>
+                )}
+                {r.isWinner && r.claimed && (
+                  <p className="text-green-400">✅ Prize Claimed</p>
+                )}
+                {!r.isWinner && r.entries > 0 && (
+                  <p className="text-slate-300">🎮 You entered {r.entries} time{r.entries > 1 ? 's' : ''}</p>
+                )}
 
-              <div className="mt-3 flex gap-2 flex-wrap">
-                <a href={`https://twitter.com/intent/tweet?text=I just played MadFill Round #${r.id}! Join me: https://madfill.vercel.app/round/${r.id}`} target="_blank" rel="noreferrer" className="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-white text-sm">
-                  🐦 Share
-                </a>
-                <a href={`https://warpcast.com/~/compose?text=I just played MadFill Round #${r.id}! Join me: https://madfill.vercel.app/round/${r.id}`} target="_blank" rel="noreferrer" className="bg-purple-600 hover:bg-purple-500 px-3 py-1 rounded text-white text-sm">
-                  🌀 Warpcast
-                </a>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+                <div className="mt-3 flex gap-2 flex-wrap">
+                  <a href={`https://twitter.com/intent/tweet?text=${text}`} target="_blank" rel="noreferrer" className="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-white text-sm">
+                    🐦 Share
+                  </a>
+                  <a href={`https://warpcast.com/~/compose?text=${text}`} target="_blank" rel="noreferrer" className="bg-purple-600 hover:bg-purple-500 px-3 py-1 rounded text-white text-sm">
+                    🌀 Cast
+                  </a>
+                  <a href={`https://warpcast.com/~/compose?text=${text}&embeds[]=${baseLink}`} target="_blank" rel="noreferrer" className="bg-fuchsia-600 hover:bg-fuchsia-500 px-3 py-1 rounded text-white text-sm">
+                    📚 Story
+                  </a>
+                </div>
+              </CardContent>
+            </Card>
+          )
+        })}
 
         {claimedId && <Confetti width={width} height={height} />}
       </div>
