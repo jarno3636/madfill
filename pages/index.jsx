@@ -1,5 +1,5 @@
 // pages/index.jsx
-import React, { Component, useState, useEffect, Fragment, useRef } from 'react'
+import React, { useState, useEffect, Fragment, useRef } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
 import Confetti from 'react-confetti'
@@ -14,33 +14,6 @@ import { Tooltip } from '@/components/ui/tooltip'
 import Footer from '@/components/Footer'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 
-class ErrorBoundary extends Component {
-  constructor(props) {
-    super(props)
-    this.state = { hasError: false, error: null }
-  }
-  static getDerivedStateFromError(err) {
-    return { hasError: true, error: err }
-  }
-  componentDidCatch(err, info) {
-    console.error('ErrorBoundary caught:', err, info)
-  }
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="p-6 max-w-lg mx-auto">
-          <h2 className="text-2xl font-bold text-red-600">Something went wrong.</h2>
-          <pre className="mt-4 p-4 bg-slate-100 text-sm text-red-800 rounded overflow-x-auto">
-            {this.state.error?.toString()}
-          </pre>
-          <Button onClick={() => window.location.reload()}>Reload Page</Button>
-        </div>
-      )
-    }
-    return this.props.children
-  }
-}
-
 export default function Home() {
   const [status, setStatus] = useState('')
   const [logs, setLogs] = useState([])
@@ -52,12 +25,10 @@ export default function Home() {
   const [word, setWord] = useState('')
   const [duration, setDuration] = useState(durations[0].value)
   const [feeUsd, setFeeUsd] = useState(1.0)
-  const [deadline, setDeadline] = useState(null)
   const [shareText, setShareText] = useState('')
   const [busy, setBusy] = useState(false)
   const { width, height } = useWindowSize()
   const [totalRounds, setTotalRounds] = useState(null)
-
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
   const [profile, setProfile] = useState(null)
@@ -72,15 +43,6 @@ export default function Home() {
       }
     }, 100)
   }
-
-  useEffect(() => {
-    if (!roundId) return setDeadline(null)
-    const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-    const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
-    ct.getPool1Info(BigInt(roundId))
-      .then(info => setDeadline(Number(info.deadline)))
-      .catch(() => setDeadline(null))
-  }, [roundId])
 
   useEffect(() => {
     async function loadProfile() {
@@ -102,249 +64,207 @@ export default function Home() {
   }, [])
 
   async function handleUnifiedSubmit() {
-  const cleanedParts = tpl.parts.map(p => p.trim())
+    const cleanedParts = tpl.parts.map(p => p.trim())
 
-  if (!word || word.length > 32) {
-    setStatus('❌ Word must be 1–32 characters long.')
-    log('Invalid word input')
-    return
-  }
-
-  if (feeUsd < 0.25) {
-    setStatus('❌ Entry fee must be at least $0.25')
-    log('Fee too low')
-    return
-  }
-
-  if (cleanedParts.length !== tpl.blanks + 1) {
-    setStatus('❌ Template error: Number of parts must equal blanks + 1')
-    log('Template parts and blanks mismatch')
-    return
-  }
-
-  if (cleanedParts.some(p => p.length > 64)) {
-    setStatus('❌ Template part too long (max 64 chars each)')
-    log('Template contains overly long part')
-    return
-  }
-
-  try {
-    setBusy(true)
-    setStatus('')
-    log('🔍 Connecting to wallet…')
-
-    const provider = new ethers.BrowserProvider(window.ethereum)
-    const signer = await provider.getSigner()
-    const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
-
-    let newId = roundId
-
-    if (!roundId) {
-      log(`🚀 Starting round: ${roundName || 'Untitled'} with ${tpl.blanks} blanks`)
-      const feeInWei = ethers.parseUnits(feeUsd.toString(), 18)
-
-      const tx = await ct.start(
-        tpl.blanks,
-        feeInWei,
-        duration * 86400
-      )
-
-      log('📡 Waiting for transaction confirmation...')
-      await tx.wait()
-
-      const eventFilter = ct.filters.Started()
-      const events = await ct.queryFilter(eventFilter, 'latest')
-      const last = events[events.length - 1]
-      newId = last?.args?.id?.toString() || '0'
-
-      setRoundId(newId)
-      localStorage.setItem(`madfill-roundname-${newId}`, roundName)
-      log(`✅ Round ${newId} started.`)
-    } else {
-      log(`✍️ Joining Round #${newId} with word "${word}"`)
-      const tx2 = await ct.submitPaid(newId, +blankIndex, ethers.id(word), {
-        value: ethers.parseUnits(feeUsd.toString(), 18)
-      })
-      log('⏳ Waiting for join confirmation…')
-      await tx2.wait()
-      log(`✅ Joined Round ${newId}`)
+    if (!word || word.length > 32) {
+      setStatus('❌ Word must be 1–32 characters long.')
+      log('Invalid word input')
+      return
     }
 
-    setStatus(`✅ Entry for Round ${newId} submitted!`)
-    const preview = cleanedParts.map((part, i) => i < tpl.blanks ? `${part}${i === +blankIndex ? word : '____'}` : part).join('')
-    setShareText(encodeURIComponent(`I just entered MadFill Round #${newId} 💥\n\n${preview}\n\nPlay: https://madfill.vercel.app`))
-  } catch (e) {
-    console.error('[ERROR]', e)
-    log(`❌ ${e.message}`)
-    setStatus(`❌ ${e?.message?.split('(')[0] || 'Error occurred'}`)
-  } finally {
-    setBusy(false)
+    if (feeUsd < 0.25) {
+      setStatus('❌ Entry fee must be at least $0.25')
+      log('Fee too low')
+      return
+    }
+
+    if (cleanedParts.length !== tpl.blanks + 1) {
+      setStatus('❌ Template error: Number of parts must equal blanks + 1')
+      log('Template mismatch')
+      return
+    }
+
+    try {
+      setBusy(true)
+      setStatus('')
+      log('🔍 Connecting to wallet…')
+
+      const provider = new ethers.BrowserProvider(window.ethereum)
+      const signer = await provider.getSigner()
+      const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
+
+      const feeInBase = await ct.usdToBase(ethers.parseUnits(feeUsd.toString(), 18))
+      let newId = roundId
+
+      if (!roundId) {
+        log(`🚀 Creating round "${roundName || 'Untitled'}" with ${tpl.blanks} blanks…`)
+        const tx = await ct.createPool1(
+          roundName || 'Untitled',
+          cleanedParts,
+          word,
+          profile?.username || 'anon',
+          ethers.parseUnits(feeUsd.toString(), 18),
+          duration * 86400,
+          { value: feeInBase }
+        )
+        log('📡 Waiting for tx confirmation…')
+        const receipt = await tx.wait()
+        const creationEvent = receipt.logs.find(log => log.fragment?.name === 'Pool1Created')
+        if (creationEvent) {
+          newId = creationEvent.args.id.toString()
+          setRoundId(newId)
+          localStorage.setItem(`madfill-roundname-${newId}`, roundName)
+          log(`✅ Round ${newId} created.`)
+        }
+      } else {
+        log(`✍️ Joining Round #${roundId}…`)
+        const tx = await ct.joinPool1(
+          roundId,
+          word,
+          profile?.username || 'anon',
+          { value: feeInBase }
+        )
+        await tx.wait()
+        log(`✅ Joined Round ${roundId}`)
+      }
+
+      const preview = cleanedParts.map((p, i) => i < tpl.blanks ? `${p}${i === +blankIndex ? word : '____'}` : p).join('')
+      setShareText(encodeURIComponent(`I just entered MadFill Round #${newId} 💥\n\n${preview}\n\nPlay: https://madfill.vercel.app`))
+      setStatus(`✅ Submitted to Round ${newId}`)
+    } catch (err) {
+      console.error(err)
+      setStatus(`❌ ${err?.message?.split('(')[0] || 'Failed'}`)
+      log(`❌ ${err.message}`)
+    } finally {
+      setBusy(false)
+    }
   }
-}
+
   const blankStyle = active =>
-    `inline-block w-16 text-center border-b-2 font-bold text-lg ${
-      active ? 'border-white' : 'border-slate-400'
-    } cursor-pointer mx-1`
+    `inline-block w-16 text-center border-b-2 font-bold text-lg ${active ? 'border-white' : 'border-slate-400'} cursor-pointer mx-1`
 
   const renderTemplatePreview = () => (
     <p className="text-base bg-slate-700 p-4 rounded-xl leading-relaxed shadow-md border border-indigo-400">
-      📄 {tpl.parts.map((p, i) => {
-        if (i < tpl.blanks) {
-          return (
-            <Fragment key={i}>
-              {p}
-              <span
-                className={blankStyle(i === +blankIndex)}
-                onClick={() => setBlankIndex(i.toString())}
-              >
-                {i === +blankIndex ? (word || '____') : '____'}
-              </span>
-            </Fragment>
-          )
-        } else {
-          return p
-        }
-      })}
+      📄 {tpl.parts.map((p, i) => (
+        <Fragment key={i}>
+          {p}
+          {i < tpl.blanks && (
+            <span
+              className={blankStyle(i === +blankIndex)}
+              onClick={() => setBlankIndex(i.toString())}
+            >
+              {i === +blankIndex ? (word || '____') : '____'}
+            </span>
+          )}
+        </Fragment>
+      ))}
     </p>
   )
 
   return (
-    <ErrorBoundary>
-      <Layout>
-        <Head><title>MadFill</title></Head>
-        {shareText && <Confetti width={width} height={height} />}
+    <Layout>
+      <Head><title>MadFill</title></Head>
+      {shareText && <Confetti width={width} height={height} />}
 
-        <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-          <Card className="bg-purple-800 text-white rounded p-6 mb-6 shadow-xl">
-            <h3 className="text-xl font-extrabold mb-3">🧠 What is MadFill?</h3>
-            <ul className="list-disc list-inside text-sm space-y-1">
-              <li><strong>Create a Round:</strong> Pick a template, start a round with $BASE prize pool.</li>
-              <li><strong>Join a Round:</strong> Fill in a blank and enter the prize pool.</li>
-              <li><strong>Win:</strong> Random draw at deadline. Winner takes the pot.</li>
-            </ul>
-            {profile && (
-              <div className="mt-4 flex items-center gap-2">
-                <img src={profile.pfp_url} alt="Avatar" className="w-8 h-8 rounded-full border border-white" />
-                <p className="text-sm text-yellow-200">🎉 Welcome back @{profile.username}!</p>
+      <main className="max-w-4xl mx-auto p-6 space-y-6">
+        <Card className="bg-purple-800 text-white rounded p-6">
+          <h3 className="text-xl font-bold mb-2">🧠 MadFill: Fill the blanks. Win the prize.</h3>
+          <ul className="list-disc list-inside text-sm space-y-1">
+            <li>Pick a prompt, enter with a word.</li>
+            <li>At deadline, a random winner gets the pot.</li>
+          </ul>
+          {profile && (
+            <p className="mt-2 text-yellow-300 text-sm">🎉 Welcome @{profile.username}</p>
+          )}
+          {totalRounds !== null && (
+            <p className="text-xs text-pink-200 mt-2">🔥 {totalRounds} rounds created</p>
+          )}
+        </Card>
+
+        <Card className="bg-slate-800 text-white">
+          <CardHeader className="flex flex-col sm:flex-row justify-between">
+            <h2 className="text-xl font-bold">{roundId ? `🔁 Round #${roundId}` : '🚀 Create Round & Submit'}</h2>
+            <Tooltip text="0.5% platform fee" />
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {status && <div className="bg-slate-700 p-2 rounded text-sm">{status}</div>}
+
+            <input
+              type="text"
+              maxLength={12}
+              className="w-full bg-slate-900 text-white border px-2 py-1 rounded"
+              placeholder="Round Name (optional)"
+              value={roundName}
+              onChange={e => setRoundName(e.target.value)}
+              disabled={busy}
+            />
+
+            <div className="flex flex-col sm:flex-row gap-4">
+              <div className="flex-1">
+                <label className="text-sm">📚 Category</label>
+                <select className="w-full bg-slate-900 text-white border px-2 py-1 rounded" value={catIdx} onChange={e => setCatIdx(+e.target.value)} disabled={busy}>
+                  {categories.map((c, i) => <option key={i} value={i}>{c.name}</option>)}
+                </select>
               </div>
-            )}
-            {totalRounds !== null && (
-              <p className="text-xs text-pink-200 mt-2">🔥 {totalRounds} rounds created so far. Join the madness!</p>
-            )}
-          </Card>
-        </motion.div>
+              <div className="flex-1">
+                <label className="text-sm">📝 Template</label>
+                <select className="w-full bg-slate-900 text-white border px-2 py-1 rounded" value={tplIdx} onChange={e => setTplIdx(+e.target.value)} disabled={busy}>
+                  {selectedCategory.templates.map((t, i) => <option key={i} value={i}>{t.name}</option>)}
+                </select>
+              </div>
+            </div>
 
-        <main className="max-w-4xl mx-auto p-6 space-y-8">
-          <Card className="bg-slate-800 text-white shadow-xl rounded-xl">
-            <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <h2 className="text-xl font-bold">
-                {!roundId ? '🚀 Create Round & Submit' : `🔄 Round #${roundId}`}
-              </h2>
-              <Tooltip text="0.5% cut on entry & claim" />
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {status && (
-                <motion.div
-                  className="bg-slate-700 text-white p-3 rounded text-sm max-w-full overflow-x-auto"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ duration: 0.3 }}
+            {renderTemplatePreview()}
+
+            <input
+              type="text"
+              placeholder="Your word…"
+              className="w-full bg-slate-900 text-white border px-2 py-1 rounded"
+              value={word}
+              onChange={e => setWord(e.target.value)}
+              disabled={busy}
+            />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm">🕓 Duration (days)</label>
+                <select
+                  className="w-full bg-slate-900 text-white border px-2 py-1 rounded"
+                  value={duration}
+                  onChange={e => setDuration(Number(e.target.value))}
+                  disabled={busy}
                 >
-                  {status}
-                </motion.div>
-              )}
-
-              <input
-                type="text"
-                maxLength={12}
-                placeholder="Round Name (optional)"
-                className="w-full bg-slate-900 text-white border rounded px-2 py-1"
-                value={roundName}
-                onChange={e => setRoundName(e.target.value)}
-                disabled={busy}
-              />
-
-              <div className="flex flex-col sm:flex-row sm:gap-4">
-                <div className="flex-1">
-                  <label className="text-sm block mb-1">📚 Category</label>
-                  <select
-                    className="w-full bg-slate-900 text-white border rounded px-2 py-1"
-                    value={catIdx}
-                    onChange={e => setCatIdx(+e.target.value)}
-                    disabled={busy}
-                  >
-                    {categories.map((c, i) => <option key={i} value={i}>{c.name}</option>)}
-                  </select>
-                </div>
-                <div className="flex-1 mt-4 sm:mt-0">
-                  <label className="text-sm block mb-1">📝 Template</label>
-                  <select
-                    className="w-full bg-slate-900 text-white border rounded px-2 py-1"
-                    value={tplIdx}
-                    onChange={e => setTplIdx(+e.target.value)}
-                    disabled={busy}
-                  >
-                    {selectedCategory.templates.map((t, i) => <option key={i} value={i}>{t.name}</option>)}
-                  </select>
-                </div>
+                  {durations.map((d, i) => <option key={i} value={d.value}>{d.label}</option>)}
+                </select>
               </div>
-
-              {renderTemplatePreview()}
-
-              <input
-                type="text"
-                placeholder="Your word..."
-                className="w-full bg-slate-900 text-white border rounded px-2 py-1"
-                value={word}
-                onChange={e => setWord(e.target.value)}
-                disabled={busy}
-              />
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-sm block mb-1">🕓 Duration (days)</label>
-                  <select
-                    className="w-full bg-slate-900 text-white border rounded px-2 py-1"
-                    value={duration}
-                    onChange={e => setDuration(Number(e.target.value))}
-                    disabled={busy}
-                  >
-                    {durations.map((d, i) => (
-                      <option key={i} value={d.value}>{d.label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-sm block mb-1">💵 Entry Fee (USD)</label>
-                  <input
-                    type="range"
-                    min="0.25"
-                    max="10"
-                    step="0.25"
-                    value={feeUsd}
-                    onChange={e => setFeeUsd(Number(e.target.value))}
-                    className="w-full"
-                    disabled={busy}
-                  />
-                  <p className="text-sm mt-1">Current: ${feeUsd.toFixed(2)}</p>
-                </div>
+              <div>
+                <label className="text-sm">💵 Entry Fee (USD)</label>
+                <input
+                  type="range"
+                  min="0.25"
+                  max="10"
+                  step="0.25"
+                  value={feeUsd}
+                  onChange={e => setFeeUsd(Number(e.target.value))}
+                  disabled={busy}
+                  className="w-full"
+                />
+                <p className="text-sm mt-1">${feeUsd.toFixed(2)}</p>
               </div>
+            </div>
 
-              <Button className="bg-indigo-600 hover:bg-indigo-500" onClick={handleUnifiedSubmit} disabled={busy}>
-                {roundId ? 'Join Round' : 'Create Round & Submit'}
-              </Button>
+            <Button onClick={handleUnifiedSubmit} disabled={busy} className="bg-indigo-600 hover:bg-indigo-500">
+              {roundId ? 'Join Round' : 'Create Round & Submit'}
+            </Button>
 
-              <div className="bg-black/40 text-green-200 text-xs mt-6 max-h-40 overflow-y-auto p-3 rounded border border-green-400" ref={loggerRef}>
-                {logs.map((msg, i) => (
-                  <div key={i}>→ {msg}</div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </main>
+            <div className="text-green-200 text-xs mt-4 max-h-40 overflow-y-auto p-2 bg-black/40 border border-green-400 rounded" ref={loggerRef}>
+              {logs.map((msg, i) => <div key={i}>→ {msg}</div>)}
+            </div>
+          </CardContent>
+        </Card>
 
         <Footer />
-      </Layout>
-    </ErrorBoundary>
+      </main>
+    </Layout>
   )
 }
