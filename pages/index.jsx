@@ -93,7 +93,8 @@ export default function Home() {
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
 
-      const feeInBase = await ct.usdToBase(ethers.parseUnits(feeUsd.toString(), 18))
+      const usdAmount = Math.floor(feeUsd * 1_000_000)
+      const feeInBase = await ct.usdToBase(usdAmount)
       let newId = roundId
 
       if (!roundId) {
@@ -103,7 +104,7 @@ export default function Home() {
           cleanedParts,
           word,
           profile?.username || 'anon',
-          ethers.parseUnits(feeUsd.toString(), 18),
+          usdAmount,
           duration * 86400,
           { value: feeInBase }
         )
@@ -168,17 +169,15 @@ export default function Home() {
 
       <main className="max-w-4xl mx-auto p-6 space-y-6">
         <Card className="bg-purple-800 text-white rounded p-6">
-          <h3 className="text-xl font-bold mb-2">🧠 MadFill: Fill the blanks. Win the prize.</h3>
+          <h3 className="text-xl font-bold mb-2">🧠 What is MadFill?</h3>
           <ul className="list-disc list-inside text-sm space-y-1">
-            <li>Pick a prompt, enter with a word.</li>
-            <li>At deadline, a random winner gets the pot.</li>
+            <li><strong>Create:</strong> Start a round by picking a prompt and setting a prize.</li>
+            <li><strong>Join:</strong> Fill in a blank with a clever or silly word.</li>
+            <li><strong>Win:</strong> Random draw at deadline. Winner takes the pot!</li>
           </ul>
-          {profile && (
-            <p className="mt-2 text-yellow-300 text-sm">🎉 Welcome @{profile.username}</p>
-          )}
-          {totalRounds !== null && (
-            <p className="text-xs text-pink-200 mt-2">🔥 {totalRounds} rounds created</p>
-          )}
+          <p className="mt-2 text-sm text-yellow-200">⚠️ Platform takes 0.5% on entry & claim</p>
+          {profile && <p className="mt-2 text-yellow-300 text-sm">🎉 Welcome @{profile.username}</p>}
+          {totalRounds !== null && <p className="text-xs text-pink-200 mt-2">🔥 {totalRounds} rounds created</p>}
         </Card>
 
         <Card className="bg-slate-800 text-white">
