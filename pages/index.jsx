@@ -9,7 +9,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { categories, durations } from '../data/templates'
 import Layout from '@/components/Layout'
-import { motion } from 'framer-motion'
 import { Tooltip } from '@/components/ui/tooltip'
 import Footer from '@/components/Footer'
 import { fetchFarcasterProfile } from '@/lib/neynar'
@@ -181,10 +180,11 @@ export default function Home() {
         </Card>
 
         <Card className="bg-slate-800 text-white">
-          <CardHeader className="flex flex-col sm:flex-row justify-between">
+          <CardHeader className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
             <h2 className="text-xl font-bold">{roundId ? `🔁 Round #${roundId}` : '🚀 Create Round & Submit'}</h2>
             <Tooltip text="0.5% platform fee" />
           </CardHeader>
+
           <CardContent className="space-y-4">
             {status && <div className="bg-slate-700 p-2 rounded text-sm">{status}</div>}
 
