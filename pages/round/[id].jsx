@@ -14,6 +14,7 @@ import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
 import Link from 'next/link'
 import Image from 'next/image'
+import { fetchFarcasterProfile } from '@/lib/neynar'
 
 export default function RoundDetailPage() {
   const { query } = useRouter()
@@ -26,6 +27,7 @@ export default function RoundDetailPage() {
   const [claimed, setClaimed] = useState(false)
   const [basePrice, setBasePrice] = useState(0)
   const { width, height } = useWindowSize()
+  const [profiles, setProfiles] = useState({})
 
   useEffect(() => {
     if (window.ethereum) {
@@ -70,6 +72,16 @@ export default function RoundDetailPage() {
         const json = await res.json()
         setBasePrice(json.base?.usd || 0)
 
+        const participants = info.participants || []
+        const profileMap = {}
+
+        await Promise.all(participants.map(async (addr) => {
+          const profile = await fetchFarcasterProfile(addr)
+          if (profile) profileMap[addr.toLowerCase()] = profile
+        }))
+
+        setProfiles(profileMap)
+
         setRoundData({
           tpl,
           name,
@@ -81,8 +93,8 @@ export default function RoundDetailPage() {
             challenger: votes[1].length
           },
           winner: info.winner?.toLowerCase(),
-          prizeCount: info.participants?.length || 0,
-          participants: info.participants || []
+          prizeCount: participants.length,
+          participants
         })
       } catch (e) {
         console.error(e)
@@ -197,19 +209,24 @@ export default function RoundDetailPage() {
               {roundData.participants?.length > 0 && (
                 <div className="text-sm text-slate-300 mt-4">
                   🧑‍🤝‍🧑 Voter Avatars:
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    {roundData.participants.map((a, i) => (
-                      <div key={i} className="text-xs text-center">
-                        <Image
-                          src={`https://effigy.im/a/${a.toLowerCase()}`}
-                          alt="avatar"
-                          width={32}
-                          height={32}
-                          className="rounded-full"
-                        />
-                        <div className="truncate w-8">{a.slice(2, 6)}</div>
-                      </div>
-                    ))}
+                  <div className="flex flex-wrap gap-3 mt-2">
+                    {roundData.participants.map((a, i) => {
+                      const profile = profiles[a.toLowerCase()]
+                      return (
+                        <div key={i} className="text-xs text-center w-16">
+                          <Image
+                            src={profile?.pfp_url || `https://effigy.im/a/${a.toLowerCase()}`}
+                            alt="avatar"
+                            width={32}
+                            height={32}
+                            className="rounded-full mx-auto"
+                          />
+                          <div className="truncate text-white/80 mt-1">
+                            {profile?.username ? `@${profile.username}` : a.slice(2, 6)}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )}
