@@ -103,6 +103,12 @@ export default function Home() {
 
   async function handleUnifiedSubmit() {
     if (!word) return setStatus('❌ Please enter a word.')
+    if (tpl.parts.length < tpl.blanks + 1) {
+      return setStatus('❌ Template is invalid. Not enough parts for blanks.')
+    }
+    if (feeUsd < 0.25) {
+      return setStatus('❌ Minimum fee is $0.25')
+    }
 
     try {
       setBusy(true)
@@ -112,23 +118,20 @@ export default function Home() {
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
 
+      const cleanedParts = tpl.parts.map(p => p.trim())
       let newId = roundId
 
       if (!roundId) {
-        log('🚀 Creating round with template:')
-        log(` - Name: ${roundName}`)
-        log(` - Fee: $${feeUsd}`)
-        log(` - Duration: ${duration} days`)
-        log(` - Parts: ${tpl.parts.length} pieces`)
+        log(`🚀 Creating round "${roundName || 'Untitled'}" with ${tpl.blanks} blanks`)
         const tx = await ct.createPool1(
           roundName || `Untitled`,
-          tpl.parts,
+          cleanedParts,
           word,
           signer.address.slice(0, 6),
           feeUsd,
           duration * 86400
         )
-        log('📡 Waiting for transaction…')
+        log('📡 Waiting for transaction confirmation…')
         await tx.wait()
         const poolCount = await ct.pool1Count()
         newId = (Number(poolCount) - 1).toString()
@@ -138,7 +141,7 @@ export default function Home() {
         localStorage.setItem(`madfill-roundname-${newId}`, roundName)
         log(`✅ Round ${newId} created.`)
       } else {
-        log(`✍️ Joining existing Round #${newId} with word: ${word}`)
+        log(`✍️ Joining Round #${newId} with word "${word}"`)
         const tx2 = await ct.joinPool1(newId, word, signer.address.slice(0, 6), {
           value: ethers.parseEther('0.001')
         })
@@ -148,13 +151,12 @@ export default function Home() {
       }
 
       setStatus(`✅ Entry for Round ${newId} submitted!`)
-      const preview = tpl.parts.map((part, i) => i < tpl.blanks ? `${part}${i === +blankIndex ? word : '____'}` : part).join('')
+      const preview = cleanedParts.map((part, i) => i < tpl.blanks ? `${part}${i === +blankIndex ? word : '____'}` : part).join('')
       setShareText(encodeURIComponent(`I just entered MadFill Round #${newId} 💥\n\n${preview}\n\nPlay: https://madfill.vercel.app`))
     } catch (e) {
-      console.error('[Error]', e)
-      log(`❌ Error: ${e.message || 'Unknown'}`)
-      const message = e?.message?.split('(')[0]?.trim() || 'Something went wrong.'
-      setStatus(`❌ ${message}`)
+      console.error('[ERROR]', e)
+      log(`❌ ${e.message}`)
+      setStatus(`❌ ${e?.message?.split('(')[0] || 'Error occurred'}`)
     } finally {
       setBusy(false)
     }
@@ -198,9 +200,8 @@ export default function Home() {
             <h3 className="text-xl font-extrabold mb-3">🧠 What is MadFill?</h3>
             <ul className="list-disc list-inside text-sm space-y-1">
               <li><strong>Create a Round:</strong> Pick a template, add your first word, and launch the game.</li>
-              <li><strong>Join a Round:</strong> Fill in the remaining blanks. Pay a small fee. Win big.</li>
-              <li><strong>Win:</strong> At the deadline, one winner is randomly selected.</li>
-              <li><strong>Pool 2:</strong> Submit a challenger card and let the community vote!</li>
+              <li><strong>Join a Round:</strong> Fill in the blanks. Pay a small fee. Win the prize.</li>
+              <li><strong>Pool 2:</strong> Submit a challenger. Let the community vote!</li>
             </ul>
             {profile && (
               <div className="mt-4 flex items-center gap-2">
