@@ -1,5 +1,8 @@
 // pages/api/frame/route.js
 
+import { ethers } from 'ethers'
+import abi from '@/abi/FillInStoryV2_ABI.json'
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
@@ -10,24 +13,29 @@ export default async function handler(req, res) {
     const { fid, buttonIndex, inputText, castId } = untrustedData || {}
     const siteUrl = 'https://madfill.vercel.app'
 
-    // Determine vote target
-    const roundId = inputText || '123' // In future, derive this dynamically
-    const votedFor = buttonIndex === 1 ? 'Original' : 'Challenger'
+    const roundId = inputText || '123' // Use inputText from frame input or fallback
+    const votedFor = buttonIndex === 1 ? true : false // true = Original, false = Challenger
 
-    console.log(`🗳️ Farcaster Vote Received`)
-    console.log(`FID: ${fid}, Cast: ${castId?.fid}:${castId?.hash}`)
-    console.log(`Voted for: ${votedFor} in Round ${roundId}`)
+    console.log(`🗳️ Farcaster Vote: Round ${roundId}, Choice: ${votedFor ? 'Original' : 'Challenger'}`)
 
-    // Simulate recording the vote (replace with contract call or DB later)
+    // On-chain vote call
+    const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
+    const signer = new ethers.Wallet(process.env.PRIVATE_KEY, provider)
+    const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
 
-    // Build follow-up frame (confirmation)
+    const tx = await ct.vote2(BigInt(roundId), votedFor, {
+      value: ethers.parseEther('0.001')
+    })
+    await tx.wait()
+
+    // Follow-up frame response
     res.setHeader('Content-Type', 'application/json')
     return res.status(200).json({
-      image: `${siteUrl}/og/vote-confirmed.png`, // Optional confirmation image
-      postUrl: `${siteUrl}/api/frame/route`,     // Keeps the flow alive if needed
+      image: `${siteUrl}/og/vote-confirmed.png`,
+      postUrl: `${siteUrl}/api/frame/route`,
       imageAspectRatio: '1.91:1',
       title: '✅ Vote Recorded!',
-      description: `You voted for ${votedFor} in Round ${roundId}.`,
+      description: `You voted for ${votedFor ? 'Original' : 'Challenger'} in Round ${roundId}.`,
       buttons: [
         {
           label: '🎯 View Round',
