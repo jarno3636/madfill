@@ -205,11 +205,64 @@ export default function Home() {
                 type="text"
                 maxLength={12}
                 placeholder="Round Name (optional)"
-                className="w-full bg-slate-900 text-white border rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all duration-200"
+                className="w-full bg-slate-900 text-white border rounded px-2 py-1"
                 value={roundName}
                 onChange={e => setRoundName(e.target.value)}
                 disabled={busy}
               />
+
+              <div className="flex flex-wrap gap-2 items-center">
+                <span className="text-sm">💬 Select blank position:</span>
+                {Array.from({ length: tpl.blanks }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={blankStyle(i === +blankIndex)}
+                    onClick={() => setBlankIndex(i.toString())}
+                  >{i + 1}</span>
+                ))}
+              </div>
+
+              <input
+                type="text"
+                placeholder="Your word..."
+                className="w-full bg-slate-900 text-white border rounded px-2 py-1"
+                value={word}
+                onChange={e => setWord(e.target.value)}
+                disabled={busy}
+              />
+
+              <div className="flex gap-4 flex-wrap">
+                <div>
+                  <label className="text-sm block mb-1">🕓 Duration (days)</label>
+                  <select
+                    className="bg-slate-900 text-white border rounded px-2 py-1"
+                    value={duration}
+                    onChange={e => setDuration(Number(e.target.value))}
+                    disabled={busy}
+                  >
+                    {durations.map((d, i) => (
+                      <option key={i} value={d.value}>{d.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm block mb-1">💵 Entry Fee (USD)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.25"
+                    max="10"
+                    value={feeUsd}
+                    onChange={e => setFeeUsd(Number(e.target.value))}
+                    className="bg-slate-900 text-white border rounded px-2 py-1"
+                    disabled={busy}
+                  />
+                </div>
+              </div>
+
+              <Button className="bg-indigo-600 hover:bg-indigo-500" onClick={handleUnifiedSubmit} disabled={busy}>
+                {roundId ? 'Join Round' : 'Create Round & Submit'}
+              </Button>
             </CardContent>
           </Card>
         </main>
