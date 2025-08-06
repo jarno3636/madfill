@@ -41,12 +41,6 @@ class ErrorBoundary extends Component {
   }
 }
 
-// 💰 Convert USD to BASE (mock rate)
-const parseUsdToBase = (usd) => {
-  const mockRate = 350 // 1 BASE = $350
-  return ethers.parseEther((usd / mockRate).toFixed(6))
-}
-
 export default function Home() {
   const [status, setStatus] = useState('')
   const [logs, setLogs] = useState([])
@@ -83,8 +77,8 @@ export default function Home() {
     if (!roundId) return setDeadline(null)
     const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
     const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
-    ct.rounds(BigInt(roundId))
-      .then(info => setDeadline(Number(info.sd)))
+    ct.getPool1Info(BigInt(roundId))
+      .then(info => setDeadline(Number(info.deadline)))
       .catch(() => setDeadline(null))
   }, [roundId])
 
@@ -101,7 +95,7 @@ export default function Home() {
     async function loadTotalRounds() {
       const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
-      const count = await ct.rounds.length()
+      const count = await ct.pool1Count()
       setTotalRounds(Number(count))
     }
     loadTotalRounds()
@@ -122,9 +116,15 @@ export default function Home() {
       return
     }
 
-    if (tpl.blanks < 1 || tpl.blanks > 10) {
-      setStatus('❌ Template must have 1–10 blanks')
-      log('Blanks out of bounds')
+    if (cleanedParts.length !== tpl.blanks + 1) {
+      setStatus('❌ Template error: Number of parts must equal blanks + 1')
+      log('Template parts and blanks mismatch')
+      return
+    }
+
+    if (cleanedParts.some(p => p.length > 64)) {
+      setStatus('❌ Template part too long (max 64 chars each)')
+      log('Template contains overly long part')
       return
     }
 
@@ -135,46 +135,45 @@ export default function Home() {
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
-      const feeInBase = parseUsdToBase(feeUsd)
-      const encodedWord = ethers.encodeBytes32String(word)
 
       let newId = roundId
 
       if (!roundId) {
-        log(`🚀 Starting round: ${roundName || 'Untitled'} with ${tpl.blanks} blanks`)
-        const tx = await ct.start(
-          tpl.blanks,
-          feeInBase,
+        log(`🚀 Creating round "${roundName || 'Untitled'}" with ${tpl.blanks} blanks…`)
+        const tx = await ct.createPool1(
+          roundName || `Untitled`,
+          cleanedParts,
+          word,
+          signer.address.slice(0, 6),
+          feeUsd,
           duration * 86400
         )
-        log('📡 Waiting for round creation...')
+        log('📡 Waiting for transaction confirmation…')
         await tx.wait()
-        const count = await ct.rounds.length()
-        newId = (Number(count) - 1).toString()
+        const poolCount = await ct.pool1Count()
+        newId = (Number(poolCount) - 1).toString()
         setRoundId(newId)
+        const info = await ct.getPool1Info(newId)
+        setDeadline(Number(info.deadline))
+        localStorage.setItem(`madfill-roundname-${newId}`, roundName)
         log(`✅ Round ${newId} created.`)
+      } else {
+        log(`✍️ Joining Round #${newId} with word "${word}"`)
+        const tx2 = await ct.joinPool1(newId, word, signer.address.slice(0, 6), {
+          value: ethers.parseEther('0.001')
+        })
+        log('⏳ Waiting for join confirmation…')
+        await tx2.wait()
+        log(`✅ Joined Round ${newId}`)
       }
 
-      log(`✍️ Submitting word "${word}" at index ${blankIndex} to round ${newId}`)
-      const tx2 = await ct.submitPaid(
-        newId,
-        parseInt(blankIndex),
-        encodedWord,
-        { value: feeInBase }
-      )
-      log('⏳ Waiting for submission confirmation...')
-      await tx2.wait()
-      log(`✅ Submission confirmed for Round ${newId}`)
-
-      setStatus(`✅ Entry submitted to Round ${newId}!`)
-      const preview = cleanedParts.map((p, i) =>
-        i < tpl.blanks ? `${p}${i === +blankIndex ? word : '____'}` : p
-      ).join('')
+      setStatus(`✅ Entry for Round ${newId} submitted!`)
+      const preview = cleanedParts.map((part, i) => i < tpl.blanks ? `${part}${i === +blankIndex ? word : '____'}` : part).join('')
       setShareText(encodeURIComponent(`I just entered MadFill Round #${newId} 💥\n\n${preview}\n\nPlay: https://madfill.vercel.app`))
     } catch (e) {
       console.error('[ERROR]', e)
       log(`❌ ${e.message}`)
-      setStatus(`❌ ${e?.message?.split('(')[0] || 'Something went wrong'}`)
+      setStatus(`❌ ${e?.message?.split('(')[0] || 'Error occurred'}`)
     } finally {
       setBusy(false)
     }
