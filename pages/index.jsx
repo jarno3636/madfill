@@ -1,5 +1,5 @@
 // pages/index.jsx
-import React, { Component, useState, useEffect, Fragment, useRef } from 'react'
+import React, { Component, useState, useEffect, Fragment } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
 import Confetti from 'react-confetti'
@@ -7,10 +7,12 @@ import { useWindowSize } from 'react-use'
 import abi from '../abi/FillInStoryV2_ABI.json'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
+import { Countdown } from '@/components/Countdown'
 import { categories, durations } from '../data/templates'
 import Layout from '@/components/Layout'
 import { motion } from 'framer-motion'
 import { Tooltip } from '@/components/ui/tooltip'
+import Link from 'next/link'
 import Footer from '@/components/Footer'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 
@@ -43,9 +45,6 @@ class ErrorBoundary extends Component {
 
 export default function Home() {
   const [status, setStatus] = useState('')
-  const [logs, setLogs] = useState([])
-  const loggerRef = useRef(null)
-
   const [roundId, setRoundId] = useState('')
   const [blankIndex, setBlankIndex] = useState('0')
   const [roundName, setRoundName] = useState('')
@@ -63,15 +62,6 @@ export default function Home() {
   const [profile, setProfile] = useState(null)
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx]
-
-  const log = (msg) => {
-    setLogs(prev => [...prev, msg])
-    setTimeout(() => {
-      if (loggerRef.current) {
-        loggerRef.current.scrollTop = loggerRef.current.scrollHeight
-      }
-    }, 100)
-  }
 
   useEffect(() => {
     if (!roundId) return setDeadline(null)
@@ -103,35 +93,26 @@ export default function Home() {
 
   async function handleUnifiedSubmit() {
     if (!word) return setStatus('❌ Please enter a word.')
-    if (tpl.parts.length < tpl.blanks + 1) {
-      return setStatus('❌ Template is invalid. Not enough parts for blanks.')
-    }
-    if (feeUsd < 0.25) {
-      return setStatus('❌ Minimum fee is $0.25')
-    }
 
     try {
       setBusy(true)
       setStatus('')
-      log('🔍 Connecting to wallet…')
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
 
-      const cleanedParts = tpl.parts.map(p => p.trim())
       let newId = roundId
 
       if (!roundId) {
-        log(`🚀 Creating round "${roundName || 'Untitled'}" with ${tpl.blanks} blanks`)
+        setStatus('🚀 Creating new round & submitting…')
         const tx = await ct.createPool1(
           roundName || `Untitled`,
-          cleanedParts,
+          tpl.parts,
           word,
           signer.address.slice(0, 6),
           feeUsd,
           duration * 86400
         )
-        log('📡 Waiting for transaction confirmation…')
         await tx.wait()
         const poolCount = await ct.pool1Count()
         newId = (Number(poolCount) - 1).toString()
@@ -139,54 +120,51 @@ export default function Home() {
         const info = await ct.getPool1Info(newId)
         setDeadline(Number(info.deadline))
         localStorage.setItem(`madfill-roundname-${newId}`, roundName)
-        log(`✅ Round ${newId} created.`)
       } else {
-        log(`✍️ Joining Round #${newId} with word "${word}"`)
+        setStatus('✍️ Submitting your entry…')
         const tx2 = await ct.joinPool1(newId, word, signer.address.slice(0, 6), {
           value: ethers.parseEther('0.001')
         })
-        log('⏳ Waiting for join confirmation…')
         await tx2.wait()
-        log(`✅ Joined Round ${newId}`)
       }
 
       setStatus(`✅ Entry for Round ${newId} submitted!`)
-      const preview = cleanedParts.map((part, i) => i < tpl.blanks ? `${part}${i === +blankIndex ? word : '____'}` : part).join('')
+      const preview = tpl.parts.map((part, i) => i < tpl.blanks ? `${part}${i === +blankIndex ? word : '____'}` : part).join('')
       setShareText(encodeURIComponent(`I just entered MadFill Round #${newId} 💥\n\n${preview}\n\nPlay: https://madfill.vercel.app`))
+
     } catch (e) {
-      console.error('[ERROR]', e)
-      log(`❌ ${e.message}`)
-      setStatus(`❌ ${e?.message?.split('(')[0] || 'Error occurred'}`)
+      const message = e?.message?.split('(')[0]?.trim() || 'Something went wrong.'
+      setStatus(`❌ ${message}`)
     } finally {
       setBusy(false)
     }
   }
 
-  const blankStyle = active =>
-    `inline-block w-16 text-center border-b-2 font-bold text-lg ${
-      active ? 'border-white' : 'border-slate-400'
-    } cursor-pointer mx-1`
+  const blankStyle = active => `inline-block w-10 text-center border-b-2 ${active ? 'border-yellow-300' : 'border-slate-400'} cursor-pointer mx-1 text-lg`
 
   const renderTemplatePreview = () => (
-    <p className="text-base bg-slate-700 p-4 rounded-xl leading-relaxed shadow-md border border-indigo-400">
-      📄 {tpl.parts.map((p, i) => {
-        if (i < tpl.blanks) {
-          return (
-            <Fragment key={i}>
-              {p}
-              <span
-                className={blankStyle(i === +blankIndex)}
-                onClick={() => setBlankIndex(i.toString())}
-              >
-                {i === +blankIndex ? (word || '____') : '____'}
-              </span>
-            </Fragment>
-          )
-        } else {
-          return p
-        }
-      })}
-    </p>
+    <div className="text-base bg-gradient-to-r from-indigo-900 to-purple-900 text-white p-5 rounded-xl shadow-inner border border-indigo-500">
+      <h4 className="font-bold text-lg mb-2">📄 Story Preview</h4>
+      <p className="leading-relaxed">
+        {tpl.parts.map((p, i) => {
+          if (i < tpl.blanks) {
+            return (
+              <Fragment key={i}>
+                {p}
+                <span
+                  className={blankStyle(i === +blankIndex)}
+                  onClick={() => setBlankIndex(i.toString())}
+                >
+                  {i === +blankIndex ? (word || '____') : '____'}
+                </span>
+              </Fragment>
+            )
+          } else {
+            return p
+          }
+        })}
+      </p>
+    </div>
   )
 
   return (
