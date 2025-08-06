@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Head from 'next/head'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -7,6 +7,7 @@ import { useWindowSize } from 'react-use'
 import Confetti from 'react-confetti'
 import { categories } from '../data/templates'
 import StyledCard from '@/components/StyledCard'
+import { fetchFarcasterProfile } from '@/lib/neynar'
 
 export default function FreeGame() {
   const [catIdx, setCatIdx] = useState(0)
@@ -14,10 +15,22 @@ export default function FreeGame() {
   const [words, setWords] = useState({})
   const [submitted, setSubmitted] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [profile, setProfile] = useState(null)
   const { width, height } = useWindowSize()
 
   const category = categories[catIdx] || { templates: [] }
   const template = category.templates[tplIdx] || { parts: [], blanks: 0, name: 'Untitled' }
+
+  useEffect(() => {
+    async function loadProfile() {
+      const fid = localStorage.getItem('fc_fid')
+      if (fid) {
+        const p = await fetchFarcasterProfile(fid)
+        setProfile(p)
+      }
+    }
+    loadProfile()
+  }, [])
 
   const handleWordChange = (i, val) => {
     setWords({ ...words, [i]: val })
@@ -39,17 +52,21 @@ export default function FreeGame() {
     .join('')
 
   const shareText = encodeURIComponent(
-    `I just played the Free 🧠 MadFill Game!\n\n${filledText}\n\nPlay for free: https://madfill.vercel.app/free`
+    `I just played the Free 🧠 MadFill Game!
+
+${filledText}
+
+Play free: https://madfill.vercel.app/free`
   )
 
-  const farcasterLink = `https://warpcast.com/~/compose?text=${shareText}`
+  const farcasterCastLink = `https://warpcast.com/~/compose?text=${shareText}`
+  const farcasterStoryLink = `https://warpcast.com/~/compose?text=${shareText}&embeds[]=https://madfill.vercel.app/free`
   const twitterLink = `https://twitter.com/intent/tweet?text=${shareText}`
 
   const handleCopy = () => {
     if (navigator.clipboard) {
       navigator.clipboard.writeText(filledText)
     } else {
-      // Fallback
       const el = document.createElement('textarea')
       el.value = filledText
       document.body.appendChild(el)
@@ -69,6 +86,10 @@ export default function FreeGame() {
         <title>🎁 Free Game | MadFill</title>
         <meta property="og:title" content="Play the Free MadFill Game!" />
         <meta property="og:description" content="Create, laugh, and share your own fill-in-the-blank card. No wallet needed!" />
+        <meta property="og:url" content="https://madfill.vercel.app/free" />
+        <meta property="og:image" content="https://madfill.vercel.app/api/og?free=1" />
+        <meta name="twitter:card" content="summary_large_image" />
+        {profile && <meta name="fc:creator" content={`@${profile.username}`} />}
       </Head>
 
       {submitted && <Confetti width={width} height={height} />}
@@ -81,7 +102,6 @@ export default function FreeGame() {
         <CardContent className="space-y-6">
           {!submitted && (
             <>
-              {/* Selectors */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label>Category</label>
@@ -116,7 +136,6 @@ export default function FreeGame() {
                 </div>
               </div>
 
-              {/* Word Inputs */}
               <div className="space-y-2">
                 {Array.from({ length: template.blanks }).map((_, i) => (
                   <input
@@ -130,7 +149,6 @@ export default function FreeGame() {
                 ))}
               </div>
 
-              {/* Live Preview */}
               <div className="bg-slate-800 p-4 rounded border border-slate-600 text-white shadow-inner mt-4">
                 <h3 className="font-semibold mb-2">🪄 Live Preview:</h3>
                 <StyledCard parts={template.parts} blanks={template.blanks} words={words} />
@@ -146,11 +164,18 @@ export default function FreeGame() {
             </>
           )}
 
-          {/* Completed Card */}
           {submitted && (
             <div className="bg-slate-800 p-4 rounded border border-pink-500 shadow-inner space-y-4 text-white">
               <h3 className="font-semibold text-lg">🧾 Your Completed Card:</h3>
               <StyledCard parts={template.parts} blanks={template.blanks} words={words} />
+
+              {/* Farcaster profile */}
+              {profile && (
+                <div className="flex items-center gap-2 mt-2 text-sm text-yellow-200">
+                  <img src={profile.pfp_url} alt="Avatar" className="w-6 h-6 rounded-full border border-white" />
+                  <span>Shared by @{profile.username}</span>
+                </div>
+              )}
 
               <div className="flex flex-wrap gap-3 mt-4">
                 <a
@@ -162,12 +187,20 @@ export default function FreeGame() {
                   🐦 Share on Twitter
                 </a>
                 <a
-                  href={farcasterLink}
+                  href={farcasterCastLink}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded text-white"
                 >
-                  🌀 Share on Farcaster
+                  🌀 Cast to Farcaster
+                </a>
+                <a
+                  href={farcasterStoryLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2 bg-fuchsia-600 hover:bg-fuchsia-500 rounded text-white"
+                >
+                  📚 Share as Story
                 </a>
                 <button
                   onClick={handleCopy}
