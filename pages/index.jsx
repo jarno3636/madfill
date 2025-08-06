@@ -1,5 +1,5 @@
 // pages/index.jsx
-import React, { Component, useState, useEffect, Fragment } from 'react'
+import React, { Component, useState, useEffect, Fragment, useRef } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
 import Confetti from 'react-confetti'
@@ -43,6 +43,9 @@ class ErrorBoundary extends Component {
 
 export default function Home() {
   const [status, setStatus] = useState('')
+  const [logs, setLogs] = useState([])
+  const loggerRef = useRef(null)
+
   const [roundId, setRoundId] = useState('')
   const [blankIndex, setBlankIndex] = useState('0')
   const [roundName, setRoundName] = useState('')
@@ -60,6 +63,15 @@ export default function Home() {
   const [profile, setProfile] = useState(null)
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx]
+
+  const log = (msg) => {
+    setLogs(prev => [...prev, msg])
+    setTimeout(() => {
+      if (loggerRef.current) {
+        loggerRef.current.scrollTop = loggerRef.current.scrollHeight
+      }
+    }, 100)
+  }
 
   useEffect(() => {
     if (!roundId) return setDeadline(null)
@@ -95,6 +107,7 @@ export default function Home() {
     try {
       setBusy(true)
       setStatus('')
+      log('🔍 Connecting to wallet…')
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
@@ -102,7 +115,11 @@ export default function Home() {
       let newId = roundId
 
       if (!roundId) {
-        console.log('[Creating Round]', { roundName, tpl, word, feeUsd, duration })
+        log('🚀 Creating round with template:')
+        log(` - Name: ${roundName}`)
+        log(` - Fee: $${feeUsd}`)
+        log(` - Duration: ${duration} days`)
+        log(` - Parts: ${tpl.parts.length} pieces`)
         const tx = await ct.createPool1(
           roundName || `Untitled`,
           tpl.parts,
@@ -111,6 +128,7 @@ export default function Home() {
           feeUsd,
           duration * 86400
         )
+        log('📡 Waiting for transaction…')
         await tx.wait()
         const poolCount = await ct.pool1Count()
         newId = (Number(poolCount) - 1).toString()
@@ -118,19 +136,23 @@ export default function Home() {
         const info = await ct.getPool1Info(newId)
         setDeadline(Number(info.deadline))
         localStorage.setItem(`madfill-roundname-${newId}`, roundName)
+        log(`✅ Round ${newId} created.`)
       } else {
-        console.log('[Joining Round]', { newId, word })
+        log(`✍️ Joining existing Round #${newId} with word: ${word}`)
         const tx2 = await ct.joinPool1(newId, word, signer.address.slice(0, 6), {
           value: ethers.parseEther('0.001')
         })
+        log('⏳ Waiting for join confirmation…')
         await tx2.wait()
+        log(`✅ Joined Round ${newId}`)
       }
 
       setStatus(`✅ Entry for Round ${newId} submitted!`)
       const preview = tpl.parts.map((part, i) => i < tpl.blanks ? `${part}${i === +blankIndex ? word : '____'}` : part).join('')
       setShareText(encodeURIComponent(`I just entered MadFill Round #${newId} 💥\n\n${preview}\n\nPlay: https://madfill.vercel.app`))
     } catch (e) {
-      console.error('[Submit Error]', e)
+      console.error('[Error]', e)
+      log(`❌ Error: ${e.message || 'Unknown'}`)
       const message = e?.message?.split('(')[0]?.trim() || 'Something went wrong.'
       setStatus(`❌ ${message}`)
     } finally {
@@ -291,6 +313,12 @@ export default function Home() {
               <Button className="bg-indigo-600 hover:bg-indigo-500" onClick={handleUnifiedSubmit} disabled={busy}>
                 {roundId ? 'Join Round' : 'Create Round & Submit'}
               </Button>
+
+              <div className="bg-black/40 text-green-200 text-xs mt-6 max-h-40 overflow-y-auto p-3 rounded border border-green-400" ref={loggerRef}>
+                {logs.map((msg, i) => (
+                  <div key={i}>→ {msg}</div>
+                ))}
+              </div>
             </CardContent>
           </Card>
         </main>
