@@ -211,6 +211,33 @@ export default function Home() {
                 disabled={busy}
               />
 
+              <div className="flex gap-4">
+                <div>
+                  <label className="text-sm block mb-1">📚 Category</label>
+                  <select
+                    className="bg-slate-900 text-white border rounded px-2 py-1"
+                    value={catIdx}
+                    onChange={e => setCatIdx(+e.target.value)}
+                    disabled={busy}
+                  >
+                    {categories.map((c, i) => <option key={i} value={i}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm block mb-1">📝 Template</label>
+                  <select
+                    className="bg-slate-900 text-white border rounded px-2 py-1"
+                    value={tplIdx}
+                    onChange={e => setTplIdx(+e.target.value)}
+                    disabled={busy}
+                  >
+                    {selectedCategory.templates.map((t, i) => <option key={i} value={i}>{t.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <p className="text-sm bg-slate-700 p-3 rounded">📄 {tpl.parts.map((p, i) => i < tpl.blanks ? `${p}____` : p).join('')}</p>
+
               <div className="flex flex-wrap gap-2 items-center">
                 <span className="text-sm">💬 Select blank position:</span>
                 {Array.from({ length: tpl.blanks }).map((_, i) => (
