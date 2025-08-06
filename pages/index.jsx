@@ -7,12 +7,10 @@ import { useWindowSize } from 'react-use'
 import abi from '../abi/FillInStoryV2_ABI.json'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
-import { Countdown } from '@/components/Countdown'
 import { categories, durations } from '../data/templates'
 import Layout from '@/components/Layout'
 import { motion } from 'framer-motion'
 import { Tooltip } from '@/components/ui/tooltip'
-import Link from 'next/link'
 import Footer from '@/components/Footer'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 
@@ -104,7 +102,7 @@ export default function Home() {
       let newId = roundId
 
       if (!roundId) {
-        setStatus('🚀 Creating new round & submitting…')
+        console.log('[Creating Round]', { roundName, tpl, word, feeUsd, duration })
         const tx = await ct.createPool1(
           roundName || `Untitled`,
           tpl.parts,
@@ -121,7 +119,7 @@ export default function Home() {
         setDeadline(Number(info.deadline))
         localStorage.setItem(`madfill-roundname-${newId}`, roundName)
       } else {
-        setStatus('✍️ Submitting your entry…')
+        console.log('[Joining Round]', { newId, word })
         const tx2 = await ct.joinPool1(newId, word, signer.address.slice(0, 6), {
           value: ethers.parseEther('0.001')
         })
@@ -131,8 +129,8 @@ export default function Home() {
       setStatus(`✅ Entry for Round ${newId} submitted!`)
       const preview = tpl.parts.map((part, i) => i < tpl.blanks ? `${part}${i === +blankIndex ? word : '____'}` : part).join('')
       setShareText(encodeURIComponent(`I just entered MadFill Round #${newId} 💥\n\n${preview}\n\nPlay: https://madfill.vercel.app`))
-
     } catch (e) {
+      console.error('[Submit Error]', e)
       const message = e?.message?.split('(')[0]?.trim() || 'Something went wrong.'
       setStatus(`❌ ${message}`)
     } finally {
@@ -140,10 +138,13 @@ export default function Home() {
     }
   }
 
-  const blankStyle = active => `inline-block w-8 text-center border-b-2 ${active ? 'border-white' : 'border-slate-400'} cursor-pointer mx-1`
+  const blankStyle = active =>
+    `inline-block w-16 text-center border-b-2 font-bold text-lg ${
+      active ? 'border-white' : 'border-slate-400'
+    } cursor-pointer mx-1`
 
   const renderTemplatePreview = () => (
-    <p className="text-sm bg-slate-700 p-3 rounded">
+    <p className="text-base bg-slate-700 p-4 rounded-xl leading-relaxed shadow-md border border-indigo-400">
       📄 {tpl.parts.map((p, i) => {
         if (i < tpl.blanks) {
           return (
@@ -174,10 +175,10 @@ export default function Home() {
           <Card className="bg-purple-800 text-white rounded p-6 mb-6 shadow-xl">
             <h3 className="text-xl font-extrabold mb-3">🧠 What is MadFill?</h3>
             <ul className="list-disc list-inside text-sm space-y-1">
-              <li><strong>Create a Round:</strong> Pick a template, add your first word, and launch the game. Your word sets the tone.</li>
-              <li><strong>Join a Round:</strong> Other players jump in and fill in the remaining blanks. Each entry costs a small fee (you set it!).</li>
-              <li><strong>Win:</strong> At the end of the round, a random participant is chosen to win the prize pool.</li>
-              <li><strong>Pool 2 Showdown:</strong> Think you can beat the original? Submit a challenger card and let the community vote!</li>
+              <li><strong>Create a Round:</strong> Pick a template, add your first word, and launch the game.</li>
+              <li><strong>Join a Round:</strong> Fill in the remaining blanks. Pay a small fee. Win big.</li>
+              <li><strong>Win:</strong> At the deadline, one winner is randomly selected.</li>
+              <li><strong>Pool 2:</strong> Submit a challenger card and let the community vote!</li>
             </ul>
             {profile && (
               <div className="mt-4 flex items-center gap-2">
