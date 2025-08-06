@@ -1,4 +1,4 @@
-'use client'
+// pages/index.jsx
 import React, { useState, useEffect, Fragment, useRef } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { categories, durations } from '../data/templates'
 import Layout from '@/components/Layout'
+import { motion } from 'framer-motion'
 import { Tooltip } from '@/components/ui/tooltip'
 import Footer from '@/components/Footer'
 import { fetchFarcasterProfile } from '@/lib/neynar'
@@ -17,13 +18,12 @@ export default function Home() {
   const [status, setStatus] = useState('')
   const [logs, setLogs] = useState([])
   const loggerRef = useRef(null)
-
   const [roundId, setRoundId] = useState('')
   const [blankIndex, setBlankIndex] = useState('0')
   const [roundName, setRoundName] = useState('')
   const [word, setWord] = useState('')
   const [duration, setDuration] = useState(durations[0].value)
-  const [feeUsd, setFeeUsd] = useState(1.0)
+  const [feeUsd, setFeeUsd] = useState(1)
   const [shareText, setShareText] = useState('')
   const [busy, setBusy] = useState(false)
   const { width, height } = useWindowSize()
@@ -51,13 +51,14 @@ export default function Home() {
         setProfile(p)
       }
     }
+    loadProfile()
+
     async function loadTotalRounds() {
       const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
       const count = await ct.pool1Count()
       setTotalRounds(Number(count))
     }
-    loadProfile()
     loadTotalRounds()
   }, [])
 
@@ -67,6 +68,12 @@ export default function Home() {
     if (!word || word.length > 32) {
       setStatus('❌ Word must be 1–32 characters long.')
       log('Invalid word input')
+      return
+    }
+
+    if (feeUsd < 1 || feeUsd > 10) {
+      setStatus('❌ Entry fee must be between $1–$10')
+      log('Fee out of bounds')
       return
     }
 
@@ -85,9 +92,9 @@ export default function Home() {
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
 
-      const usdMicro = ethers.parseUnits(feeUsd.toString(), 6)
-      const feeInBase = await ct.usdToBase(usdMicro)
-
+      const usdAmount = ethers.parseUnits(feeUsd.toString(), 6)
+      const feeInBase = await ct.usdToBase(usdAmount)
+      const totalFee = feeInBase + (feeInBase * 50n / 10000n)
       let newId = roundId
 
       if (!roundId) {
@@ -97,9 +104,9 @@ export default function Home() {
           cleanedParts,
           word,
           profile?.username || 'anon',
-          usdMicro,
+          usdAmount,
           duration * 86400,
-          { value: feeInBase }
+          { value: totalFee }
         )
         log('📡 Waiting for tx confirmation…')
         const receipt = await tx.wait()
@@ -116,7 +123,7 @@ export default function Home() {
           roundId,
           word,
           profile?.username || 'anon',
-          { value: feeInBase }
+          { value: totalFee }
         )
         await tx.wait()
         log(`✅ Joined Round ${roundId}`)
@@ -159,6 +166,7 @@ export default function Home() {
     <Layout>
       <Head><title>MadFill</title></Head>
       {shareText && <Confetti width={width} height={height} />}
+
       <main className="max-w-4xl mx-auto p-6 space-y-6">
         <Card className="bg-purple-800 text-white rounded p-6">
           <h3 className="text-xl font-bold mb-2">🧠 What is MadFill?</h3>
@@ -236,9 +244,7 @@ export default function Home() {
                   onChange={e => setFeeUsd(Number(e.target.value))}
                   disabled={busy}
                 >
-                  {[...Array(10)].map((_, i) => (
-                    <option key={i} value={i + 1}>${(i + 1).toFixed(2)}</option>
-                  ))}
+                  {[...Array(10)].map((_, i) => <option key={i} value={i + 1}>${i + 1}</option>)}
                 </select>
               </div>
             </div>
