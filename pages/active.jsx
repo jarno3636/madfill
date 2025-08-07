@@ -24,8 +24,7 @@ export default function ActivePools() {
       const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
 
-      const priceRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
-      const basePrice = (await priceRes.json()).base.usd
+      const basePrice = 0.000001 // USD conversion is deprecated for fee — fallback logic
 
       const count = await ct.pool1Count()
       const now = Math.floor(Date.now() / 1000)
@@ -34,10 +33,11 @@ export default function ActivePools() {
       for (let i = 1; i <= count; i++) {
         try {
           const info = await ct.getPool1Info(i)
-          const deadline = Number(info[4])
+          const deadline = Number(info.deadline)
+          const claimed = info.claimed
+          const participants = info.participants || []
 
-          if (!info[8] && deadline > now) {
-            const participants = info[6]
+          if (!claimed && deadline > now) {
             const avatars = await Promise.all(
               participants.slice(0, 5).map(async (addr) => {
                 const res = await fetchFarcasterProfile(addr)
@@ -49,20 +49,19 @@ export default function ActivePools() {
               })
             )
 
-            const feeBase = Number(info[3]) / 1e18
-            const poolUsd = feeBase * participants.length * basePrice
+            const feeBase = Number(info.fee) / 1e18
+            const poolUsd = basePrice * participants.length * feeBase
 
             all.push({
               id: i,
-              name: localStorage.getItem(`madfill-roundname-${i}`) || info[0] || 'Untitled',
+              name: localStorage.getItem(`madfill-roundname-${i}`) || info.name || 'Untitled',
               feeBase: feeBase.toFixed(4),
-              feeUsd: (feeBase * basePrice).toFixed(2),
               deadline,
               count: participants.length,
               usd: poolUsd.toFixed(2),
               participants: avatars,
-              badge: deadline - now < 3600 ? '🔥 Ends Soon' : poolUsd > 10 ? '💰 Top Pool' : null,
-              thumbnail: `/thumbnails/thumb${i % 5}.jpg`,
+              badge: deadline - now < 3600 ? '🔥 Ends Soon' : poolUsd > 5 ? '💰 Top Pool' : null,
+              emoji: ['🐸', '🦊', '🦄', '🐢', '🐙'][i % 5]
             })
           }
         } catch (e) {
@@ -136,13 +135,7 @@ export default function ActivePools() {
             <Card key={r.id} className="bg-slate-800 text-white shadow-md hover:shadow-indigo-500/40 transition-shadow rounded-lg">
               <CardHeader className="flex justify-between items-center">
                 <div className="flex items-center gap-3">
-                  <Image
-                    src={r.thumbnail}
-                    alt="Thumbnail"
-                    width={50}
-                    height={50}
-                    className="rounded-full shadow"
-                  />
+                  <div className="text-3xl">{r.emoji}</div>
                   <div>
                     <h2 className="text-xl font-semibold">#{r.id} — {r.name}</h2>
                     {r.badge && <span className="text-sm text-yellow-400 animate-pulse">{r.badge}</span>}
@@ -151,9 +144,9 @@ export default function ActivePools() {
                 <Countdown deadline={r.deadline} />
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
-                <p><strong>Fee:</strong> ${r.feeUsd} ({r.feeBase} BASE)</p>
+                <p><strong>Entry Fee:</strong> {r.feeBase} BASE</p>
                 <p><strong>Participants:</strong> {r.count}</p>
-                <p><strong>Total Pool:</strong> ${r.usd}</p>
+                <p><strong>Total Pool (est.):</strong> ${r.usd}</p>
                 <div className="flex -space-x-2">
                   {r.participants.map((p, i) => (
                     <Image
