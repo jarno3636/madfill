@@ -4,7 +4,7 @@ import Head from 'next/head'
 import { ethers } from 'ethers'
 import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
-import abi from '../abi/FillInStoryV2_ABI.json'
+import abi from '../abi/FillInStoryV3_ABI.json'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { categories, durations } from '../data/templates'
@@ -12,6 +12,7 @@ import Layout from '@/components/Layout'
 import { Tooltip } from '@/components/ui/tooltip'
 import Footer from '@/components/Footer'
 import { fetchFarcasterProfile } from '@/lib/neynar'
+import Image from 'next/image'
 
 export default function Home() {
   const [status, setStatus] = useState('')
@@ -30,6 +31,7 @@ export default function Home() {
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
   const [profile, setProfile] = useState(null)
+
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx]
 
@@ -70,12 +72,6 @@ export default function Home() {
       return
     }
 
-    if (feeUsd < 0.25) {
-      setStatus('❌ Entry fee must be at least $0.25')
-      log('Fee too low')
-      return
-    }
-
     if (cleanedParts.length !== tpl.blanks + 1) {
       setStatus('❌ Template error: Number of parts must equal blanks + 1')
       log('Template mismatch')
@@ -92,46 +88,29 @@ export default function Home() {
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
 
       const usdMicro = ethers.parseUnits(feeUsd.toString(), 6)
-      const baseWithoutFee = await ct.usdToBase(usdMicro)
-      const feeBuffer = baseWithoutFee * 1005n / 1000n
+      const baseAmount = await ct.usdToBase(usdMicro)
+      const buffer = baseAmount * 1005n / 1000n
 
-      let newId = roundId
-
-      if (!roundId) {
-        log(`🚀 Creating round "${roundName || 'Untitled'}"…`)
-        const tx = await ct.createPool1(
-          roundName || 'Untitled',
-          cleanedParts,
-          word,
-          profile?.username || 'anon',
-          usdMicro,
-          duration * 86400,
-          { value: feeBuffer }
-        )
-        log('📡 Waiting for tx confirmation…')
-        const receipt = await tx.wait()
-        const creationEvent = receipt.logs.find(log => log.fragment?.name === 'Pool1Created')
-        if (creationEvent) {
-          newId = creationEvent.args.id.toString()
-          setRoundId(newId)
-          localStorage.setItem(`madfill-roundname-${newId}`, roundName)
-          log(`✅ Round ${newId} created.`)
-        }
-      } else {
-        log(`✍️ Joining Round #${roundId}…`)
-        const tx = await ct.joinPool1(
-          roundId,
-          word,
-          profile?.username || 'anon',
-          { value: feeBuffer }
-        )
-        await tx.wait()
-        log(`✅ Joined Round ${roundId}`)
+      log(`🚀 Creating round "${roundName || 'Untitled'}"…`)
+      const tx = await ct.createPool1(
+        roundName || 'Untitled',
+        selectedCategory.name,
+        cleanedParts,
+        word,
+        profile?.username || 'anon',
+        baseAmount,
+        duration * 86400,
+        { value: buffer }
+      )
+      const receipt = await tx.wait()
+      const event = receipt.logs.find(log => log.fragment?.name === 'Pool1Created')
+      if (event) {
+        const id = event.args.id.toString()
+        setRoundId(id)
+        setShareText(`https://warpcast.com/~/compose?text=${encodeURIComponent(`Just created a new MadFill round! 🤯\n\nJoin Round #${id}: https://madfill.vercel.app/round/${id}`)}`)
+        log(`✅ Round ${id} created.`)
       }
-
-      const preview = cleanedParts.map((p, i) => i < tpl.blanks ? `${p}${i === +blankIndex ? word : '____'}` : p).join('')
-      setShareText(encodeURIComponent(`I just entered MadFill Round #${newId} 💥\n\n${preview}\n\nPlay: https://madfill.vercel.app`))
-      setStatus(`✅ Submitted to Round ${newId}`)
+      setStatus('✅ Success!')
     } catch (err) {
       console.error(err)
       setStatus(`❌ ${err?.message?.split('(')[0] || 'Failed'}`)
@@ -141,12 +120,11 @@ export default function Home() {
     }
   }
 
-  const blankStyle = active =>
-    `inline-block w-16 text-center border-b-2 font-bold text-lg ${active ? 'border-white' : 'border-slate-400'} cursor-pointer mx-1`
+  const blankStyle = (active) => `inline-block w-16 text-center border-b-2 font-bold text-lg ${active ? 'border-yellow-400 text-yellow-300' : 'border-slate-400'} cursor-pointer mx-1`
 
   const renderTemplatePreview = () => (
     <p className="text-base bg-slate-700 p-4 rounded-xl leading-relaxed shadow-md border border-indigo-400">
-      📄 {tpl.parts.map((p, i) => (
+      🧾 {tpl.parts.map((p, i) => (
         <Fragment key={i}>
           {p}
           {i < tpl.blanks && (
@@ -164,25 +142,21 @@ export default function Home() {
 
   return (
     <Layout>
-      <Head><title>MadFill</title></Head>
+      <Head><title>MadFill – Create or Join a Round</title></Head>
       {shareText && <Confetti width={width} height={height} />}
-      <main className="max-w-4xl mx-auto p-6 space-y-6">
-        <Card className="bg-purple-800 text-white rounded p-6">
-          <h3 className="text-xl font-bold mb-2">🧠 What is MadFill?</h3>
-          <ul className="list-disc list-inside text-sm space-y-1">
-            <li><strong>Create:</strong> Start a round by picking a prompt and setting a prize.</li>
-            <li><strong>Join:</strong> Fill in a blank with a clever or silly word.</li>
-            <li><strong>Win:</strong> Random draw at deadline. Winner takes the pot!</li>
-          </ul>
-          <p className="mt-2 text-sm text-yellow-200">⚠️ Platform takes 0.5% on entry & claim</p>
-          {profile && <p className="mt-2 text-yellow-300 text-sm">🎉 Welcome @{profile.username}</p>}
-          {totalRounds !== null && <p className="text-xs text-pink-200 mt-2">🔥 {totalRounds} rounds created</p>}
-        </Card>
+      <main className="max-w-5xl mx-auto p-6 space-y-6 text-white">
+
+        <div className="flex items-center justify-between bg-gradient-to-r from-indigo-600 to-purple-800 p-6 rounded-xl shadow-lg">
+          <div>
+            <h1 className="text-3xl font-bold">🧠 MadFill</h1>
+            <p className="text-sm text-indigo-100">Create silly sentences. Win prizes. Get famous.</p>
+          </div>
+          <Image src="/favicon.PNG" alt="MadFill logo" width={48} height={48} className="rounded-full shadow-lg" />
+        </div>
 
         <Card className="bg-slate-800 text-white">
-          <CardHeader className="flex flex-col sm:flex-row justify-between">
-            <h2 className="text-xl font-bold">{roundId ? `🔁 Round #${roundId}` : '🚀 Create Round & Submit'}</h2>
-            <Tooltip text="0.5% platform fee" />
+          <CardHeader>
+            <h2 className="text-xl font-bold">🚀 Create a New Round</h2>
           </CardHeader>
           <CardContent className="space-y-4">
             {status && <div className="bg-slate-700 p-2 rounded text-sm">{status}</div>}
@@ -252,8 +226,21 @@ export default function Home() {
             </div>
 
             <Button onClick={handleUnifiedSubmit} disabled={busy} className="bg-indigo-600 hover:bg-indigo-500">
-              {roundId ? 'Join Round' : 'Create Round & Submit'}
+              Create Round & Submit
             </Button>
+
+            {shareText && (
+              <div className="mt-4">
+                <a
+                  href={shareText}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="bg-green-700 hover:bg-green-600 px-4 py-2 rounded text-white text-sm font-medium inline-block"
+                >
+                  📣 Share on Warpcast
+                </a>
+              </div>
+            )}
 
             <div className="text-green-200 text-xs mt-4 max-h-40 overflow-y-auto p-2 bg-black/40 border border-green-400 rounded" ref={loggerRef}>
               {logs.map((msg, i) => <div key={i}>→ {msg}</div>)}
