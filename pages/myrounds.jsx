@@ -1,3 +1,4 @@
+// pages/myrounds.jsx
 import Head from 'next/head'
 import { useEffect, useState } from 'react'
 import { ethers } from 'ethers'
@@ -6,7 +7,7 @@ import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
-import abi from '@/abi/FillInStoryV2_ABI.json'
+import abi from '@/abi/FillInStoryV3_ABI.json'
 import Link from 'next/link'
 import Countdown from '@/components/Countdown'
 import { fetchFarcasterProfile } from '@/lib/neynar'
@@ -22,7 +23,7 @@ export default function MyRounds() {
   const { width, height } = useWindowSize()
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.ethereum) {
+    if (window.ethereum) {
       window.ethereum
         .request({ method: 'eth_requestAccounts' })
         .then(accts => setAddress(accts[0]))
@@ -49,30 +50,49 @@ export default function MyRounds() {
       try {
         const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
         const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
-        const poolCount = await ct.pool1Count()
-        const entries = await ct.getEntries(address)
+
+        const [poolCount, entryIds, votes] = await Promise.all([
+          ct.pool1Count(),
+          ct.getUserEntries(address),
+          ct.getUserVotes(address)
+        ])
+
         const priceRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
         const basePrice = (await priceRes.json()).base.usd
 
         const result = []
-        for (let i = 0; i < poolCount; i++) {
-          const info = await ct.getPool1Info(i)
-          const userEntries = entries.filter(e => e.poolId.toString() === i.toString())
-          const isWinner = info.winner?.toLowerCase() === address.toLowerCase()
-          const claimed = await ct.c1(BigInt(i))
-          const name = localStorage.getItem(`madfill-roundname-${i}`) || 'Untitled'
 
-          if (userEntries.length > 0 || isWinner) {
+        for (let i = 1; i <= poolCount; i++) {
+          const info = await ct.getPool1Info(i)
+          const participants = info[6]
+          const deadline = Number(info[4]) * 1000
+          const winner = info[7]
+          const claimed = info[8]
+          const poolBalance = Number(info[9]) / 1e18
+          const isWinner = winner?.toLowerCase() === address.toLowerCase()
+          const userInPool = participants.includes(address)
+          const voted = votes.includes(BigInt(i))
+          const userInVote = voted && !userInPool && !isWinner
+
+          if (userInPool || isWinner || userInVote) {
+            const usd = (poolBalance * basePrice).toFixed(2)
+
+            const winnerProfile = winner
+              ? await fetchFarcasterProfile(winner)
+              : null
+
             result.push({
               id: i,
-              name,
-              entries: userEntries.length,
-              prize: ((info.entryFee / 1e6) * userEntries.length).toFixed(2),
-              usd: ((info.entryFee / 1e6) * userEntries.length * basePrice).toFixed(2),
+              name: localStorage.getItem(`madfill-roundname-${i}`) || info[0] || 'Untitled',
+              usd,
+              base: poolBalance.toFixed(4),
+              deadline,
               isWinner,
               claimed,
-              deadline: Number(info.deadline) * 1000,
-              winnerAddress: info.winner
+              winnerAddress: winner,
+              voted,
+              userInVote,
+              winnerProfile
             })
           }
         }
@@ -91,7 +111,7 @@ export default function MyRounds() {
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
-      const tx = await ct.claim1(BigInt(id))
+      const tx = await ct.claimPool1(BigInt(id))
       await tx.wait()
       setClaimedId(id)
       setTimeout(() => setClaimedId(null), 3000)
@@ -149,18 +169,18 @@ export default function MyRounds() {
 
         {filteredSortedRounds().map(r => {
           const baseLink = `https://madfill.vercel.app/round/${r.id}`
-          const text = encodeURIComponent(`I just played MadFill Round #${r.id}! Join me: ${baseLink}`)
+          const text = encodeURIComponent(`I just played MadFill Round #${r.id}! 🧠\nCheck it out: ${baseLink}`)
           return (
-            <Card key={r.id} className="mb-4 bg-slate-800 text-white shadow-lg">
+            <Card key={r.id} className="mb-4 bg-slate-800 text-white shadow-xl border border-indigo-700 rounded-lg">
               <CardHeader className="flex justify-between items-center">
                 <div className="flex items-center gap-2">
-                  {profile?.pfp_url && (
-                    <img src={profile.pfp_url} alt="avatar" className="w-7 h-7 rounded-full border border-white" />
+                  {r.winnerProfile?.pfp_url && (
+                    <img src={r.winnerProfile.pfp_url} alt="avatar" className="w-8 h-8 rounded-full border border-white" />
                   )}
                   <div>
-                    <h3 className="font-bold">#{r.id} — {r.name}</h3>
+                    <h3 className="font-bold text-lg">#{r.id} — {r.name}</h3>
                     <p className="text-sm text-indigo-300">
-                      💰 {r.prize} BASE (${r.usd}) — {r.entries} entr{r.entries === 1 ? 'y' : 'ies'}
+                      💰 {r.base} BASE (${r.usd})
                     </p>
                   </div>
                 </div>
@@ -176,11 +196,17 @@ export default function MyRounds() {
                   </Button>
                 )}
                 {r.isWinner && r.claimed && (
-                  <p className="text-green-400">✅ Prize Claimed</p>
+                  <p className="text-green-400 font-semibold">✅ Prize Claimed</p>
                 )}
-                {!r.isWinner && r.entries > 0 && (
-                  <p className="text-slate-300">🎮 You entered {r.entries} time{r.entries > 1 ? 's' : ''}</p>
+                {r.userInVote && (
+                  <p className="text-yellow-400 font-medium">🗳️ You voted in this round</p>
                 )}
+                {!r.isWinner && !r.userInVote && (
+                  <p className="text-slate-300">🎮 You participated in this round</p>
+                )}
+
+                {/* Optional future: show sticker/preview */}
+                <div className="mt-2 text-slate-400 text-xs italic">🖼️ Card preview coming soon…</div>
 
                 <div className="mt-3 flex gap-2 flex-wrap">
                   <a href={`https://twitter.com/intent/tweet?text=${text}`} target="_blank" rel="noreferrer" className="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-white text-sm">
