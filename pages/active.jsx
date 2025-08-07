@@ -1,9 +1,34 @@
-// pages/active.jsx
-
-// [keep all imports the same... no changes needed there]
+import React, { useEffect, useState } from 'react'
+import { ethers } from 'ethers'
+import Head from 'next/head'
+import abi from '../abi/FillInStoryV3_ABI.json'
+import Layout from '@/components/Layout'
+import { Card, CardHeader, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Countdown } from '@/components/Countdown'
+import Link from 'next/link'
+import Image from 'next/image'
+import { fetchFarcasterProfile } from '@/lib/neynar'
+import { motion, AnimatePresence } from 'framer-motion'
 
 export default function ActivePools() {
-  // ... [state + loadPrice unchanged]
+  const [rounds, setRounds] = useState([])
+  const [search, setSearch] = useState('')
+  const [sortBy, setSortBy] = useState('newest')
+  const [filter, setFilter] = useState('all')
+  const [page, setPage] = useState(1)
+  const [baseUsd, setBaseUsd] = useState(0)
+  const roundsPerPage = 6
+
+  const loadPrice = async () => {
+    try {
+      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
+      const json = await res.json()
+      setBaseUsd(json.base?.usd || 0)
+    } catch (e) {
+      console.error('Failed to fetch BASE price', e)
+    }
+  }
 
   const loadRounds = async () => {
     const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
@@ -21,6 +46,7 @@ export default function ActivePools() {
         const parts = info[2]
         const feeBase = Number(info[3]) / 1e18
         const deadline = Number(info[4])
+        const voters = info[5]
         const participants = info[6]
         const claimed = info[8]
 
@@ -46,6 +72,7 @@ export default function ActivePools() {
             feeBase: feeBase.toFixed(4),
             deadline,
             count: participants.length,
+            votes: voters.length,
             usd: poolUsd.toFixed(2),
             participants: avatars,
             badge: deadline - now < 3600 ? '🔥 Ends Soon' : poolUsd > 5 ? '💰 Top Pool' : null,
@@ -60,7 +87,38 @@ export default function ActivePools() {
     setRounds(all)
   }
 
-  // ... [effects and sorting remain unchanged]
+  useEffect(() => {
+    loadPrice()
+    loadRounds()
+    const interval = setInterval(() => {
+      loadPrice()
+      loadRounds()
+    }, 30000)
+    return () => clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    setPage(1)
+  }, [search, sortBy, filter])
+
+  const filtered = rounds.filter(r => {
+    const matchesSearch = r.name.toLowerCase().includes(search.toLowerCase())
+    const matchesFilter =
+      filter === 'all' ||
+      (filter === 'unclaimed') ||
+      (filter === 'high' && parseFloat(r.usd) >= 5)
+    return matchesSearch && matchesFilter
+  })
+
+  const sorted = filtered.sort((a, b) => {
+    if (sortBy === 'deadline') return a.deadline - b.deadline
+    if (sortBy === 'participants') return b.count - a.count
+    if (sortBy === 'prize') return b.usd - a.usd
+    return b.id - a.id
+  })
+
+  const totalPages = Math.ceil(sorted.length / roundsPerPage)
+  const paginated = sorted.slice((page - 1) * roundsPerPage, page * roundsPerPage)
 
   return (
     <Layout>
@@ -70,7 +128,34 @@ export default function ActivePools() {
       <main className="max-w-6xl mx-auto p-6 space-y-6">
         <h1 className="text-4xl font-extrabold text-white drop-shadow">🧠 Active Rounds</h1>
 
-        {/* [search, sort, filter bar remains unchanged] */}
+        <div className="flex flex-wrap justify-between gap-4 text-white">
+          <input
+            type="text"
+            placeholder="🔍 Search by name..."
+            className="w-full sm:w-1/3 p-2 bg-slate-900 border border-slate-700 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          <select
+            className="p-2 bg-slate-900 border border-slate-700 rounded"
+            value={sortBy}
+            onChange={e => setSortBy(e.target.value)}
+          >
+            <option value="newest">📅 Newest</option>
+            <option value="deadline">⏳ Ending Soon</option>
+            <option value="participants">👥 Most Participants</option>
+            <option value="prize">💰 Prize Pool</option>
+          </select>
+          <select
+            className="p-2 bg-slate-900 border border-slate-700 rounded"
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+          >
+            <option value="all">🌐 All</option>
+            <option value="unclaimed">🪙 Unclaimed Only</option>
+            <option value="high">💰 High Pools ($5+)</option>
+          </select>
+        </div>
 
         {paginated.length === 0 ? (
           <div className="text-white mt-8 text-lg text-center space-y-3">
@@ -82,7 +167,14 @@ export default function ActivePools() {
             </Link>
           </div>
         ) : (
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          <motion.div
+            key={page}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.4 }}
+            className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6"
+          >
             {paginated.map(r => (
               <Card
                 key={r.id}
@@ -109,9 +201,9 @@ export default function ActivePools() {
                 <CardContent className="space-y-2 text-sm font-medium">
                   <p><strong>Entry Fee:</strong> {r.feeBase} BASE</p>
                   <p><strong>Participants:</strong> {r.count}</p>
+                  <p><strong>Votes:</strong> {r.votes}</p>
                   <p><strong>Total Pool:</strong> ${r.usd}</p>
 
-                  {/* Template Preview */}
                   <div className="bg-slate-700 p-2 rounded text-xs font-mono text-slate-200">
                     {r.parts.map((part, i) => (
                       <span key={i}>
@@ -123,19 +215,22 @@ export default function ActivePools() {
                     ))}
                   </div>
 
-                  <div className="flex -space-x-2 overflow-hidden mt-2">
+                  <div className="flex gap-2 flex-wrap items-center mt-2">
                     {r.participants.map((p, i) => (
-                      <Image
-                        key={i}
-                        src={p.avatar}
-                        alt={p.username}
-                        title={`@${p.username}`}
-                        width={32}
-                        height={32}
-                        className="rounded-full border border-white"
-                      />
+                      <div key={i} className="flex flex-col items-center">
+                        <Image
+                          src={p.avatar}
+                          alt={p.username}
+                          title={`@${p.username}`}
+                          width={32}
+                          height={32}
+                          className="rounded-full border border-white"
+                        />
+                        <p className="text-xs text-slate-400">@{p.username}</p>
+                      </div>
                     ))}
                   </div>
+
                   <Link href={`/round/${r.id}`}>
                     <Button className="mt-3 bg-indigo-600 hover:bg-indigo-500 w-full">
                       ✏️ Enter Round
@@ -144,7 +239,7 @@ export default function ActivePools() {
                 </CardContent>
               </Card>
             ))}
-          </div>
+          </motion.div>
         )}
 
         {totalPages > 1 && (
