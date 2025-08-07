@@ -54,7 +54,6 @@ export default function ActivePools() {
         const deadline = Number(info[4])
         const participants = info[6]
         const claimed = info[8]
-        const poolBalance = Number(info[9]) / 1e18
 
         if (!claimed && deadline > now) {
           const avatars = await Promise.all(participants.map(async (addr) => {
@@ -75,7 +74,7 @@ export default function ActivePools() {
             }
           }))
 
-          const poolUsd = poolBalance * baseUsd
+          const estimatedUsd = baseUsd * participants.length * feeBase
 
           all.push({
             id: i,
@@ -85,10 +84,10 @@ export default function ActivePools() {
             feeBase: feeBase.toFixed(4),
             deadline,
             count: participants.length,
-            usd: poolUsd.toFixed(2),
+            usd: estimatedUsd.toFixed(2),
             participants: avatars,
             submissions,
-            badge: deadline - now < 3600 ? '🔥 Ends Soon' : poolUsd > 5 ? '💰 Top Pool' : null,
+            badge: deadline - now < 3600 ? '🔥 Ends Soon' : estimatedUsd > 5 ? '💰 Top Pool' : null,
             emoji: ['🐸', '🦊', '🦄', '🐢', '🐙'][i % 5]
           })
         }
