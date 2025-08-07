@@ -24,7 +24,9 @@ export default function ActivePools() {
       const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
 
-      const basePrice = 0.000001 // USD conversion is deprecated for fee — fallback logic
+      const basePriceRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
+      const basePriceJson = await basePriceRes.json()
+      const basePrice = basePriceJson.base?.usd || 0
 
       const count = await ct.pool1Count()
       const now = Math.floor(Date.now() / 1000)
@@ -33,9 +35,9 @@ export default function ActivePools() {
       for (let i = 1; i <= count; i++) {
         try {
           const info = await ct.getPool1Info(i)
-          const deadline = Number(info.deadline)
-          const claimed = info.claimed
-          const participants = info.participants || []
+          const deadline = Number(info[4])
+          const claimed = info[5]
+          const participants = info[6] || []
 
           if (!claimed && deadline > now) {
             const avatars = await Promise.all(
@@ -49,12 +51,12 @@ export default function ActivePools() {
               })
             )
 
-            const feeBase = Number(info.fee) / 1e18
+            const feeBase = Number(info[3]) / 1e18
             const poolUsd = basePrice * participants.length * feeBase
 
             all.push({
               id: i,
-              name: localStorage.getItem(`madfill-roundname-${i}`) || info.name || 'Untitled',
+              name: localStorage.getItem(`madfill-roundname-${i}`) || info[0] || 'Untitled',
               feeBase: feeBase.toFixed(4),
               deadline,
               count: participants.length,
