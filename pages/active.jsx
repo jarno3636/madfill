@@ -1,4 +1,3 @@
-// pages/active.jsx
 import React, { useEffect, useState } from 'react'
 import { ethers } from 'ethers'
 import Head from 'next/head'
@@ -19,63 +18,69 @@ export default function ActivePools() {
   const [page, setPage] = useState(1)
   const roundsPerPage = 6
 
-  useEffect(() => {
-    const loadRounds = async () => {
-      const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-      const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
+  const loadRounds = async () => {
+    const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
+    const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
 
-      const basePriceRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
-      const basePriceJson = await basePriceRes.json()
-      const basePrice = basePriceJson.base?.usd || 0
+    const basePriceRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
+    const basePriceJson = await basePriceRes.json()
+    const basePrice = basePriceJson.base?.usd || 0
 
-      const count = await ct.pool1Count()
-      const now = Math.floor(Date.now() / 1000)
-      const all = []
+    const count = await ct.pool1Count()
+    const now = Math.floor(Date.now() / 1000)
+    const all = []
 
-      for (let i = 1; i <= count; i++) {
-        try {
-          const info = await ct.getPool1Info(i)
-          const deadline = Number(info[4])
-          const claimed = info[5]
-          const participants = info[6] || []
+    for (let i = 1; i <= count; i++) {
+      try {
+        const info = await ct.getPool1Info(BigInt(i))
+        const deadline = Number(info.deadline)
+        const claimed = info.claimed
+        const participants = info.participants
 
-          if (!claimed && deadline > now) {
-            const avatars = await Promise.all(
-              participants.slice(0, 5).map(async (addr) => {
-                const res = await fetchFarcasterProfile(addr)
-                return {
-                  address: addr,
-                  avatar: res?.pfp_url || `https://effigy.im/a/${addr.toLowerCase()}`,
-                  username: res?.username || addr.slice(2, 6).toUpperCase()
-                }
-              })
-            )
-
-            const feeBase = Number(info[3]) / 1e18
-            const poolUsd = basePrice * participants.length * feeBase
-
-            all.push({
-              id: i,
-              name: localStorage.getItem(`madfill-roundname-${i}`) || info[0] || 'Untitled',
-              feeBase: feeBase.toFixed(4),
-              deadline,
-              count: participants.length,
-              usd: poolUsd.toFixed(2),
-              participants: avatars,
-              badge: deadline - now < 3600 ? '🔥 Ends Soon' : poolUsd > 5 ? '💰 Top Pool' : null,
-              emoji: ['🐸', '🦊', '🦄', '🐢', '🐙'][i % 5]
+        if (!claimed && deadline > now) {
+          const avatars = await Promise.all(
+            participants.slice(0, 5).map(async (addr) => {
+              const res = await fetchFarcasterProfile(addr)
+              return {
+                address: addr,
+                avatar: res?.pfp_url || `https://effigy.im/a/${addr.toLowerCase()}`,
+                username: res?.username || addr.slice(2, 6).toUpperCase()
+              }
             })
-          }
-        } catch (e) {
-          console.warn(`Error loading round ${i}`, e)
-        }
-      }
+          )
 
-      setRounds(all)
+          const feeBase = Number(info.fee) / 1e18
+          const poolUsd = basePrice * participants.length * feeBase
+
+          all.push({
+            id: i,
+            name: localStorage.getItem(`madfill-roundname-${i}`) || info.name || 'Untitled',
+            feeBase: feeBase.toFixed(4),
+            deadline,
+            count: participants.length,
+            usd: poolUsd.toFixed(2),
+            participants: avatars,
+            badge: deadline - now < 3600 ? '🔥 Ends Soon' : poolUsd > 5 ? '💰 Top Pool' : null,
+            emoji: ['🐸', '🦊', '🦄', '🐢', '🐙'][i % 5]
+          })
+        }
+      } catch (e) {
+        console.warn(`Error loading round ${i}`, e)
+      }
     }
 
+    setRounds(all)
+  }
+
+  useEffect(() => {
     loadRounds()
+    const interval = setInterval(loadRounds, 30000) // Refresh every 30 seconds
+    return () => clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    setPage(1) // Reset page on filter/sort/search change
+  }, [search, sortBy, filter])
 
   const filtered = rounds.filter(r => {
     const matchesSearch = r.name.toLowerCase().includes(search.toLowerCase())
@@ -89,9 +94,11 @@ export default function ActivePools() {
   const sorted = filtered.sort((a, b) => {
     if (sortBy === 'deadline') return a.deadline - b.deadline
     if (sortBy === 'participants') return b.count - a.count
+    if (sortBy === 'prize') return b.usd - a.usd
     return b.id - a.id
   })
 
+  const totalPages = Math.ceil(sorted.length / roundsPerPage)
   const paginated = sorted.slice((page - 1) * roundsPerPage, page * roundsPerPage)
 
   return (
@@ -118,6 +125,7 @@ export default function ActivePools() {
             <option value="newest">📅 Newest</option>
             <option value="deadline">⏳ Ending Soon</option>
             <option value="participants">👥 Most Participants</option>
+            <option value="prize">💰 Prize Pool</option>
           </select>
           <select
             className="p-2 bg-slate-900 border border-slate-700 rounded"
@@ -170,9 +178,9 @@ export default function ActivePools() {
           ))
         )}
 
-        {sorted.length > roundsPerPage && (
+        {totalPages > 1 && (
           <div className="flex justify-center gap-2 mt-6">
-            {Array.from({ length: Math.ceil(sorted.length / roundsPerPage) }).map((_, i) => (
+            {Array.from({ length: totalPages }).map((_, i) => (
               <Button
                 key={i}
                 className={`px-4 py-1 ${page === i + 1 ? 'bg-indigo-600' : 'bg-slate-700'} text-sm`}
