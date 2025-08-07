@@ -61,27 +61,18 @@ export default function ActivePools() {
             return {
               address: addr,
               avatar: res?.pfp_url || '/Capitalize.PNG',
-              username: res?.username || addr.slice(2, 6).toUpperCase()
+              fallbackUsername: res?.username || addr.slice(2, 6).toUpperCase()
             }
           }))
 
-          const submissions = []
-          for (const addr of participants) {
+          const submissions = await Promise.all(participants.map(async (addr) => {
             try {
-              const sub = await ct.getPool1Submission(i, addr)
-              const decoded = sub.map(w => {
-                try {
-                  const str = ethers.decodeBytes32String(w)
-                  return str.trim() || '____'
-                } catch {
-                  return '____'
-                }
-              })
-              submissions.push({ words: decoded, address: addr })
+              const [username, word] = await ct.getPool1Submission(i, addr)
+              return { address: addr, username, word }
             } catch {
-              submissions.push({ words: [], address: addr })
+              return { address: addr, username: '', word: '' }
             }
-          }
+          }))
 
           const poolUsd = baseUsd * participants.length * feeBase
 
@@ -90,12 +81,12 @@ export default function ActivePools() {
             name: name || 'Untitled',
             theme,
             parts,
-            submissions,
             feeBase: feeBase.toFixed(4),
             deadline,
             count: participants.length,
             usd: poolUsd.toFixed(2),
             participants: avatars,
+            submissions,
             badge: deadline - now < 3600 ? '🔥 Ends Soon' : poolUsd > 5 ? '💰 Top Pool' : null,
             emoji: ['🐸', '🦊', '🦄', '🐢', '🐙'][i % 5]
           })
@@ -229,18 +220,18 @@ export default function ActivePools() {
                           <div key={idx} className="flex items-start gap-2">
                             <Image
                               src={p?.avatar || '/Capitalize.PNG'}
-                              alt={p?.username}
+                              alt={s.username || p?.fallbackUsername}
                               width={24}
                               height={24}
                               className="rounded-full border border-white mt-1"
                             />
                             <div className="flex-1">
-                              <p className="text-slate-400 text-xs font-semibold">@{p?.username}</p>
+                              <p className="text-slate-400 text-xs font-semibold">@{s.username || p?.fallbackUsername}</p>
                               <p>
                                 {r.parts.map((part, i) => (
                                   <span key={i}>
                                     {part}
-                                    <span className="text-yellow-300 font-bold">{s.words[i] || '____'}</span>
+                                    <span className="text-yellow-300 font-bold">{i === 0 ? s.word : '____'}</span>
                                   </span>
                                 ))}
                               </p>
