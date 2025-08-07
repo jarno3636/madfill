@@ -33,11 +33,11 @@ export default function ActivePools() {
     for (let i = 1; i <= count; i++) {
       try {
         const info = await ct.getPool1Info(BigInt(i))
-        const deadline = Number(info[4])
-        const claimed = info[5]
-        const participants = info[6]
+        const name = info[0]
         const feeBase = Number(info[3]) / 1e18
-        const name = info[0] || 'Untitled'
+        const deadline = Number(info[4])
+        const participants = info[6]
+        const claimed = info[8]
 
         if (!claimed && deadline > now) {
           const avatars = await Promise.all(
@@ -55,7 +55,7 @@ export default function ActivePools() {
 
           all.push({
             id: i,
-            name: localStorage.getItem(`madfill-roundname-${i}`) || name,
+            name: name || 'Untitled',
             feeBase: feeBase.toFixed(4),
             deadline,
             count: participants.length,
