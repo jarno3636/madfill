@@ -54,6 +54,7 @@ export default function ActivePools() {
         const deadline = Number(info[4])
         const participants = info[6]
         const claimed = info[8]
+        const poolBalance = Number(info[9]) / 1e18
 
         if (!claimed && deadline > now) {
           const avatars = await Promise.all(participants.map(async (addr) => {
@@ -74,7 +75,7 @@ export default function ActivePools() {
             }
           }))
 
-          const poolUsd = baseUsd * participants.length * feeBase
+          const poolUsd = poolBalance * baseUsd
 
           all.push({
             id: i,
