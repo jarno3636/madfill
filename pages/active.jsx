@@ -29,9 +29,9 @@ export default function ActivePools() {
 
   const loadPrice = async () => {
     try {
-      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
+      const res = await fetch('https://api.coinbase.com/v2/prices/BASE-USD/spot')
       const json = await res.json()
-      setBaseUsd(json.base?.usd || 0)
+      setBaseUsd(parseFloat(json.data.amount) || 0)
     } catch (e) {
       console.error('Failed to fetch BASE price', e)
     }
@@ -71,9 +71,10 @@ export default function ActivePools() {
               const sub = await ct.getPool1Submission(i, addr)
               const decoded = sub.map(w => {
                 try {
-                  return ethers.toUtf8String(w).replace(/\0/g, '')
+                  const str = ethers.decodeBytes32String(w)
+                  return str.trim() || '____'
                 } catch {
-                  return ''
+                  return '____'
                 }
               })
               submissions.push({ words: decoded, address: addr })
