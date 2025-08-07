@@ -1,4 +1,3 @@
-// pages/index.jsx
 import React, { useState, useEffect, Fragment, useRef } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -9,10 +8,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { categories, durations } from '../data/templates'
 import Layout from '@/components/Layout'
-import { Tooltip } from '@/components/ui/tooltip'
 import Footer from '@/components/Footer'
 import { fetchFarcasterProfile } from '@/lib/neynar'
-import Image from 'next/image'
 
 export default function Home() {
   const [status, setStatus] = useState('')
@@ -23,11 +20,10 @@ export default function Home() {
   const [roundName, setRoundName] = useState('')
   const [word, setWord] = useState('')
   const [duration, setDuration] = useState(durations[0].value)
-  const [feeUsd, setFeeUsd] = useState(1.0)
+  const [feeBase, setFeeBase] = useState(0.01)
   const [shareText, setShareText] = useState('')
   const [busy, setBusy] = useState(false)
   const { width, height } = useWindowSize()
-  const [totalRounds, setTotalRounds] = useState(null)
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
   const [profile, setProfile] = useState(null)
@@ -53,14 +49,6 @@ export default function Home() {
       }
     }
     loadProfile()
-
-    async function loadTotalRounds() {
-      const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-      const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
-      const count = await ct.pool1Count()
-      setTotalRounds(Number(count))
-    }
-    loadTotalRounds()
   }, [])
 
   async function handleUnifiedSubmit() {
@@ -87,8 +75,7 @@ export default function Home() {
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
 
-      const usdMicro = ethers.parseUnits(feeUsd.toString(), 6)
-      const baseAmount = await ct.usdToBase(usdMicro)
+      const baseAmount = ethers.parseEther(feeBase.toString())
       const buffer = baseAmount * 1005n / 1000n
 
       log(`🚀 Creating round "${roundName || 'Untitled'}"…`)
@@ -146,12 +133,11 @@ export default function Home() {
       {shareText && <Confetti width={width} height={height} />}
       <main className="max-w-5xl mx-auto p-6 space-y-6 text-white">
 
-        <div className="flex items-center justify-between bg-gradient-to-r from-indigo-600 to-purple-800 p-6 rounded-xl shadow-lg">
-          <div>
-            <h1 className="text-3xl font-bold">🧠 MadFill</h1>
-            <p className="text-sm text-indigo-100">Create silly sentences. Win prizes. Get famous.</p>
-          </div>
-          <Image src="/favicon.PNG" alt="MadFill logo" width={48} height={48} className="rounded-full shadow-lg" />
+        <div className="bg-gradient-to-r from-indigo-600 to-purple-800 p-6 rounded-xl shadow-lg">
+          <h1 className="text-3xl font-bold mb-2">🧠 What is MadFill?</h1>
+          <p className="text-sm text-indigo-100 leading-relaxed">
+            MadFill is a decentralized game where you fill in the blanks of funny sentence templates with your own words. Compete in rounds, vote on the funniest submissions, and win prize pools paid out in BASE. Create your own rounds, challenge others, or vote to crown a winner. It's part MadLibs, part meme war, all fun.
+          </p>
         </div>
 
         <Card className="bg-slate-800 text-white">
@@ -210,18 +196,18 @@ export default function Home() {
                 </select>
               </div>
               <div>
-                <label className="text-sm">💵 Entry Fee (USD)</label>
+                <label className="text-sm">💰 Entry Fee (BASE)</label>
                 <input
                   type="range"
-                  min="0.25"
-                  max="10"
-                  step="0.25"
-                  value={feeUsd}
-                  onChange={e => setFeeUsd(Number(e.target.value))}
+                  min="0.001"
+                  max="0.1"
+                  step="0.001"
+                  value={feeBase}
+                  onChange={e => setFeeBase(Number(e.target.value))}
                   disabled={busy}
                   className="w-full"
                 />
-                <p className="text-sm mt-1">${feeUsd.toFixed(2)}</p>
+                <p className="text-sm mt-1">{feeBase.toFixed(3)} BASE</p>
               </div>
             </div>
 
@@ -245,6 +231,18 @@ export default function Home() {
             <div className="text-green-200 text-xs mt-4 max-h-40 overflow-y-auto p-2 bg-black/40 border border-green-400 rounded" ref={loggerRef}>
               {logs.map((msg, i) => <div key={i}>→ {msg}</div>)}
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-slate-900 border border-indigo-700 text-white">
+          <CardHeader>
+            <h2 className="text-xl font-bold">📊 MadFill Fee Breakdown</h2>
+          </CardHeader>
+          <CardContent className="text-sm space-y-2">
+            <p>💰 You choose the BASE amount for your round’s entry fee. This goes into the prize pool.</p>
+            <p>📉 A small 0.5% protocol fee is automatically deducted to support the game.</p>
+            <p>🔄 All remaining funds go directly into the round’s pool, which can be won or voted on later.</p>
+            <p>🧾 No USD conversion or oracles needed. Simple, clean, BASE-only logic built into the contract.</p>
           </CardContent>
         </Card>
 
