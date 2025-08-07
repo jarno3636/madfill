@@ -5,7 +5,7 @@ import { ethers } from 'ethers'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import abi from '@/abi/FillInStoryV2_ABI.json'
+import abi from '@/abi/FillInStoryV3_ABI.json'
 import { useWindowSize } from 'react-use'
 import Confetti from 'react-confetti'
 import Link from 'next/link'
@@ -17,6 +17,7 @@ export default function VotePage() {
   const [status, setStatus] = useState('')
   const [address, setAddress] = useState(null)
   const [success, setSuccess] = useState(false)
+  const [claimedId, setClaimedId] = useState(null)
   const [filter, setFilter] = useState('all')
   const [sortBy, setSortBy] = useState('recent')
   const { width, height } = useWindowSize()
@@ -31,61 +32,53 @@ export default function VotePage() {
   }, [])
 
   useEffect(() => {
-    (async () => {
+    ;(async () => {
       setLoading(true)
       try {
-        const address = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
+        const contractAddr = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
         const rpcUrl = process.env.NEXT_PUBLIC_ALCHEMY_URL
         const alchemy = new ethers.JsonRpcProvider(rpcUrl)
         const fallback = new ethers.FallbackProvider([
           alchemy,
           new ethers.JsonRpcProvider('https://mainnet.base.org'),
         ])
-        const ct = new ethers.Contract(address, abi, fallback)
+        const ct = new ethers.Contract(contractAddr, abi, fallback)
 
-        const latest = await fallback.getBlockNumber()
-        const from = Number(process.env.NEXT_PUBLIC_START_BLOCK) || 0
-        const size = 500
-        const allEvents = []
-
-        for (let start = from; start <= latest; start += size) {
-          const end = Math.min(start + size - 1, latest)
-          const logs = await alchemy.getLogs({
-            address,
-            topics: ct.filters.FinalF().topics,
-            fromBlock: start,
-            toBlock: end,
-          })
-          logs.forEach(log => {
-            const parsed = ct.interface.parseLog(log).args
-            allEvents.push(parsed)
-          })
-        }
-
+        const count = await ct.pool2Count()
         const now = Math.floor(Date.now() / 1000)
-        const open = allEvents
-          .map(e => ({
-            id: e.id.toString(),
-            voteDeadline: Number(e.voteDeadline),
-          }))
-          .filter(r => r.voteDeadline > now)
-
         const priceRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
         const basePrice = (await priceRes.json()).base.usd
 
-        const withCounts = await Promise.all(open.map(async r => {
-          const info = await ct.rounds(BigInt(r.id))
-          const poolSizeUsd = Number(info.vP + info.vF) * 0.001 * basePrice
-          return {
-            ...r,
-            vP: info.vP.toString(),
-            vF: info.vF.toString(),
-            totalVotes: parseInt(info.vP) + parseInt(info.vF),
-            usd: poolSizeUsd.toFixed(2)
-          }
-        }))
+        const result = []
+        for (let i = 1; i <= count; i++) {
+          const info = await ct.getPool2Info(i)
+          const deadline = Number(info[6])
+          const claimed = info[10]
+          const winner = info[7]
+          const pool = Number(info[4]) / 1e18
+          const usd = (pool * basePrice).toFixed(2)
+          const vP = Number(info[8])
+          const vF = Number(info[9])
+          const userVotedWinner = address?.toLowerCase() === winner?.toLowerCase()
 
-        setRounds(withCounts)
+          result.push({
+            id: i,
+            deadline,
+            claimed,
+            winner,
+            isEnded: now > deadline,
+            base: pool.toFixed(4),
+            usd,
+            vP,
+            vF,
+            totalVotes: vP + vF,
+            close: Math.abs(vP - vF) <= 2,
+            big: pool > 5,
+            userVotedWinner,
+          })
+        }
+
+        setRounds(result)
       } catch (e) {
         console.error('Error loading vote rounds', e)
         setRounds([])
@@ -93,7 +86,7 @@ export default function VotePage() {
         setLoading(false)
       }
     })()
-  }, [])
+  }, [address])
 
   async function vote(id, supportPaid) {
     try {
@@ -116,9 +109,26 @@ export default function VotePage() {
     }
   }
 
+  async function claim(id) {
+    try {
+      setStatus('⏳ Claiming prize…')
+      const provider = new ethers.BrowserProvider(window.ethereum)
+      const signer = await provider.getSigner()
+      const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
+      const tx = await ct.claimPool2(BigInt(id))
+      await tx.wait()
+      setClaimedId(id)
+      setStatus('✅ Prize claimed!')
+      setTimeout(() => setClaimedId(null), 3000)
+    } catch (err) {
+      console.error('Claim failed:', err)
+      setStatus('❌ Error claiming prize')
+    }
+  }
+
   const filtered = rounds.filter(r => {
     if (filter === 'high') return r.totalVotes >= 10
-    if (filter === 'close') return Math.abs(r.vP - r.vF) <= 2
+    if (filter === 'close') return r.close
     if (filter === 'big') return Number(r.usd) > 5
     return true
   })
@@ -133,15 +143,15 @@ export default function VotePage() {
     <Layout>
       <Head><title>Community Vote | MadFill</title></Head>
       {success && <Confetti width={width} height={height} />}
+      {claimedId && <Confetti width={width} height={height} />}
 
       <div className="max-w-4xl mx-auto p-6 text-white">
         <h1 className="text-3xl font-bold mb-4">🗳️ Community Vote</h1>
         <p className="mb-4 text-slate-300">
-          Welcome to the Pool 2 Showdown! When a round ends, a challenger can submit their own version of the story.
-          You decide which version is better. Each vote costs 0.001 BASE. Voters on the winning side split the prize pool!
+          Vote between the Original & Challenger cards! Winning side splits the prize pool. Each vote costs 0.001 BASE.
         </p>
         <Link href="/challenge" className="inline-block mb-6 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded font-medium">
-          ➕ Submit a Challenger Card
+          ➕ Submit a Challenger
         </Link>
 
         <div className="flex flex-wrap gap-4 mb-6">
@@ -165,43 +175,55 @@ export default function VotePage() {
         ) : (
           <div className="grid gap-6">
             {sorted.map(r => {
-              const isClose = Math.abs(r.vP - r.vF) <= 2
               const emoji = ['🐸', '🦊', '🦄', '🐢', '🐙'][r.id % 5]
+              const baseLink = `https://madfill.vercel.app/round/${r.id}`
+              const shareText = encodeURIComponent(`Vote on MadFill Round #${r.id}! 🧠\n${baseLink}`)
               return (
-                <Card key={r.id} className="bg-slate-800 text-white shadow-lg">
+                <Card key={r.id} className="bg-slate-800 text-white shadow-lg border border-indigo-700 rounded-lg">
                   <CardHeader className="flex justify-between items-center">
                     <div>
                       <h3 className="font-bold text-lg">{emoji} Round #{r.id}</h3>
-                      <p className="text-sm text-slate-300">Votes – Original: {r.vP} | Challenger: {r.vF}</p>
-                      {isClose && <span className="text-yellow-300 text-xs">⚖️ Close Match!</span>}
+                      <p className="text-sm text-slate-300">Votes – 😂: {r.vP} | 😆: {r.vF}</p>
+                      {r.close && <span className="text-yellow-300 text-xs">⚖️ Close Match!</span>}
                       <p className="text-xs mt-1 text-green-300">💰 Pool: ${r.usd}</p>
                     </div>
                     <Link href={`/round/${r.id}`} className="text-indigo-400 underline text-sm">🔍 View</Link>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <CompareCards roundId={r.id} />
-                    <p>Cast your vote 👇</p>
-                    <div className="flex gap-4">
-                      <Button onClick={() => vote(r.id, true)} className="bg-green-600 hover:bg-green-500">
-                        😂 Original
-                      </Button>
-                      <Button onClick={() => vote(r.id, false)} className="bg-blue-600 hover:bg-blue-500">
-                        😆 Challenger
-                      </Button>
-                    </div>
+
+                    {r.isEnded ? (
+                      <>
+                        <p className="text-sm">🏁 Voting ended!</p>
+                        {r.userVotedWinner && !r.claimed && (
+                          <Button onClick={() => claim(r.id)} className="bg-green-600 hover:bg-green-500">
+                            🎉 Claim Prize
+                          </Button>
+                        )}
+                        {r.userVotedWinner && r.claimed && (
+                          <p className="text-green-400 font-medium">✅ Prize Claimed</p>
+                        )}
+                        {!r.userVotedWinner && <p className="text-slate-400">😢 You didn’t win this round</p>}
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm">Cast your vote 👇</p>
+                        <div className="flex gap-4">
+                          <Button onClick={() => vote(r.id, true)} className="bg-green-600 hover:bg-green-500">
+                            😂 Original
+                          </Button>
+                          <Button onClick={() => vote(r.id, false)} className="bg-blue-600 hover:bg-blue-500">
+                            😆 Challenger
+                          </Button>
+                        </div>
+                      </>
+                    )}
+
                     <div className="text-xs text-slate-400 mt-3">
                       Share this round:
-                      <a
-                        href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(`Vote on MadFill Round #${r.id}! https://madfill.vercel.app/round/${r.id}`)}`}
-                        target="_blank"
-                        className="ml-2 underline text-blue-400"
-                      >🐦 Twitter</a>
+                      <a href={`https://twitter.com/intent/tweet?text=${shareText}`} target="_blank" className="ml-2 underline text-blue-400">🐦 Twitter</a>
                       <span className="mx-2">|</span>
-                      <a
-                        href={`https://warpcast.com/~/compose?text=${encodeURIComponent(`Vote on MadFill Round #${r.id}! https://madfill.vercel.app/round/${r.id}`)}`}
-                        target="_blank"
-                        className="underline text-purple-400"
-                      >🌀 Warpcast</a>
+                      <a href={`https://warpcast.com/~/compose?text=${shareText}`} target="_blank" className="underline text-purple-400">🌀 Warpcast</a>
                     </div>
                   </CardContent>
                 </Card>
