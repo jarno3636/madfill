@@ -1,5 +1,5 @@
 import { ethers } from 'ethers'
-import abi from '@/abi/FillInStoryV2_ABI.json'
+import abi from '@/abi/FillInStoryV3_ABI.json'
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -9,33 +9,33 @@ export default async function handler(req, res) {
   try {
     const { untrustedData } = req.body || {}
     const { fid, buttonIndex, inputText, castId } = untrustedData || {}
+
     const siteUrl = 'https://madfill.vercel.app'
+    const roundId = inputText?.trim() || '1'
+    const votedForOriginal = buttonIndex === 1
 
-    const roundId = inputText || '123' // fallback round
-    const votedFor = buttonIndex === 1 // true = Original, false = Challenger
+    console.log(`📥 Frame Vote — Round: ${roundId}, User: ${fid}, Voted: ${votedForOriginal ? 'Original' : 'Challenger'}`)
 
-    console.log(`🗳️ Farcaster Vote: Round ${roundId}, Choice: ${votedFor ? 'Original' : 'Challenger'}`)
-
-    // On-chain vote execution
+    // On-chain vote using FillInStoryV3
     const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
     const signer = new ethers.Wallet(process.env.PRIVATE_KEY, provider)
     const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
 
-    const tx = await ct.vote2(BigInt(roundId), votedFor, {
+    const tx = await ct.vote2(BigInt(roundId), votedForOriginal, {
       value: ethers.parseEther('0.001'),
     })
     await tx.wait()
 
-    // Choose image for result
-    const imagePath = votedFor
-      ? `${siteUrl}/og/VOTE CONFIRMED.PNG`
-      : `${siteUrl}/og/CHALLENGER CONFIRMED.PNG`  // ← Your new image
+    // Pick a result image
+    const imagePath = votedForOriginal
+      ? `${siteUrl}/og/VOTE_CONFIRMED.PNG`
+      : `${siteUrl}/og/CHALLENGER_CONFIRMED.PNG`
 
-    // Return Farcaster confirmation frame
+    // Build response frame
     res.setHeader('Content-Type', 'application/json')
     return res.status(200).json({
       title: '✅ Vote Recorded!',
-      description: `You voted for ${votedFor ? 'Original' : 'Challenger'} in Round ${roundId}.`,
+      description: `You voted for ${votedForOriginal ? 'Original' : 'Challenger'} in Round ${roundId}.`,
       image: imagePath,
       imageAspectRatio: '1.91:1',
       buttons: [
@@ -53,6 +53,22 @@ export default async function handler(req, res) {
     })
   } catch (err) {
     console.error('❌ Frame vote error:', err)
-    return res.status(500).json({ error: 'Frame vote failed' })
+    return res.status(500).json({
+      title: '❌ Vote Failed',
+      description: 'There was an issue submitting your vote.',
+      image: 'https://madfill.vercel.app/og/error.PNG',
+      imageAspectRatio: '1.91:1',
+      buttons: [
+        {
+          label: '🔁 Try Again',
+          action: 'post',
+        },
+        {
+          label: '🏠 MadFill',
+          action: 'link',
+          target: 'https://madfill.vercel.app',
+        },
+      ],
+    })
   }
 }
