@@ -71,7 +71,7 @@ export default function ActivePools() {
               const sub = await ct.getPool1Submission(i, addr)
               const decoded = sub.map(w => {
                 try {
-                  return ethers.decodeBytes32String(w)
+                  return ethers.toUtf8String(w).replace(/\0/g, '')
                 } catch {
                   return ''
                 }
@@ -239,7 +239,7 @@ export default function ActivePools() {
                                 {r.parts.map((part, i) => (
                                   <span key={i}>
                                     {part}
-                                    {i < s.words.length && <span className="text-yellow-300 font-bold">{s.words[i]}</span>}
+                                    <span className="text-yellow-300 font-bold">{s.words[i] || '____'}</span>
                                   </span>
                                 ))}
                               </p>
