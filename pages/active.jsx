@@ -9,7 +9,7 @@ import { Countdown } from '@/components/Countdown'
 import Link from 'next/link'
 import Image from 'next/image'
 import { fetchFarcasterProfile } from '@/lib/neynar'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 
 export default function ActivePools() {
   const [rounds, setRounds] = useState([])
@@ -22,11 +22,11 @@ export default function ActivePools() {
 
   const loadPrice = async () => {
     try {
-      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
+      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
       const json = await res.json()
-      setBaseUsd(json.base?.usd || 0)
+      setBaseUsd(json.ethereum?.usd || 0)
     } catch (e) {
-      console.error('Failed to fetch BASE price', e)
+      console.error('Failed to fetch ETH price', e)
     }
   }
 
@@ -46,7 +46,6 @@ export default function ActivePools() {
         const parts = info[2]
         const feeBase = Number(info[3]) / 1e18
         const deadline = Number(info[4])
-        const voters = info[5]
         const participants = info[6]
         const claimed = info[8]
 
@@ -56,7 +55,7 @@ export default function ActivePools() {
               const res = await fetchFarcasterProfile(addr)
               return {
                 address: addr,
-                avatar: res?.pfp_url || `https://effigy.im/a/${addr.toLowerCase()}`,
+                avatar: res?.pfp_url || '/Capitalize.PNG',
                 username: res?.username || addr.slice(2, 6).toUpperCase()
               }
             })
@@ -72,7 +71,6 @@ export default function ActivePools() {
             feeBase: feeBase.toFixed(4),
             deadline,
             count: participants.length,
-            votes: voters.length,
             usd: poolUsd.toFixed(2),
             participants: avatars,
             badge: deadline - now < 3600 ? '🔥 Ends Soon' : poolUsd > 5 ? '💰 Top Pool' : null,
@@ -201,7 +199,6 @@ export default function ActivePools() {
                 <CardContent className="space-y-2 text-sm font-medium">
                   <p><strong>Entry Fee:</strong> {r.feeBase} BASE</p>
                   <p><strong>Participants:</strong> {r.count}</p>
-                  <p><strong>Votes:</strong> {r.votes}</p>
                   <p><strong>Total Pool:</strong> ${r.usd}</p>
 
                   <div className="bg-slate-700 p-2 rounded text-xs font-mono text-slate-200">
@@ -219,7 +216,7 @@ export default function ActivePools() {
                     {r.participants.map((p, i) => (
                       <div key={i} className="flex flex-col items-center">
                         <Image
-                          src={p.avatar}
+                          src={p.avatar || '/Capitalize.PNG'}
                           alt={p.username}
                           title={`@${p.username}`}
                           width={32}
