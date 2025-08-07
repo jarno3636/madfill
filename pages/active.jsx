@@ -18,22 +18,28 @@ export default function ActivePools() {
   const [filter, setFilter] = useState('all')
   const [page, setPage] = useState(1)
   const [baseUsd, setBaseUsd] = useState(0)
+  const [expanded, setExpanded] = useState({})
+  const [likes, setLikes] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return JSON.parse(localStorage.getItem('madfillLikes') || '{}')
+    }
+    return {}
+  })
   const roundsPerPage = 6
 
   const loadPrice = async () => {
     try {
-      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
+      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
       const json = await res.json()
-      setBaseUsd(json.ethereum?.usd || 0)
+      setBaseUsd(json.base?.usd || 0)
     } catch (e) {
-      console.error('Failed to fetch ETH price', e)
+      console.error('Failed to fetch BASE price', e)
     }
   }
 
   const loadRounds = async () => {
     const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
     const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
-
     const count = await ct.pool1Count()
     const now = Math.floor(Date.now() / 1000)
     const all = []
@@ -50,16 +56,31 @@ export default function ActivePools() {
         const claimed = info[8]
 
         if (!claimed && deadline > now) {
-          const avatars = await Promise.all(
-            participants.slice(0, 5).map(async (addr) => {
-              const res = await fetchFarcasterProfile(addr)
-              return {
-                address: addr,
-                avatar: res?.pfp_url || '/Capitalize.PNG',
-                username: res?.username || addr.slice(2, 6).toUpperCase()
-              }
-            })
-          )
+          const avatars = await Promise.all(participants.map(async (addr) => {
+            const res = await fetchFarcasterProfile(addr)
+            return {
+              address: addr,
+              avatar: res?.pfp_url || '/Capitalize.PNG',
+              username: res?.username || addr.slice(2, 6).toUpperCase()
+            }
+          }))
+
+          const submissions = []
+          for (const addr of participants) {
+            try {
+              const sub = await ct.getPool1Submission(i, addr)
+              const decoded = sub.map(w => {
+                try {
+                  return ethers.decodeBytes32String(w)
+                } catch {
+                  return ''
+                }
+              })
+              submissions.push({ words: decoded, address: addr })
+            } catch {
+              submissions.push({ words: [], address: addr })
+            }
+          }
 
           const poolUsd = baseUsd * participants.length * feeBase
 
@@ -68,6 +89,7 @@ export default function ActivePools() {
             name: name || 'Untitled',
             theme,
             parts,
+            submissions,
             feeBase: feeBase.toFixed(4),
             deadline,
             count: participants.length,
@@ -98,6 +120,13 @@ export default function ActivePools() {
   useEffect(() => {
     setPage(1)
   }, [search, sortBy, filter])
+
+  const handleLike = (roundId, submissionIdx) => {
+    const key = `${roundId}-${submissionIdx}`
+    const updated = { ...likes, [key]: !likes[key] }
+    setLikes(updated)
+    localStorage.setItem('madfillLikes', JSON.stringify(updated))
+  }
 
   const filtered = rounds.filter(r => {
     const matchesSearch = r.name.toLowerCase().includes(search.toLowerCase())
@@ -130,25 +159,17 @@ export default function ActivePools() {
           <input
             type="text"
             placeholder="🔍 Search by name..."
-            className="w-full sm:w-1/3 p-2 bg-slate-900 border border-slate-700 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full sm:w-1/3 p-2 bg-slate-900 border border-slate-700 rounded"
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
-          <select
-            className="p-2 bg-slate-900 border border-slate-700 rounded"
-            value={sortBy}
-            onChange={e => setSortBy(e.target.value)}
-          >
+          <select className="p-2 bg-slate-900 border border-slate-700 rounded" value={sortBy} onChange={e => setSortBy(e.target.value)}>
             <option value="newest">📅 Newest</option>
             <option value="deadline">⏳ Ending Soon</option>
             <option value="participants">👥 Most Participants</option>
             <option value="prize">💰 Prize Pool</option>
           </select>
-          <select
-            className="p-2 bg-slate-900 border border-slate-700 rounded"
-            value={filter}
-            onChange={e => setFilter(e.target.value)}
-          >
+          <select className="p-2 bg-slate-900 border border-slate-700 rounded" value={filter} onChange={e => setFilter(e.target.value)}>
             <option value="all">🌐 All</option>
             <option value="unclaimed">🪙 Unclaimed Only</option>
             <option value="high">💰 High Pools ($5+)</option>
@@ -159,9 +180,7 @@ export default function ActivePools() {
           <div className="text-white mt-8 text-lg text-center space-y-3">
             <p>No active rounds right now. Be the first to start one! 🚀</p>
             <Link href="/">
-              <Button className="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded-lg">
-                ➕ Create New Round
-              </Button>
+              <Button className="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded-lg">➕ Create New Round</Button>
             </Link>
           </div>
         ) : (
@@ -169,25 +188,17 @@ export default function ActivePools() {
             key={page}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
             transition={{ duration: 0.4 }}
             className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6"
           >
             {paginated.map(r => (
-              <Card
-                key={r.id}
-                className="relative bg-gradient-to-br from-slate-800 to-slate-900 text-white border border-slate-700 rounded-xl hover:shadow-xl transition-all duration-300"
-              >
+              <Card key={r.id} className="relative bg-gradient-to-br from-slate-800 to-slate-900 text-white border border-slate-700 rounded-xl hover:shadow-xl transition-all duration-300">
                 <CardHeader className="flex justify-between items-start">
                   <div className="flex items-start gap-3">
                     <div className="text-3xl">{r.emoji}</div>
                     <div>
                       <h2 className="text-lg font-bold">#{r.id} — {r.name}</h2>
-                      {r.badge && (
-                        <span className="text-sm text-yellow-400 animate-pulse font-semibold">
-                          {r.badge}
-                        </span>
-                      )}
+                      {r.badge && <span className="text-sm text-yellow-400 animate-pulse font-semibold">{r.badge}</span>}
                       <p className="text-xs text-slate-400 mt-1">Theme: {r.theme}</p>
                     </div>
                   </div>
@@ -201,37 +212,52 @@ export default function ActivePools() {
                   <p><strong>Participants:</strong> {r.count}</p>
                   <p><strong>Total Pool:</strong> ${r.usd}</p>
 
-                  <div className="bg-slate-700 p-2 rounded text-xs font-mono text-slate-200">
-                    {r.parts.map((part, i) => (
-                      <span key={i}>
-                        {part}
-                        {i < r.parts.length - 1 && (
-                          <span className="text-yellow-300 font-bold">____</span>
-                        )}
-                      </span>
-                    ))}
-                  </div>
+                  <button
+                    onClick={() => setExpanded(prev => ({ ...prev, [r.id]: !prev[r.id] }))}
+                    className="text-indigo-400 text-xs underline"
+                  >
+                    {expanded[r.id] ? 'Hide Entries' : 'Show Entries'}
+                  </button>
 
-                  <div className="flex gap-2 flex-wrap items-center mt-2">
-                    {r.participants.map((p, i) => (
-                      <div key={i} className="flex flex-col items-center">
-                        <Image
-                          src={p.avatar || '/Capitalize.PNG'}
-                          alt={p.username}
-                          title={`@${p.username}`}
-                          width={32}
-                          height={32}
-                          className="rounded-full border border-white"
-                        />
-                        <p className="text-xs text-slate-400">@{p.username}</p>
-                      </div>
-                    ))}
-                  </div>
+                  {expanded[r.id] && (
+                    <div className="bg-slate-700 p-2 rounded text-xs font-mono text-slate-200 max-h-48 overflow-y-auto space-y-2">
+                      {r.submissions.map((s, idx) => {
+                        const p = r.participants.find(p => p.address === s.address)
+                        const likeKey = `${r.id}-${idx}`
+                        return (
+                          <div key={idx} className="flex items-start gap-2">
+                            <Image
+                              src={p?.avatar || '/Capitalize.PNG'}
+                              alt={p?.username}
+                              width={24}
+                              height={24}
+                              className="rounded-full border border-white mt-1"
+                            />
+                            <div className="flex-1">
+                              <p className="text-slate-400 text-xs font-semibold">@{p?.username}</p>
+                              <p>
+                                {r.parts.map((part, i) => (
+                                  <span key={i}>
+                                    {part}
+                                    {i < s.words.length && <span className="text-yellow-300 font-bold">{s.words[i]}</span>}
+                                  </span>
+                                ))}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => handleLike(r.id, idx)}
+                              className="text-pink-400 text-sm ml-1"
+                            >
+                              {likes[likeKey] ? '❤️' : '🤍'}
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
 
                   <Link href={`/round/${r.id}`}>
-                    <Button className="mt-3 bg-indigo-600 hover:bg-indigo-500 w-full">
-                      ✏️ Enter Round
-                    </Button>
+                    <Button className="mt-3 bg-indigo-600 hover:bg-indigo-500 w-full">✏️ Enter Round</Button>
                   </Link>
                 </CardContent>
               </Card>
@@ -242,13 +268,7 @@ export default function ActivePools() {
         {totalPages > 1 && (
           <div className="flex justify-center gap-2 mt-8">
             {Array.from({ length: totalPages }).map((_, i) => (
-              <Button
-                key={i}
-                className={`px-4 py-1 rounded-full ${
-                  page === i + 1 ? 'bg-indigo-600' : 'bg-slate-700'
-                } text-sm`}
-                onClick={() => setPage(i + 1)}
-              >
+              <Button key={i} className={`px-4 py-1 rounded-full ${page === i + 1 ? 'bg-indigo-600' : 'bg-slate-700'} text-sm`} onClick={() => setPage(i + 1)}>
                 {i + 1}
               </Button>
             ))}
