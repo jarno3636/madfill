@@ -33,9 +33,11 @@ export default function ActivePools() {
     for (let i = 1; i <= count; i++) {
       try {
         const info = await ct.getPool1Info(BigInt(i))
-        const deadline = Number(info.deadline)
-        const claimed = info.claimed
-        const participants = info.participants
+        const deadline = Number(info[4])
+        const claimed = info[5]
+        const participants = info[6]
+        const feeBase = Number(info[3]) / 1e18
+        const name = info[0] || 'Untitled'
 
         if (!claimed && deadline > now) {
           const avatars = await Promise.all(
@@ -49,12 +51,11 @@ export default function ActivePools() {
             })
           )
 
-          const feeBase = Number(info.fee) / 1e18
           const poolUsd = basePrice * participants.length * feeBase
 
           all.push({
             id: i,
-            name: localStorage.getItem(`madfill-roundname-${i}`) || info.name || 'Untitled',
+            name: localStorage.getItem(`madfill-roundname-${i}`) || name,
             feeBase: feeBase.toFixed(4),
             deadline,
             count: participants.length,
@@ -74,12 +75,12 @@ export default function ActivePools() {
 
   useEffect(() => {
     loadRounds()
-    const interval = setInterval(loadRounds, 30000) // Refresh every 30 seconds
+    const interval = setInterval(loadRounds, 30000)
     return () => clearInterval(interval)
   }, [])
 
   useEffect(() => {
-    setPage(1) // Reset page on filter/sort/search change
+    setPage(1)
   }, [search, sortBy, filter])
 
   const filtered = rounds.filter(r => {
