@@ -92,10 +92,9 @@ export default function ActivePools() {
       console.warn('Alchemy failed, falling back to $3800...', e)
       // 4️⃣ Fallback to manual price
       console.log('💰 Price source: Fallback (~3800 USD)')
-      price = 3800
-      setBaseUsd(price)
+      setBaseUsd(3800)
       setFallbackPrice(true)
-      return price
+      return 3800
     }
   }
 
@@ -168,12 +167,12 @@ export default function ActivePools() {
   }
 
   useEffect(() => {
-    const loadData = async () => {
+    const fetchData = async () => {
       const price = await loadPrice()
       await loadRounds(price)
     }
-    loadData()
-    const interval = setInterval(loadData, 30000)
+    fetchData()
+    const interval = setInterval(fetchData, 30000)
     return () => clearInterval(interval)
   }, [])
 
@@ -213,10 +212,135 @@ export default function ActivePools() {
         <title>MadFill – Active Rounds</title>
       </Head>
       <main className="max-w-6xl mx-auto p-6 space-y-6">
-        <h1 className="text-4xl font-extrabold text-white drop-shadow">🧠 Active Rounds</h1>
+        <h1 className="text-4xl font-extrabold text-white drop-shadow">🧠 Active Rounds</
+        <div className="flex flex-wrap justify-between gap-4 text-white">
+          <input
+            type="text"
+            placeholder="🔍 Search by name..."
+            className="w-full sm:w-1/3 p-2 bg-slate-900 border border-slate-700 rounded"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          <select className="p-2 bg-slate-900 border border-slate-700 rounded" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+            <option value="newest">📅 Newest</option>
+            <option value="deadline">⏳ Ending Soon</option>
+            <option value="participants">👥 Most Participants</option>
+            <option value="prize">💰 Prize Pool</option>
+          </select>
+          <select className="p-2 bg-slate-900 border border-slate-700 rounded" value={filter} onChange={e => setFilter(e.target.value)}>
+            <option value="all">🌐 All</option>
+            <option value="unclaimed">🪙 Unclaimed Only</option>
+            <option value="high">💰 High Pools ($5+)</option>
+          </select>
+        </div>
 
-        {/* --- rest of your JSX unchanged --- */}
+        {paginated.length === 0 ? (
+          <div className="text-white mt-8 text-lg text-center space-y-3">
+            <p>No active rounds right now. Be the first to start one! 🚀</p>
+            <Link href="/">
+              <Button className="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded-lg">➕ Create New Round</Button>
+            </Link>
+          </div>
+        ) : (
+          <motion.div
+            key={page}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4 }}
+            className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6"
+          >
+            {paginated.map(r => (
+              <Card key={r.id} className="relative bg-gradient-to-br from-slate-800 to-slate-900 text-white border border-slate-700 rounded-xl hover:shadow-xl transition-all duration-300">
+                <CardHeader className="flex justify-between items-start">
+                  <div className="flex items-start gap-3">
+                    <div className="text-3xl">{r.emoji}</div>
+                    <div>
+                      <h2 className="text-lg font-bold">#{r.id} — {r.name}</h2>
+                      {r.badge && <span className="text-sm text-yellow-400 animate-pulse font-semibold">{r.badge}</span>}
+                      <p className="text-xs text-slate-400 mt-1">Theme: {r.theme}</p>
+                    </div>
+                  </div>
+                  <div className="text-sm font-mono mt-1">
+                    <Countdown targetTimestamp={r.deadline} />
+                  </div>
+                </CardHeader>
+
+                <CardContent className="space-y-2 text-sm font-medium">
+                  <p><strong>Entry Fee:</strong> {r.feeBase} BASE</p>
+                  <p><strong>Participants:</strong> {r.count}</p>
+                  <p>
+                    <strong>Total Pool:</strong>{' '}
+                    {r.usdApprox ? '~' : ''}${r.usd}
+                  </p>
+
+                  <button
+                    onClick={() => setExpanded(prev => ({ ...prev, [r.id]: !prev[r.id] }))}
+                    className="text-indigo-400 text-xs underline"
+                  >
+                    {expanded[r.id] ? 'Hide Entries' : 'Show Entries'}
+                  </button>
+
+                  {expanded[r.id] && (
+                    <div className="bg-slate-700 p-2 rounded text-xs font-mono text-slate-200 max-h-48 overflow-y-auto space-y-2">
+                      {r.submissions.map((s, idx) => {
+                        const p = r.participants.find(p => p.address === s.address)
+                        const likeKey = `${r.id}-${idx}`
+                        const words = s.word?.split(',').map(w => w.trim()) || []
+                        return (
+                          <div key={idx} className="flex items-start gap-2">
+                            <Image
+                              src={p?.avatar || '/Capitalize.PNG'}
+                              alt={s.username || p?.fallbackUsername}
+                              width={24}
+                              height={24}
+                              className="rounded-full border border-white mt-1"
+                            />
+                            <div className="flex-1">
+                              <p className="text-slate-400 text-xs font-semibold">@{s.username || p?.fallbackUsername}</p>
+                              <p>
+                                {r.parts.map((part, i) => (
+                                  <span key={i}>
+                                    {part}
+                                    <span className="text-yellow-300 font-bold ml-1 mr-1">
+                                      {words[i] || '____'}
+                                    </span>
+                                  </span>
+                                ))}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => handleLike(r.id, idx)}
+                              className="text-pink-400 text-sm ml-1"
+                            >
+                              {likes[likeKey] ? '❤️' : '🤍'}
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  <Link href={`/round/${r.id}`}>
+                    <Button className="mt-3 bg-indigo-600 hover:bg-indigo-500 w-full">✏️ Enter Round</Button>
+                  </Link>
+                </CardContent>
+              </Card>
+            ))}
+          </motion.div>
+        )}
+
+        {totalPages > 1 && (
+          <div className="flex justify-center gap-2 mt-8">
+            {Array.from({ length: totalPages }).map((_, i) => (
+              <Button key={i} className={`px-4 py-1 rounded-full ${page === i + 1 ? 'bg-indigo-600' : 'bg-slate-700'} text-sm`} onClick={() => setPage(i + 1)}>
+                {i + 1}
+              </Button>
+            ))}
+          </div>
+        )}
       </main>
     </Layout>
   )
 }
+
+Can you add fix to this code last one had a lot missing still
