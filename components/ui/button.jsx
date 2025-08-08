@@ -1,64 +1,36 @@
-// components/ui/button.jsx
 import React from 'react'
 import clsx from 'clsx'
 
 export function Button({
   children,
   className = '',
-  variant = 'primary', // primary, secondary, danger, ghost
+  variant = 'primary', // primary, secondary, outline, glass
   size = 'md', // sm, md, lg
-  loading = false,
   ...props
 }) {
-  const baseStyles =
-    'inline-flex items-center justify-center font-medium rounded transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed'
-
   const variantStyles = {
-    primary: 'bg-blue-600 text-white hover:bg-blue-700',
-    secondary: 'bg-slate-600 text-white hover:bg-slate-700',
-    danger: 'bg-red-600 text-white hover:bg-red-700',
-    ghost: 'bg-transparent text-blue-600 hover:bg-blue-100'
+    primary: 'bg-gradient-to-r from-pink-500 to-purple-500 text-white shadow hover:from-pink-400 hover:to-purple-400',
+    secondary: 'bg-gradient-to-r from-indigo-500 to-blue-500 text-white shadow hover:from-indigo-400 hover:to-blue-400',
+    outline: 'border border-pink-400 text-pink-400 hover:bg-pink-500/10',
+    glass: 'bg-white/10 backdrop-blur-md border border-white/20 text-white hover:bg-white/20'
   }
 
   const sizeStyles = {
-    sm: 'px-3 py-1 text-sm',
-    md: 'px-4 py-2 text-base',
-    lg: 'px-5 py-3 text-lg'
+    sm: 'px-3 py-1 text-sm rounded-lg',
+    md: 'px-4 py-2 text-base rounded-xl',
+    lg: 'px-6 py-3 text-lg rounded-2xl'
   }
 
   return (
     <button
       className={clsx(
-        baseStyles,
+        'transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed',
         variantStyles[variant],
         sizeStyles[size],
         className
       )}
-      disabled={loading || props.disabled}
       {...props}
     >
-      {loading && (
-        <svg
-          className="animate-spin -ml-1 mr-2 h-4 w-4 text-current"
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-        >
-          <circle
-            className="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-          />
-          <path
-            className="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-          />
-        </svg>
-      )}
       {children}
     </button>
   )
