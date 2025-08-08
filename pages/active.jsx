@@ -32,11 +32,12 @@ export default function ActivePools() {
   // Load BASE price with Coinbase -> CoinGecko -> Alchemy -> $3800 fallback
   const loadPrice = async () => {
     try {
-      // 1️⃣ Try Coinbase ETH-USD spot (BASE == ETH peg)
+      // 1️⃣ Try Coinbase ETH-USD spot (as BASE equivalent)
       const cbRes = await fetch('https://api.coinbase.com/v2/prices/ETH-USD/spot')
       const cbJson = await cbRes.json()
       const cbPrice = parseFloat(cbJson?.data?.amount)
       if (cbPrice && cbPrice > 0.5) {
+        console.log(`💰 Price source: Coinbase (${cbPrice} USD)`)
         setBaseUsd(cbPrice)
         setFallbackPrice(false)
         return
@@ -47,11 +48,12 @@ export default function ActivePools() {
     }
 
     try {
-      // 2️⃣ Try CoinGecko BASE token price
+      // 2️⃣ Try CoinGecko
       const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=l2-standard-bridged-weth-base&vs_currencies=usd')
       const json = await res.json()
       const price = json['l2-standard-bridged-weth-base']?.usd
       if (price && price > 0.5) {
+        console.log(`💰 Price source: CoinGecko (${price} USD)`)
         setBaseUsd(price)
         setFallbackPrice(false)
         return
@@ -79,6 +81,7 @@ export default function ActivePools() {
       const data = await alchemyRes.json()
       const price = data?.result?.price?.usd
       if (price && price > 0.5) {
+        console.log(`💰 Price source: Alchemy (${price} USD)`)
         setBaseUsd(price)
         setFallbackPrice(false)
         return
@@ -86,7 +89,8 @@ export default function ActivePools() {
       throw new Error('Invalid Alchemy price')
     } catch (e) {
       console.warn('Alchemy failed, falling back to $3800...', e)
-      // 4️⃣ Manual fallback
+      // 4️⃣ Fallback to manual price
+      console.log('💰 Price source: Fallback (~3800 USD)')
       setBaseUsd(3800)
       setFallbackPrice(true)
     }
