@@ -11,12 +11,11 @@ import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import Link from 'next/link'
-import Image from 'next/image'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x6975a550130642E5cb67A87BE25c8134542D5a0a' // FillInStoryV3
+  '0x6975a550130642E5cb67A87BE25c8134542D5a0a' // fallback
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID_HEX = '0x2105' // 8453
@@ -31,11 +30,11 @@ export default function MyRounds() {
   const [profile, setProfile] = useState(null)
 
   // canon lists built from on-chain data for the current wallet
-  const [started, setStarted] = useState([])  // rounds you created (subset of joined)
-  const [joined, setJoined] = useState([])    // rounds you entered (includes started)
-  const [wins, setWins] = useState([])        // subset of joined where you won
+  const [started, setStarted] = useState([])        // rounds you created
+  const [joined, setJoined] = useState([])          // rounds you entered (includes started)
+  const [wins, setWins] = useState([])              // you won
   const [unclaimedWins, setUnclaimedWins] = useState([]) // wins not yet claimed
-  const [voted, setVoted] = useState([])      // pool2 votes you cast
+  const [voted, setVoted] = useState([])            // pool2 votes you cast
 
   const [filter, setFilter] = useState('all')
   const [sortBy, setSortBy] = useState('newest')
@@ -51,27 +50,18 @@ export default function MyRounds() {
   const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
   const explorer = (path) => `https://basescan.org/${path}`
 
-  function parseStoredWord(stored) {
-    if (!stored) return { index: 0, word: '' }
-    const sep = stored.indexOf('::')
-    if (sep > -1) {
-      const idxRaw = stored.slice(0, sep)
-      const w = stored.slice(sep + 2)
-      const idx = Math.max(0, Math.min(99, Number.parseInt(idxRaw, 10) || 0))
-      return { index: idx, word: w }
-    }
-    return { index: 0, word: stored }
-  }
+  // spacing helper
   const needsSpaceBefore = (str) => {
     if (!str) return false
     const ch = str[0]
     return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
   }
+
   function buildPreviewSingle(parts, word, blankIndex) {
     const n = parts?.length || 0
     if (n === 0) return ''
     const blanks = Math.max(0, n - 1)
-    const idx = Math.max(0, Math.min(Math.max(0, blanks - 1), blankIndex || 0))
+    const idx = Math.max(0, Math.min(Math.max(0, blanks - 1), Number(blankIndex) || 0))
     const out = []
     for (let i = 0; i < n; i++) {
       out.push(parts[i] || '')
@@ -89,10 +79,6 @@ export default function MyRounds() {
       }
     }
     return out.join('')
-  }
-  function buildPreviewFromStored(parts, stored) {
-    const { index, word } = parseStoredWord(stored)
-    return buildPreviewSingle(parts, word, index)
   }
 
   // wallet + chain
@@ -208,10 +194,12 @@ export default function MyRounds() {
           const claimed = info[8]
           const poolBalance = info[9]
 
+          // NEW: V3 getPool1Submission returns (username, word, submitter, blankIndex)
           const yourSub = await ct.getPool1Submission(BigInt(id), address)
           const username = yourSub[0]
-          const wordRaw = yourSub[1]
-          const preview = buildPreviewFromStored(parts, wordRaw)
+          const word = yourSub[1]
+          const blankIndex = Number(yourSub[3] ?? 0)
+          const preview = buildPreviewSingle(parts, word, blankIndex)
 
           const ended = Math.floor(Date.now() / 1000) >= deadline
           const youWon = winner && winner.toLowerCase() === address.toLowerCase()
@@ -226,8 +214,9 @@ export default function MyRounds() {
             theme,
             parts,
             preview,
-            wordRaw,
+            word,
             username,
+            blankIndex,
             feeEth,
             feeUsd: feeEth * priceUsd,
             poolEth,
@@ -252,29 +241,40 @@ export default function MyRounds() {
       // Pool2 votes you cast
       const votedCards = await Promise.all(
         voteIds.map(async (id) => {
-          const p2 = await ct.getPool2Info(BigInt(id))
+          // Prefer full info to get feeBase/deadline too
+          const p2 = await ct.getPool2InfoFull(BigInt(id))
           const originalPool1Id = Number(p2[0])
-          const chWordRaw = p2[1]
-          const chUsername = p2[2]
+          const challengerWord = p2[1]
+          const challengerUsername = p2[2]
           const challenger = p2[3]
           const votersOriginal = Number(p2[4])
           const votersChallenger = Number(p2[5])
           const claimed = p2[6]
           const challengerWon = p2[7]
           const p2Balance = p2[8]
-          const p2Eth = toEth(p2Balance)
-          const p2Usd = p2Eth * priceUsd
+          const p2FeeBase = p2[9] // not shown, but fetched
+          const p2Deadline = Number(p2[10])
 
+          // Fetch original parts + creator's submission to get the BLANK INDEX for previews
           const info = await ct.getPool1Info(BigInt(originalPool1Id))
           const parts = info[2]
-          const chPreview = buildPreviewFromStored(parts, chWordRaw)
+          const creator = info[5]
+          let creatorBlankIndex = 0
+          try {
+            const creatorSub = await ct.getPool1Submission(BigInt(originalPool1Id), creator)
+            creatorBlankIndex = Number(creatorSub[3] ?? 0)
+          } catch {}
+
+          const chPreview = buildPreviewSingle(parts, challengerWord, creatorBlankIndex)
+          const p2Eth = toEth(p2Balance)
+          const p2Usd = p2Eth * priceUsd
 
           return {
             kind: 'pool2',
             id,
             originalPool1Id,
-            chUsername,
-            chWordRaw,
+            chUsername: challengerUsername,
+            chWord: challengerWord,
             chPreview,
             challenger,
             votersOriginal,
@@ -283,6 +283,8 @@ export default function MyRounds() {
             challengerWon,
             poolEth: p2Eth,
             poolUsd: p2Usd,
+            feeBase: toEth(p2FeeBase),
+            deadline: p2Deadline,
           }
         })
       )
@@ -335,7 +337,6 @@ export default function MyRounds() {
 
   // combined view for "All"
   const allCards = useMemo(() => {
-    // tag each set for display clarity
     const s = started.map((c) => ({ ...c, group: 'Started' }))
     const j = joined.map((c) => ({ ...c, group: 'Joined' }))
     const w = wins.map((c) => ({ ...c, group: 'Won' }))
@@ -405,7 +406,7 @@ export default function MyRounds() {
             )}
           </div>
           <div className="mt-1 text-xs text-slate-400">
-            Contract:{" "}
+            Contract:{' '}
             <a
               className="underline decoration-dotted"
               href={explorer(`address/${contractAddrUsed}`)}
