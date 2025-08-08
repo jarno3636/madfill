@@ -26,10 +26,10 @@ const FEATURED_TAKE = 9
 
 export default function Home() {
   const [status, setStatus] = useState('')
-  const [logs, setLogs] = useState<string[]>([])
-  const loggerRef = useRef<HTMLDivElement | null>(null)
+  const [logs, setLogs] = useState([])
+  const loggerRef = useRef(null)
 
-  const [address, setAddress] = useState<string | null>(null)
+  const [address, setAddress] = useState(null)
   const [isOnBase, setIsOnBase] = useState(true)
 
   const [roundId, setRoundId] = useState('')
@@ -43,10 +43,10 @@ export default function Home() {
   const [feeEth, setFeeEth] = useState(0.01) // entry fee in ETH (Base)
   const [busy, setBusy] = useState(false)
 
-  const [profile, setProfile] = useState<any>(null)
+  const [profile, setProfile] = useState(null)
   const [showConfetti, setShowConfetti] = useState(false)
 
-  const [featured, setFeatured] = useState<any[]>([])
+  const [featured, setFeatured] = useState([])
   const [loadingFeatured, setLoadingFeatured] = useState(true)
 
   const { width, height } = useWindowSize()
@@ -55,25 +55,25 @@ export default function Home() {
   const tpl = selectedCategory.templates[tplIdx] // { name, parts, blanks }
 
   // --- utils ---
-  const log = (msg: string) => {
+  const log = (msg) => {
     setLogs((prev) => [...prev, msg])
     setTimeout(() => {
       if (loggerRef.current) loggerRef.current.scrollTop = loggerRef.current.scrollHeight
     }, 50)
   }
 
-  const needsSpaceBefore = (str: string) => {
+  const needsSpaceBefore = (str) => {
     if (!str) return false
     const ch = str[0]
     return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
   }
 
-  function buildPreviewSingle(parts: string[], w: string, idx: number) {
+  function buildPreviewSingle(parts, w, idx) {
     const n = parts?.length || 0
     if (n === 0) return ''
     const blanks = Math.max(0, n - 1)
     const iSel = Math.max(0, Math.min(Math.max(0, blanks - 1), idx || 0))
-    const out: string[] = []
+    const out = []
     for (let i = 0; i < n; i++) {
       out.push(parts[i] || '')
       if (i < n - 1) {
@@ -92,7 +92,7 @@ export default function Home() {
     return out.join('')
   }
 
-  function sanitizeWord(raw: string) {
+  function sanitizeWord(raw) {
     // one token, letters/numbers/_/-, max 16 chars
     const token = (raw || '')
       .trim()
@@ -111,8 +111,8 @@ export default function Home() {
         const provider = new ethers.BrowserProvider(window.ethereum)
         const accts = await provider.listAccounts()
         const addr =
-          (Array.isArray(accts) && (accts[0] as any)?.address) ||
-          (Array.isArray(accts) && (accts[0] as any)) ||
+          (Array.isArray(accts) && accts[0] && accts[0].address) ||
+          (Array.isArray(accts) && accts[0]) ||
           null
         if (!cancelled) setAddress(addr)
 
@@ -123,7 +123,7 @@ export default function Home() {
       }
 
       const onChain = () => location.reload()
-      const onAcct = (accs: string[]) => setAddress(accs?.[0] || null)
+      const onAcct = (accs) => setAddress(accs?.[0] || null)
       window.ethereum.on?.('chainChanged', onChain)
       window.ethereum.on?.('accountsChanged', onAcct)
       return () => {
@@ -154,7 +154,7 @@ export default function Home() {
         params: [{ chainId: BASE_CHAIN_ID_HEX }],
       })
       setIsOnBase(true)
-    } catch (e: any) {
+    } catch (e) {
       if (e?.code === 4902) {
         try {
           await window.ethereum.request({
@@ -202,10 +202,10 @@ export default function Home() {
           return
         }
         const start = Math.max(1, total - FEATURED_TAKE + 1)
-        const ids: number[] = []
+        const ids = []
         for (let i = total; i >= start; i--) ids.push(i)
 
-        const rows: any[] = []
+        const rows = []
         for (const id of ids) {
           const info = await ct.getPool1Info(BigInt(id))
           const name = info[0]
@@ -219,12 +219,9 @@ export default function Home() {
           const claimed = info[8]
           const poolBalance = info[9]
 
-          // original submission from creator for preview
           let creatorPreview = ''
           try {
             const sub = await ct.getPool1Submission(BigInt(id), creator)
-            // V3 stores (username, word, submitter, blankIndex) — but your ABI may differ;
-            // safely render a generic preview:
             const storedWord = sub[1]
             const bIndex = Number(sub[3] ?? 0)
             creatorPreview = buildPreviewSingle(parts, storedWord, bIndex)
@@ -266,7 +263,7 @@ export default function Home() {
     [tpl.parts, word, blankIndex]
   )
 
-  // --- CREATE ROUND (fixed: pass blankIndex as arg) ---
+  // --- CREATE ROUND (pass blankIndex as arg) ---
   async function handleCreateRound() {
     const cleanWord = sanitizeWord(word)
     if (!cleanWord) {
@@ -310,7 +307,7 @@ export default function Home() {
       const tx = await ct.createPool1(
         roundName || 'Untitled',
         selectedCategory.name,
-        tpl.parts.map((p: string) => p.trim()),
+        tpl.parts.map((p) => p.trim()),
         cleanWord,
         profile?.username || 'anon',
         feeBase,
@@ -323,7 +320,7 @@ export default function Home() {
       // try to pull id from event
       let newId = ''
       try {
-        const evt = rc.logs?.find((l: any) => l.fragment?.name === 'Pool1Created')
+        const evt = rc.logs?.find((l) => l.fragment?.name === 'Pool1Created')
         if (evt?.args?.id) newId = evt.args.id.toString()
       } catch {}
       if (!newId) {
@@ -336,7 +333,7 @@ export default function Home() {
       setShowConfetti(true)
       log(`Round #${newId} created.`)
       setStatus('Success!')
-    } catch (err: any) {
+    } catch (err) {
       console.error(err)
       setStatus(err?.shortMessage || err?.message || 'Failed to create round')
       log('Create failed')
@@ -353,10 +350,10 @@ export default function Home() {
     : `Play MadFill on Base.`
 
   // expanded, wrap-friendly pill
-  const blankPill = (active: boolean) =>
+  const blankPill = (active) =>
     [
       'inline-block align-baseline px-2 py-0.5 rounded border font-bold mx-1',
-      'whitespace-pre break-words', // let long words wrap
+      'whitespace-pre break-words',
       active
         ? 'border-yellow-300 text-yellow-200 bg-yellow-300/10'
         : 'border-slate-400 text-slate-200 bg-slate-700/40 hover:bg-slate-700/60'
@@ -379,7 +376,7 @@ export default function Home() {
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">MadFill</h1>
-              <p className="text-indigo-100 mt-2 max-w-2xl">
+              <p className="text-indigo-100 mt-2 max-2xl">
                 Fill the blank. Make it funny. Win the pot. Create rounds, enter with one word, and let the community decide the best punchline.
               </p>
             </div>
@@ -485,7 +482,7 @@ export default function Home() {
             <div className="rounded-xl bg-slate-800/60 border border-slate-700 p-4">
               <div className="text-slate-300 text-sm mb-2">Card preview</div>
               <div className="text-base leading-relaxed whitespace-pre-wrap break-words">
-                {tpl.parts.map((p: string, i: number) => (
+                {tpl.parts.map((p, i) => (
                   <span key={i}>
                     {p}
                     {i < tpl.parts.length - 1 && (
