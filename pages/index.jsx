@@ -7,22 +7,31 @@ import Link from 'next/link'
 import { ethers } from 'ethers'
 import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
-import abi from '../abi/FillInStoryV3_ABI.json'
+import abi from '@/abi/FillInStoryV3_ABI.json'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
-import { categories, durations } from '../data/templates'
+import { categories, durations } from '@/data/templates'
 import Layout from '@/components/Layout'
 import Footer from '@/components/Footer'
-import { fetchFarcasterProfile } from '@/lib/neynar'
 import ShareBar from '@/components/ShareBar'
+import { fetchFarcasterProfile } from '@/lib/neynar'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x6975a550130642E5cb67A87BE25c8134542D5a0a' // fallback
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // FillInStoryV3 on Base
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID_HEX = '0x2105' // 8453
+
 const FEATURED_TAKE = 9
+
+const extractError = (e) =>
+  e?.shortMessage ||
+  e?.reason ||
+  e?.error?.message ||
+  e?.data?.message ||
+  e?.message ||
+  (typeof e === 'string' ? e : JSON.stringify(e))
 
 export default function Home() {
   const [status, setStatus] = useState('')
@@ -30,7 +39,7 @@ export default function Home() {
   const loggerRef = useRef(null)
 
   const [address, setAddress] = useState(null)
-  const [isOnBase, setIsOnBase] = useState(true)
+  const [isOnBase, setIsOnBase] = useState(false)
 
   const [roundId, setRoundId] = useState('')
   const [roundName, setRoundName] = useState('')
@@ -40,7 +49,7 @@ export default function Home() {
 
   const [word, setWord] = useState('')
   const [duration, setDuration] = useState(durations[0].value)
-  const [feeEth, setFeeEth] = useState(0.01) // entry fee in ETH (Base)
+  const [feeEth, setFeeEth] = useState(0.01) // ETH on Base
   const [busy, setBusy] = useState(false)
 
   const [profile, setProfile] = useState(null)
@@ -54,12 +63,11 @@ export default function Home() {
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx] // { name, parts, blanks }
 
-  // --- utils ---
   const log = (msg) => {
     setLogs((prev) => [...prev, msg])
     setTimeout(() => {
-      if (loggerRef.current) loggerRef.current.scrollTop = loggerRef.current.scrollHeight
-    }, 50)
+      loggerRef.current && (loggerRef.current.scrollTop = loggerRef.current.scrollHeight)
+    }, 30)
   }
 
   const needsSpaceBefore = (str) => {
@@ -72,7 +80,7 @@ export default function Home() {
     const n = parts?.length || 0
     if (n === 0) return ''
     const blanks = Math.max(0, n - 1)
-    const iSel = Math.max(0, Math.min(Math.max(0, blanks - 1), idx || 0))
+    const iSel = Math.max(0, Math.min(Math.max(0, blanks - 1), Number(idx) || 0))
     const out = []
     for (let i = 0; i < n; i++) {
       out.push(parts[i] || '')
@@ -102,27 +110,24 @@ export default function Home() {
     return token
   }
 
-  // --- wallet + chain ---
+  // -------- wallet boot --------
   useEffect(() => {
     if (!window?.ethereum) return
     let cancelled = false
     ;(async () => {
       try {
+        // don’t prompt at boot; just read chain
         const provider = new ethers.BrowserProvider(window.ethereum)
-        const accts = await provider.listAccounts()
-        const addr =
-          (Array.isArray(accts) && accts[0] && accts[0].address) ||
-          (Array.isArray(accts) && accts[0]) ||
-          null
-        if (!cancelled) setAddress(addr)
-
         const net = await provider.getNetwork()
         if (!cancelled) setIsOnBase(net?.chainId === 8453n)
-      } catch {
-        if (!cancelled) setIsOnBase(true)
+      } catch {}
+      const onChain = async () => {
+        try {
+          const p = new ethers.BrowserProvider(window.ethereum)
+          const net = await p.getNetwork()
+          setIsOnBase(net?.chainId === 8453n)
+        } catch {}
       }
-
-      const onChain = () => location.reload()
       const onAcct = (accs) => setAddress(accs?.[0] || null)
       window.ethereum.on?.('chainChanged', onChain)
       window.ethereum.on?.('accountsChanged', onAcct)
@@ -131,9 +136,7 @@ export default function Home() {
         window.ethereum.removeListener?.('accountsChanged', onAcct)
       }
     })()
-    return () => {
-      cancelled = true
-    }
+    return () => {}
   }, [])
 
   async function connectWallet() {
@@ -141,9 +144,16 @@ export default function Home() {
       setStatus('No wallet detected.')
       return
     }
-    const provider = new ethers.BrowserProvider(window.ethereum)
-    const accts = await provider.send('eth_requestAccounts', [])
-    setAddress(accts?.[0] || null)
+    try {
+      const provider = new ethers.BrowserProvider(window.ethereum)
+      const accounts = await provider.send('eth_requestAccounts', [])
+      setAddress(accounts?.[0] || null)
+      const net = await provider.getNetwork()
+      setIsOnBase(net?.chainId === 8453n)
+      setStatus('Wallet connected')
+    } catch (e) {
+      setStatus(extractError(e))
+    }
   }
 
   async function switchToBase() {
@@ -159,25 +169,25 @@ export default function Home() {
         try {
           await window.ethereum.request({
             method: 'wallet_addEthereumChain',
-            params: [
-              {
-                chainId: BASE_CHAIN_ID_HEX,
-                chainName: 'Base',
-                rpcUrls: [BASE_RPC],
-                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-                blockExplorerUrls: ['https://basescan.org'],
-              },
-            ],
+            params: [{
+              chainId: BASE_CHAIN_ID_HEX,
+              chainName: 'Base',
+              rpcUrls: [BASE_RPC],
+              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+              blockExplorerUrls: ['https://basescan.org'],
+            }],
           })
           setIsOnBase(true)
         } catch (err) {
-          console.error(err)
+          setStatus(extractError(err))
         }
+      } else {
+        setStatus(extractError(e))
       }
     }
   }
 
-  // profile flair (optional)
+  // profile flair (after connect)
   useEffect(() => {
     if (!address) return
     ;(async () => {
@@ -188,7 +198,7 @@ export default function Home() {
     })()
   }, [address])
 
-  // featured pools (latest N)
+  // featured (read-only)
   useEffect(() => {
     let cancelled = false
     setLoadingFeatured(true)
@@ -219,22 +229,21 @@ export default function Home() {
           const claimed = info[8]
           const poolBalance = info[9]
 
+          // creator preview
           let creatorPreview = ''
           try {
             const sub = await ct.getPool1Submission(BigInt(id), creator)
-            const storedWord = sub[1]
-            const bIndex = Number(sub[3] ?? 0)
-            creatorPreview = buildPreviewSingle(parts, storedWord, bIndex)
-          } catch {
-            creatorPreview = buildPreviewSingle(parts, '', 0)
-          }
-
+            const stored = sub[1] // word (may be plain)
+            // New contract uses separate blankIndex going forward,
+            // but for older rounds, keep simple injection at blank 0:
+            creatorPreview = buildPreviewSingle(parts, stored, 0)
+          } catch {}
           rows.push({
             id,
             name: name || `Round #${id}`,
             theme,
             parts,
-            preview: creatorPreview,
+            preview: creatorPreview || buildPreviewSingle(parts, '', 0),
             entrants: participants.length,
             feeEth: Number(ethers.formatEther(feeBase || 0n)),
             poolEth: Number(ethers.formatEther(poolBalance || 0n)),
@@ -243,8 +252,6 @@ export default function Home() {
             claimed
           })
         }
-
-        rows.sort((a, b) => (b.poolEth - a.poolEth) || (b.id - a.id))
         if (!cancelled) setFeatured(rows)
       } catch (e) {
         console.error('Featured fetch failed', e)
@@ -253,17 +260,14 @@ export default function Home() {
         if (!cancelled) setLoadingFeatured(false)
       }
     })()
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [])
 
   const preview = useMemo(
-    () => buildPreviewSingle(tpl.parts, sanitizeWord(word), Number(blankIndex)),
+    () => buildPreviewSingle(tpl.parts, sanitizeWord(word), blankIndex),
     [tpl.parts, word, blankIndex]
   )
 
-  // --- CREATE ROUND (pass blankIndex as arg) ---
   async function handleCreateRound() {
     const cleanWord = sanitizeWord(word)
     if (!cleanWord) {
@@ -280,53 +284,76 @@ export default function Home() {
       setStatus('No wallet detected.')
       return
     }
-    if (!address) {
-      setStatus('Please connect your wallet first.')
-      return
-    }
 
     try {
       setBusy(true)
       setStatus('')
       log('Connecting wallet...')
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      await provider.send('eth_requestAccounts', [])
-      const signer = await provider.getSigner()
-      const net = await provider.getNetwork()
+      // Always prompt to ensure MM wakes up
+      const p0 = new ethers.BrowserProvider(window.ethereum)
+      await p0.send('eth_requestAccounts', [])
+      let net = await p0.getNetwork()
       if (net?.chainId !== 8453n) {
         log('Switching to Base...')
         await switchToBase()
       }
+      // Rebuild provider & signer AFTER chain switch
+      const provider = new ethers.BrowserProvider(window.ethereum)
+      const signer = await provider.getSigner()
+      net = await provider.getNetwork()
+      if (net?.chainId !== 8453n) throw new Error('Please switch to Base')
+
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
       const feeBase = ethers.parseUnits(String(feeEth), 18) // ETH on Base
-      const value = (feeBase * 1005n) / 1000n // tiny buffer for rounding
+      const value = feeBase // exact value; contract skims 0.5% internally
 
-      log(`Creating round "${roundName || 'Untitled'}"...`)
-      // createPool1(name, theme, parts, word, username, feeBase, duration, blankIndex) payable
-      const tx = await ct.createPool1(
-        roundName || 'Untitled',
-        selectedCategory.name,
-        tpl.parts.map((p) => p.trim()),
+      const parts = tpl.parts.map((p) => p.trim())
+      const name = (roundName || 'Untitled').slice(0, 48)
+      const theme = selectedCategory.name
+      const username = (profile?.username || 'anon').slice(0, 32)
+      const durationSecs = BigInt(duration * 86400)
+      const idx = Number(blankIndex) | 0
+
+      log(`Creating round "${name}"...`)
+
+      // Preflight to surface revert reasons
+      await ct.createPool1.staticCall(
+        name,
+        theme,
+        parts,
         cleanWord,
-        profile?.username || 'anon',
+        username,
         feeBase,
-        BigInt(duration * 86400),
-        Number(blankIndex),
+        durationSecs,
+        idx,
+        { value }
+      )
+
+      // Send real tx (this should trigger the wallet prompt)
+      const tx = await ct.createPool1(
+        name,
+        theme,
+        parts,
+        cleanWord,
+        username,
+        feeBase,
+        durationSecs,
+        idx,
         { value }
       )
       const rc = await tx.wait()
 
-      // try to pull id from event
+      // Pull id from event if present; fallback to reading counter
       let newId = ''
       try {
         const evt = rc.logs?.find((l) => l.fragment?.name === 'Pool1Created')
         if (evt?.args?.id) newId = evt.args.id.toString()
       } catch {}
       if (!newId) {
-        const providerR = new ethers.JsonRpcProvider(BASE_RPC)
-        const ctR = new ethers.Contract(CONTRACT_ADDRESS, abi, providerR)
-        newId = String(await ctR.pool1Count())
+        const rp = new ethers.JsonRpcProvider(BASE_RPC)
+        const reader = new ethers.Contract(CONTRACT_ADDRESS, abi, rp)
+        newId = String(await reader.pool1Count())
       }
 
       setRoundId(newId)
@@ -335,8 +362,9 @@ export default function Home() {
       setStatus('Success!')
     } catch (err) {
       console.error(err)
-      setStatus(err?.shortMessage || err?.message || 'Failed to create round')
-      log('Create failed')
+      const msg = extractError(err)
+      setStatus(msg)
+      log(`Create failed: ${msg}`)
     } finally {
       setBusy(false)
       setTimeout(() => setShowConfetti(false), 1800)
@@ -349,14 +377,10 @@ export default function Home() {
     ? `I just created a MadFill round! Join Round #${roundId}.`
     : `Play MadFill on Base.`
 
-  // expanded, wrap-friendly pill
   const blankPill = (active) =>
     [
-      'inline-block align-baseline px-2 py-0.5 rounded border font-bold mx-1',
-      'whitespace-pre break-words',
-      active
-        ? 'border-yellow-300 text-yellow-200 bg-yellow-300/10'
-        : 'border-slate-400 text-slate-200 bg-slate-700/40 hover:bg-slate-700/60'
+      'inline-flex items-center justify-center px-2 h-7 text-center border-b-2 font-bold cursor-pointer mx-1 rounded',
+      active ? 'border-yellow-300 text-yellow-200 bg-yellow-300/10' : 'border-slate-400 text-slate-200 bg-slate-700/40'
     ].join(' ')
 
   return (
@@ -376,20 +400,22 @@ export default function Home() {
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">MadFill</h1>
-              <p className="text-indigo-100 mt-2 max-2xl">
+              <p className="text-indigo-100 mt-2 max-w-2xl">
                 Fill the blank. Make it funny. Win the pot. Create rounds, enter with one word, and let the community decide the best punchline.
               </p>
             </div>
             <div className="flex items-center gap-2">
-              {!address && (
-                <Button onClick={connectWallet} className="bg-cyan-700 hover:bg-cyan-600">
-                  Connect Wallet
-                </Button>
-              )}
               {!isOnBase && (
                 <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600">
                   Switch to Base
                 </Button>
+              )}
+              {!address ? (
+                <Button onClick={connectWallet} className="bg-indigo-900/70 hover:bg-indigo-800">
+                  Connect Wallet
+                </Button>
+              ) : (
+                <span className="text-sm opacity-90">{address.slice(0,6)}…{address.slice(-4)}</span>
               )}
               <Link href="/active" className="underline text-white/90 text-sm">
                 View Active Rounds
@@ -397,35 +423,6 @@ export default function Home() {
             </div>
           </div>
         </div>
-
-        {/* What is MadFill */}
-        <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
-          <CardHeader className="border-b border-slate-700 bg-slate-800/50">
-            <h2 className="text-xl font-bold">What is MadFill?</h2>
-          </CardHeader>
-          <CardContent className="p-5 space-y-3 text-sm">
-            <div className="grid md:grid-cols-3 gap-3">
-              <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
-                <div className="text-2xl">🧩</div>
-                <div className="font-semibold mt-1">Simple rules</div>
-                <div className="text-slate-300 mt-1">Each template has blanks. You drop one word into a specific blank.</div>
-              </div>
-              <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
-                <div className="text-2xl">🎲</div>
-                <div className="font-semibold mt-1">Chance or vote</div>
-                <div className="text-slate-300 mt-1">Rounds can end with a random winner, or face a Challenger in a community vote.</div>
-              </div>
-              <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
-                <div className="text-2xl">💰</div>
-                <div className="font-semibold mt-1">Win the pool</div>
-                <div className="text-slate-300 mt-1">Entry fees go into the prize pool. Winner takes it when the round settles.</div>
-              </div>
-            </div>
-            <div className="text-xs text-slate-400">
-              Powered by smart contracts on Base. Your wallet is your identity. No accounts, no emails.
-            </div>
-          </CardContent>
-        </Card>
 
         {/* Create Round */}
         <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
@@ -446,7 +443,7 @@ export default function Home() {
                 Round name (optional)
                 <input
                   value={roundName}
-                  onChange={(e) => setRoundName(e.target.value.slice(0, 32))}
+                  onChange={(e) => setRoundName(e.target.value.slice(0, 48))}
                   placeholder="My spicy round"
                   className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                   disabled={busy}
@@ -458,7 +455,7 @@ export default function Home() {
                   <select
                     className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                     value={catIdx}
-                    onChange={(e) => setCatIdx(Number(e.target.value))}
+                    onChange={(e) => { setCatIdx(Number(e.target.value)); setTplIdx(0); setBlankIndex(0) }}
                     disabled={busy}
                   >
                     {categories.map((c, i) => <option key={i} value={i}>{c.name}</option>)}
@@ -469,7 +466,7 @@ export default function Home() {
                   <select
                     className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                     value={tplIdx}
-                    onChange={(e) => setTplIdx(Number(e.target.value))}
+                    onChange={(e) => { setTplIdx(Number(e.target.value)); setBlankIndex(0) }}
                     disabled={busy}
                   >
                     {selectedCategory.templates.map((t, i) => <option key={i} value={i}>{t.name}</option>)}
@@ -478,10 +475,10 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Preview with blank picker (wrap-friendly) */}
+            {/* Preview with blank picker */}
             <div className="rounded-xl bg-slate-800/60 border border-slate-700 p-4">
               <div className="text-slate-300 text-sm mb-2">Card preview</div>
-              <div className="text-base leading-relaxed whitespace-pre-wrap break-words">
+              <div className="text-base leading-relaxed">
                 {tpl.parts.map((p, i) => (
                   <span key={i}>
                     {p}
@@ -501,6 +498,7 @@ export default function Home() {
               <div className="text-xs text-slate-400 mt-2">
                 Click a blank to choose where your word goes.
               </div>
+              <div className="mt-3 text-xs italic opacity-80">{preview}</div>
             </div>
 
             {/* Your word */}
@@ -548,7 +546,7 @@ export default function Home() {
                     {feeEth.toFixed(3)} ETH
                   </span>
                   <span className="text-[11px] text-slate-400">
-                    This is what each entrant pays to join your round.
+                    Each entrant pays this amount to join your round.
                   </span>
                 </div>
               </label>
@@ -557,7 +555,7 @@ export default function Home() {
             {/* Submit */}
             <div className="flex flex-wrap items-center gap-3">
               {!address && (
-                <Button onClick={connectWallet} className="bg-cyan-700 hover:bg-cyan-600">
+                <Button onClick={connectWallet} className="bg-indigo-900/70 hover:bg-indigo-800">
                   Connect Wallet
                 </Button>
               )}
@@ -568,7 +566,7 @@ export default function Home() {
               )}
               <Button
                 onClick={handleCreateRound}
-                disabled={busy || !word || !address}
+                disabled={busy || !word}
                 className="bg-indigo-600 hover:bg-indigo-500"
               >
                 Create round and submit
@@ -597,7 +595,7 @@ export default function Home() {
           </CardContent>
         </Card>
 
-        {/* Featured Pools */}
+        {/* Featured */}
         <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
           <CardHeader className="border-b border-slate-700 bg-slate-800/50">
             <div className="flex items-center justify-between">
@@ -674,19 +672,19 @@ export default function Home() {
                 <div className="text-2xl">🏆</div>
                 <div className="font-semibold mt-1">Prize pool</div>
                 <div className="text-slate-300 mt-1">
-                  99.5% of each entry goes straight into the pool. Winner takes it when the round ends.
+                  99.5% of each entry goes into the pool. Winner takes all when the round ends.
                 </div>
               </div>
               <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
                 <div className="text-2xl">⚙️</div>
                 <div className="font-semibold mt-1">Protocol fee</div>
                 <div className="text-slate-300 mt-1">
-                  A tiny 0.5% keeps the lights on. No hidden costs. Everything happens on-chain.
+                  A tiny 0.5% keeps the lights on. No hidden costs. Everything’s on-chain.
                 </div>
               </div>
             </div>
             <div className="text-xs text-slate-400">
-              All amounts are in ETH on Base. The app sends a tiny buffer with your transaction to avoid rounding issues.
+              All amounts are in ETH on Base. No slippage “buffer” is added — the contract takes its fee from what you send.
             </div>
           </CardContent>
         </Card>
