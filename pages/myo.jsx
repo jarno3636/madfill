@@ -41,41 +41,48 @@ const themes = {
   },
 }
 
-/** Helper to read the NFT contract address from env.
- *  Use NEXT_PUBLIC_ if present (client-exposed), else fallback to server var name.
- */
+/** Env + chain */
+const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+const BASE_CHAIN_ID = 8453n
+const BASE_CHAIN_ID_HEX = '0x2105'
+
 function getNftAddress() {
   return process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS || process.env.NFT_TEMPLATE_ADDRESS || ''
 }
 
 export default function MyoPage() {
+  // editor
   const [title, setTitle] = useState('My Epic MadFill')
   const [description, setDescription] = useState('A wild, weird, and fun round I created myself.')
   const [parts, setParts] = useState(['Today I ', '____', ' and then ', '____', ' while riding a ', '____', '!'])
   const [theme, setTheme] = useState(defaultTheme)
-  const [stickers, setStickers] = useState(defaultStickers)
+  const [stickers] = useState(defaultStickers)
   const [activeSticker, setActiveSticker] = useState(null)
   const [showPreview, setShowPreview] = useState(false)
 
-  // On-chain config (fetched)
+  // wallet / chain
+  const [address, setAddress] = useState(null)
+  const [isOnBase, setIsOnBase] = useState(true)
+
+  // on-chain config (fetched)
   const [mintEth, setMintEth] = useState(null)       // number (ETH)
   const [royaltyBps, setRoyaltyBps] = useState(null) // number (bps)
   const [payoutWallet, setPayoutWallet] = useState('')
 
-  // Contract limits (fetched)
+  // contract limits (fetched)
   const [maxParts, setMaxParts] = useState(null)
   const [maxPartBytes, setMaxPartBytes] = useState(null)
   const [maxTotalBytes, setMaxTotalBytes] = useState(null)
 
-  // UX state
+  // UX
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
 
-  // Load draft from localStorage
+  /** ============== Draft load/save ============== */
   useEffect(() => {
-    const savedRaw = localStorage.getItem('madfill-myo-draft')
-    if (!savedRaw) return
     try {
+      const savedRaw = localStorage.getItem('madfill-myo-draft')
+      if (!savedRaw) return
       const saved = JSON.parse(savedRaw)
       if (saved.title) setTitle(saved.title)
       if (saved.description) setDescription(saved.description)
@@ -83,22 +90,92 @@ export default function MyoPage() {
       if (saved.theme) setTheme(saved.theme)
     } catch {}
   }, [])
-
-  // Save draft
   useEffect(() => {
-    localStorage.setItem(
-      'madfill-myo-draft',
-      JSON.stringify({ title, description, parts, theme })
-    )
+    try {
+      localStorage.setItem('madfill-myo-draft', JSON.stringify({ title, description, parts, theme }))
+    } catch {}
   }, [title, description, parts, theme])
 
-  // Fetch mint price / royalty / payout + contract limits for validation
+  /** ============== Wallet + chain ============== */
+  useEffect(() => {
+    if (!window?.ethereum) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const accts = await window.ethereum.request({ method: 'eth_accounts' })
+        if (!cancelled) setAddress(accts?.[0] || null)
+      } catch {}
+      try {
+        const provider = new ethers.BrowserProvider(window.ethereum)
+        const net = await provider.getNetwork()
+        if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
+      } catch {
+        if (!cancelled) setIsOnBase(true)
+      }
+      const onChain = () => location.reload()
+      const onAcct = (accs) => setAddress(accs?.[0] || null)
+      window.ethereum.on?.('chainChanged', onChain)
+      window.ethereum.on?.('accountsChanged', onAcct)
+      return () => {
+        window.ethereum.removeListener?.('chainChanged', onChain)
+        window.ethereum.removeListener?.('accountsChanged', onAcct)
+      }
+    })()
+    return () => {}
+  }, [])
+
+  async function connectWallet() {
+    if (!window?.ethereum) {
+      setStatus('❌ No wallet detected.')
+      return
+    }
+    try {
+      const accts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+      setAddress(accts?.[0] || null)
+      const provider = new ethers.BrowserProvider(window.ethereum)
+      const net = await provider.getNetwork()
+      setIsOnBase(net?.chainId === BASE_CHAIN_ID)
+    } catch (e) {
+      setStatus('❌ Wallet connection rejected')
+    }
+  }
+
+  async function switchToBase() {
+    if (!window?.ethereum) return
+    try {
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: BASE_CHAIN_ID_HEX }],
+      })
+      setIsOnBase(true)
+    } catch (e) {
+      if (e?.code === 4902) {
+        try {
+          await window.ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: BASE_CHAIN_ID_HEX,
+              chainName: 'Base',
+              rpcUrls: [BASE_RPC],
+              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+              blockExplorerUrls: ['https://basescan.org'],
+            }],
+          })
+          setIsOnBase(true)
+        } catch (err) {
+          setStatus('❌ Could not add Base network')
+        }
+      }
+    }
+  }
+
+  /** ============== Read on-chain config ============== */
   useEffect(() => {
     const addr = getNftAddress()
     if (!addr) return
     ;(async () => {
       try {
-        const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
+        const provider = new ethers.JsonRpcProvider(BASE_RPC)
         const ct = new ethers.Contract(addr, NFT_ABI, provider)
 
         const [wei, bps, wallet, _maxParts, _maxPartBytes, _maxTotalBytes] =
@@ -123,43 +200,36 @@ export default function MyoPage() {
     })()
   }, [])
 
-  /** =========================
-   *  Editing helpers
-   *  ========================= */
+  /** ============== Editing helpers ============== */
   const handlePartChange = (value, i) => {
+    // normalize triple spaces & trim soft
+    const safe = value.replace(/\s{3,}/g, '  ')
     const newParts = [...parts]
-    newParts[i] = value
+    newParts[i] = safe
     setParts(newParts)
   }
-
   const addBlank = () => setParts([...parts, '____'])
   const addTextPart = () => setParts([...parts, ''])
 
   const toggleSticker = (emoji) => {
     setActiveSticker((prev) => (prev === emoji ? null : emoji))
   }
-
   const addStickerToEnd = () => {
     if (activeSticker) {
       setParts([...parts, activeSticker])
       setActiveSticker(null)
     }
   }
-
   const randomizeTheme = () => {
     const keys = Object.keys(themes)
-    const pick = keys[Math.floor(Math.random() * keys.length)]
+    const pick = keys[(Math.random() * keys.length) | 0]
     setTheme(pick)
   }
 
-  /** =========================
-   *  Validation (client-side to match contract guards)
-   *  ========================= */
+  /** ============== Validation ============== */
   function utf8BytesLength(str) {
-    // quick & safe byte-length for UTF-8
     return new TextEncoder().encode(str || '').length
   }
-
   function validateTemplate() {
     if (!title?.trim()) return 'Please add a title.'
     if (!description?.trim()) return 'Please add a short description.'
@@ -180,16 +250,14 @@ export default function MyoPage() {
     }
     if (total > _maxTotalBytes) return `Template too large (max ${_maxTotalBytes} bytes total).`
 
-    // Encourage at least one blank
-    const hasBlank = parts.some(p => p === '____')
+    // at least one "____"
+    const hasBlank = parts.some((p) => p === '____')
     if (!hasBlank) return 'Add at least one blank "____" for people to fill!'
 
     return null
   }
 
-  /** =========================
-   *  Mint
-   *  ========================= */
+  /** ============== Mint ============== */
   async function mintTemplate() {
     setStatus('')
     const error = validateTemplate()
@@ -203,7 +271,6 @@ export default function MyoPage() {
       setStatus('❌ NFT contract address not configured.')
       return
     }
-
     if (!window.ethereum) {
       setStatus('❌ No wallet detected.')
       return
@@ -211,33 +278,45 @@ export default function MyoPage() {
 
     try {
       setBusy(true)
-      setStatus('⏳ Fetching mint price…')
+      // ensure connected
+      if (!address) {
+        await connectWallet()
+        if (!address) throw new Error('Connect your wallet first.')
+      }
 
       const browserProvider = new ethers.BrowserProvider(window.ethereum)
+      const net = await browserProvider.getNetwork()
+      if (net?.chainId !== BASE_CHAIN_ID) {
+        await switchToBase()
+      }
+
       const signer = await browserProvider.getSigner()
       const ct = new ethers.Contract(addr, NFT_ABI, signer)
 
-      // get latest mint price in wei from contract (on-chain USD conversion)
+      setStatus('⏳ Fetching mint price…')
       const priceWei = await ct.getMintPriceWei()
-      const buffer = (priceWei * 1005n) / 1000n // +0.5% buffer to avoid rounding failures
+      const buffer = (priceWei * 1005n) / 1000n // +0.5% buffer
 
       setStatus('🧪 Sending mint…')
-
       const tx = await ct.mintTemplate(title.trim(), description.trim(), theme, parts, {
         value: buffer,
       })
+
       setStatus('⛏️ Minting… waiting for confirmation')
       const r = await tx.wait()
 
-      // Try to find a Minted event to show tokenId (optional—depends on your contract’s event index)
+      // Optional: show tokenId from a Minted event
       let tokenIdStr = null
       try {
-        const minted = r.logs
-          ?.map(l => {
-            try { return ct.interface.parseLog(l) } catch { return null }
-          })
-          ?.find(ev => ev && ev.name === 'Minted')
-        if (minted) tokenIdStr = minted.args?.tokenId?.toString?.()
+        for (const log of r.logs || []) {
+          try {
+            const parsed = ct.interface.parseLog(log)
+            if (parsed?.name === 'Minted' && parsed.args?.tokenId) {
+              tokenIdStr = parsed.args.tokenId.toString()
+              break
+            }
+          } catch {}
+        }
       } catch {}
 
       setStatus(`✅ Minted! ${tokenIdStr ? `Token #${tokenIdStr}` : ''} View in your wallet.`)
@@ -250,37 +329,49 @@ export default function MyoPage() {
     }
   }
 
-  /** =========================
-   *  Share links
-   *  ========================= */
+  /** ============== Share ============== */
   const shareText = encodeURIComponent(
     `🧠 I made a custom MadFill!\n\n${parts.join(' ')}\n\nTry it here: https://madfill.vercel.app/myo`
   )
   const farcasterShare = `https://warpcast.com/~/compose?text=${shareText}`
   const twitterShare = `https://twitter.com/intent/tweet?text=${shareText}`
 
-  /** =========================
-   *  Render
-   *  ========================= */
+  /** ============== Render ============== */
   return (
     <Layout>
       <div className="rounded-xl shadow-xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-950 text-white p-6">
-        {/* Header + Fun explainer card */}
+        {/* Header + connect */}
         <div className="mb-6 grid gap-4 md:grid-cols-2">
           <div>
             <h2 className="text-2xl font-extrabold">🎨 Make Your Own MadFill</h2>
             <p className="text-sm text-indigo-300">
-              Build your own weird sentence + style — then **mint it** as an NFT so others can remix it forever.
+              Build your sentence + style, then mint it as an NFT so others can remix it forever.
             </p>
+            <div className="mt-3 flex items-center gap-2 text-xs">
+              {address ? (
+                <span className="px-2 py-1 rounded bg-slate-800/70 border border-slate-700">
+                  👛 {address.slice(0, 6)}…{address.slice(-4)}
+                </span>
+              ) : (
+                <Button onClick={connectWallet} className="bg-slate-700 hover:bg-slate-600">
+                  Connect Wallet
+                </Button>
+              )}
+              {!isOnBase && (
+                <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600">
+                  Switch to Base
+                </Button>
+              )}
+            </div>
           </div>
 
           {/* Info / Fees / How it works */}
           <div className="rounded-xl border border-indigo-700 bg-slate-900/60 p-4">
             <p className="font-semibold mb-1">ℹ️ How this page works</p>
             <ul className="list-disc ml-5 text-sm space-y-1 text-slate-200">
-              <li>Type your sentence parts — use <span className="px-1 rounded bg-slate-800 text-pink-300">____</span> wherever you want players to fill in.</li>
+              <li>Use <span className="px-1 rounded bg-slate-800 text-pink-300">____</span> wherever players should fill in.</li>
               <li>Pick a theme, toss in stickers, and preview anytime.</li>
-              <li>Hit <b>Mint Template</b> to save it on-chain as a collectible + reusable game card.</li>
+              <li>Hit <b>Mint Template</b> to save it on-chain.</li>
             </ul>
 
             <div className="h-px my-3 bg-slate-700" />
@@ -301,7 +392,7 @@ export default function MyoPage() {
                 )}
               </div>
               <p className="text-slate-400">
-                Price auto-converts from USD (on-chain oracle). You pay gas + mint price. Royalties apply on secondary sales.
+                Price auto-converts from USD (on-chain oracle). You pay gas + mint price.
               </p>
             </div>
           </div>
@@ -364,13 +455,22 @@ export default function MyoPage() {
         {/* Parts */}
         <div className="space-y-2 mb-4">
           {parts.map((part, i) => (
-            <input
-              key={i}
-              value={part}
-              onChange={(e) => handlePartChange(e.target.value, i)}
-              className="w-full bg-slate-800 text-white border border-slate-600 rounded px-3 py-2"
-              placeholder={i % 2 ? '____' : 'Write some text…'}
-            />
+            <div key={i} className="flex gap-2">
+              <input
+                value={part}
+                onChange={(e) => handlePartChange(e.target.value, i)}
+                className="w-full bg-slate-800 text-white border border-slate-600 rounded px-3 py-2"
+                placeholder={i % 2 ? '____' : 'Write some text…'}
+              />
+              <Button
+                type="button"
+                onClick={() => setParts((ps) => ps.filter((_, idx) => idx !== i))}
+                className="bg-rose-700 hover:bg-rose-600"
+                title="Remove part"
+              >
+                ✖
+              </Button>
+            </div>
           ))}
         </div>
 
@@ -400,7 +500,7 @@ export default function MyoPage() {
             {busy ? '⛏️ Minting…' : '🪙 Mint Template'}
           </Button>
 
-          {/* Status pill (live numbers) */}
+          {/* live numbers */}
           <div className="flex-1">
             {mintEth != null && (
               <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-800 px-3 py-1 text-xs text-slate-200">
@@ -439,12 +539,14 @@ export default function MyoPage() {
         </div>
 
         {status && (
-          <div className={clsx(
-            'mt-4 rounded border px-3 py-2 text-sm',
-            status.startsWith('✅') ? 'border-emerald-500 bg-emerald-500/10 text-emerald-200' :
-            status.startsWith('⏳') || status.startsWith('🧪') || status.startsWith('⛏️') ? 'border-indigo-500 bg-indigo-500/10 text-indigo-200' :
-            'border-rose-500 bg-rose-500/10 text-rose-200'
-          )}>
+          <div
+            className={clsx(
+              'mt-4 rounded border px-3 py-2 text-sm',
+              status.startsWith('✅') ? 'border-emerald-500 bg-emerald-500/10 text-emerald-200' :
+              status.startsWith('⏳') || status.startsWith('🧪') || status.startsWith('⛏️') ? 'border-indigo-500 bg-indigo-500/10 text-indigo-200' :
+              'border-rose-500 bg-rose-500/10 text-rose-200'
+            )}
+          >
             {status}
           </div>
         )}
