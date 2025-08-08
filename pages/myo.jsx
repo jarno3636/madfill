@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import clsx from 'clsx'
 import { ethers } from 'ethers'
 import NFT_ABI from '@/abi/MadFillTemplateNFT_ABI.json'
+import InfoMintCard from '@/components/InfoMintCard'
 
 const defaultStickers = ['🐸', '💥', '🌈', '🧠', '🔥', '✨', '🌀', '🎉', '🍕', '👾']
 const defaultTheme = 'retro'
