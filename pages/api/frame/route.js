@@ -4,17 +4,15 @@ import abi from '@/abi/FillInStoryV3_ABI.json'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // FillInStoryV3 (env wins)
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // env wins
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 
-// Default vote fee if env not provided: 0.0005 ETH
+// default vote fee: 0.0005 ETH (override with NEXT_PUBLIC_POOL2_VOTE_FEE_WEI)
 const DEFAULT_VOTE_FEE_WEI = ethers.parseUnits('0.0005', 18)
 const VOTE_FEE_WEI =
   (process.env.NEXT_PUBLIC_POOL2_VOTE_FEE_WEI && BigInt(process.env.NEXT_PUBLIC_POOL2_VOTE_FEE_WEI)) ||
   DEFAULT_VOTE_FEE_WEI
-
-// tiny buffer to avoid rounding reverts
 const VOTE_FEE_WITH_BUFFER = (VOTE_FEE_WEI * 1005n) / 1000n
 
 export default async function handler(req, res) {
@@ -22,58 +20,90 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' })
   }
 
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://madfill.vercel.app'
+
   try {
-    // Body can be JSON or string; normalize
+    // Frames body OR plain JSON string
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {})
     const { untrustedData } = body
-    const { fid, buttonIndex, inputText } = untrustedData || {}
 
-    // Button mapping (Frames index is 1-based):
-    // 1 => Original, 2 => Challenger
-    const voteChallenger = Number(buttonIndex) === 2
+    // Query fallbacks (works with the frame.js post targets)
+    const { id: qId, kind: qKind, vote: qVote } = req.query || {}
 
-    // Interpret input as Pool2 ID by default.
-    // You can also allow "p2:123", "challenge:123", or plain "123".
-    const raw = String(inputText || '').trim()
-    const parsed =
-      raw.match(/p2:(\d+)/i)?.[1] ||
-      raw.match(/challenge:(\d+)/i)?.[1] ||
-      raw.match(/^(\d+)$/)?.[1] ||
-      null
+    // Pull from Frames (buttonIndex starts at 1): 1=Original, 2=Challenger
+    const buttonIndex = Number(untrustedData?.buttonIndex || 0)
+    const fromButtons = buttonIndex === 1 || buttonIndex === 2
+    const voteChallenger =
+      fromButtons ? (buttonIndex === 2) : (String(qVote).toLowerCase() === 'challenger')
 
-    if (!parsed) {
+    // Identify target
+    let kind = (untrustedData?.inputTextKind || qKind || 'pool2').toLowerCase()
+    let rawId = (untrustedData?.inputText || qId || '').toString().trim()
+
+    // Allow "123", "p2:123", "round:123"
+    const matchP2 = rawId.match(/p2:(\d+)/i)
+    const matchRound = rawId.match(/round:(\d+)/i)
+    if (matchP2) { kind = 'pool2'; rawId = matchP2[1] }
+    if (matchRound) { kind = 'round'; rawId = matchRound[1] }
+
+    if (!rawId || isNaN(rawId)) {
       return res.status(400).json({
         title: '❌ Invalid Input',
-        description: 'Provide a valid Challenge (Pool2) ID, e.g., "123" or "p2:123".',
-        image: 'https://madfill.vercel.app/og/error.PNG',
+        description: 'Provide a valid id (e.g. p2:123 or round:45).',
+        image: `${siteUrl}/og/error.PNG`,
         imageAspectRatio: '1.91:1',
         buttons: [
           { label: '🔁 Try Again', action: 'post' },
-          { label: '🏠 MadFill', action: 'link', target: 'https://madfill.vercel.app' },
+          { label: '🏠 MadFill', action: 'link', target: siteUrl },
         ],
       })
     }
 
-    const pool2Id = BigInt(parsed)
-
-    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://madfill.vercel.app'
-    console.log(`📥 Frame Vote — Pool2: ${pool2Id}, User FID: ${fid}, Vote: ${voteChallenger ? 'Challenger' : 'Original'}`)
-
-    // On-chain vote using FillInStoryV3
     const provider = new ethers.JsonRpcProvider(BASE_RPC)
     const pk = process.env.PRIVATE_KEY
     if (!pk) throw new Error('Server PRIVATE_KEY is not set')
     const signer = new ethers.Wallet(pk, provider)
     const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
-    // V3 signature: votePool2(uint256 id, bool voteChallenger) payable
-    const tx = await ct.votePool2(pool2Id, voteChallenger, { value: VOTE_FEE_WITH_BUFFER })
+    // If kind=round, resolve the most recent *active* Pool2 for that round
+    let pool2Id
+    if (kind === 'pool2') {
+      pool2Id = BigInt(rawId)
+    } else {
+      const roundId = BigInt(rawId)
+      const p2Count = Number(await ct.pool2Count())
+      let found = null
+      // scan newest -> oldest until we find pool2.originalPool1Id == roundId && !claimed
+      for (let id = p2Count; id >= 1; id--) {
+        const info = await ct.getPool2Info(BigInt(id))
+        const originalPool1Id = Number(info[0])
+        const claimed = info[6]
+        if (originalPool1Id === Number(roundId) && !claimed) {
+          found = id
+          break
+        }
+      }
+      if (!found) {
+        return res.status(404).json({
+          title: '😴 No Active Challenge',
+          description: `Round ${roundId} has no open challenge to vote on.`,
+          image: `${siteUrl}/og/empty.PNG`,
+          imageAspectRatio: '1.91:1',
+          buttons: [
+            { label: '🚀 Start a Challenger', action: 'link', target: `${siteUrl}/challenge` },
+            { label: '🔎 View Round', action: 'link', target: `${siteUrl}/round/${roundId}` },
+          ],
+        })
+      }
+      pool2Id = BigInt(found)
+    }
+
+    // Vote on Pool2
+    const tx = await ct.votePool2(pool2Id, Boolean(voteChallenger), { value: VOTE_FEE_WITH_BUFFER })
     const rc = await tx.wait()
+    console.log('✅ votePool2 tx:', rc?.hash)
 
-    console.log('✅ Vote tx', rc?.hash)
-
-    // Result visuals
-    const imagePath = voteChallenger
+    const img = voteChallenger
       ? `${siteUrl}/og/CHALLENGER_CONFIRMED.PNG`
       : `${siteUrl}/og/VOTE_CONFIRMED.PNG`
 
@@ -81,21 +111,11 @@ export default async function handler(req, res) {
     return res.status(200).json({
       title: '✅ Vote Recorded!',
       description: `You voted for ${voteChallenger ? 'Challenger' : 'Original'} in Challenge ${pool2Id}.`,
-      image: imagePath,
+      image: img,
       imageAspectRatio: '1.91:1',
       buttons: [
-        {
-          label: '🎯 View Round',
-          action: 'link',
-          // We don’t have round id in the frame input, but most folks encode Pool2->Round mapping in UI.
-          // If you want the exact Round link here, pass it into inputText as "p2:123:round:456" and parse above.
-          target: `${siteUrl}/vote`,
-        },
-        {
-          label: '📊 Vote More',
-          action: 'link',
-          target: `${siteUrl}/vote`,
-        },
+        { label: '📊 More Votes', action: 'link', target: `${siteUrl}/vote` },
+        { label: '🏠 MadFill', action: 'link', target: siteUrl },
       ],
     })
   } catch (err) {
@@ -103,11 +123,11 @@ export default async function handler(req, res) {
     return res.status(500).json({
       title: '❌ Vote Failed',
       description: (err?.shortMessage || err?.reason || err?.message || 'There was an issue submitting your vote.').toString().slice(0, 140),
-      image: 'https://madfill.vercel.app/og/error.PNG',
+      image: `${siteUrl}/og/error.PNG`,
       imageAspectRatio: '1.91:1',
       buttons: [
         { label: '🔁 Try Again', action: 'post' },
-        { label: '🏠 MadFill', action: 'link', target: 'https://madfill.vercel.app' },
+        { label: '🏠 MadFill', action: 'link', target: siteUrl },
       ],
     })
   }
