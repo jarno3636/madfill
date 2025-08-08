@@ -15,15 +15,16 @@ import Link from 'next/link'
 // ---- Config ----
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x6975a550130642E5cb67A87BE25c8134542D5a0a' // FillInStoryV3
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // FillInStoryV3 (env wins)
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
-const BASE_CHAIN_ID_HEX = '0x2105' // 8453
-// IMPORTANT: V3 does not expose Pool2 feeBase in views. Set it here for your app:
+const BASE_CHAIN_ID_HEX = '0x2105' // Base chainId
+// IMPORTANT: V3 does not expose Pool2 feeBase in views. Set it in env.
+// Fallback: 0.0005 ETH
+const DEFAULT_VOTE_FEE_WEI = ethers.parseUnits('0.0005', 18)
 const VOTE_FEE_WEI =
   (process.env.NEXT_PUBLIC_POOL2_VOTE_FEE_WEI && BigInt(process.env.NEXT_PUBLIC_POOL2_VOTE_FEE_WEI)) ||
-  // fallback: 0.0005 ETH
-  (ethers.parseUnits ? ethers.parseUnits('0.0005', 18) : BigInt('500000000000000'))
+  DEFAULT_VOTE_FEE_WEI
 
 export default function VotePage() {
   // state
@@ -173,27 +174,27 @@ export default function VotePage() {
         const provider = new ethers.JsonRpcProvider(BASE_RPC)
         const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
 
-        const p2Count = Number(await ct.pool2Count())
+        const p2CountRaw = await ct.pool2Count()
+        const p2Count = Number(p2CountRaw)
 
         const cards = []
         for (let id = 1; id <= p2Count; id++) {
           const info = await ct.getPool2Info(BigInt(id))
-          // getPool2Info returns:
           // (originalPool1Id, challengerWord, challengerUsername, challenger, votersOriginal, votersChallenger, claimed, challengerWon, poolBalance)
-          const originalPool1Id = Number(info[0])
-          const challengerWordRaw = info[1]
-          const challengerUsername = info[2]
-          const challengerAddr = info[3]
-          const votersOriginal = Number(info[4])
-          const votersChallenger = Number(info[5])
-          const claimed = info[6]
-          const challengerWon = info[7]
-          const poolBalance = info[8]
+          const originalPool1Id = Number(info.originalPool1Id ?? info[0])
+          const challengerWordRaw = info.challengerWord ?? info[1]
+          const challengerUsername = info.challengerUsername ?? info[2]
+          const challengerAddr = info.challenger ?? info[3]
+          const votersOriginal = Number(info.votersOriginal ?? info[4])
+          const votersChallenger = Number(info.votersChallenger ?? info[5])
+          const claimed = Boolean(info.claimed ?? info[6])
+          const challengerWon = Boolean(info.challengerWon ?? info[7])
+          const poolBalance = info.poolBalance ?? info[8]
 
-          // Get the original Pool1's template+creator word to display "Original" preview
+          // Original card preview
           const p1 = await ct.getPool1Info(BigInt(originalPool1Id))
-          const parts = p1[2]
-          const creatorAddr = p1[5]
+          const parts = p1.parts_ || p1[2]
+          const creatorAddr = p1.creator_ || p1[5]
           const p1CreatorSub = await ct.getPool1Submission(BigInt(originalPool1Id), creatorAddr)
           const originalWordRaw = p1CreatorSub[1]
 
@@ -248,13 +249,16 @@ export default function VotePage() {
       const net = await provider.getNetwork()
       if (net?.chainId !== 8453n) await switchToBase()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
+
+      // Add a small buffer to avoid weird rounding issues.
+      const value = (VOTE_FEE_WEI * 1005n) / 1000n
+
       // V3: votePool2(uint256 id, bool voteChallenger) payable
-      const tx = await ct.votePool2(BigInt(id), Boolean(voteChallenger), { value: VOTE_FEE_WEI })
+      const tx = await ct.votePool2(BigInt(id), Boolean(voteChallenger), { value })
       await tx.wait()
       setStatus('✅ Vote recorded!')
       setSuccess(true)
-      // quick reload the card
-      reloadCard(id).catch(() => {})
+      await reloadCard(id)
       setTimeout(() => setSuccess(false), 1500)
     } catch (e) {
       console.error(e)
@@ -267,20 +271,21 @@ export default function VotePage() {
     try {
       const provider = new ethers.JsonRpcProvider(BASE_RPC)
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
+
       const info = await ct.getPool2Info(BigInt(id))
-      const originalPool1Id = Number(info[0])
-      const challengerWordRaw = info[1]
-      const challengerUsername = info[2]
-      const challengerAddr = info[3]
-      const votersOriginal = Number(info[4])
-      const votersChallenger = Number(info[5])
-      const claimed = info[6]
-      const challengerWon = info[7]
-      const poolBalance = info[8]
+      const originalPool1Id = Number(info.originalPool1Id ?? info[0])
+      const challengerWordRaw = info.challengerWord ?? info[1]
+      const challengerUsername = info.challengerUsername ?? info[2]
+      const challengerAddr = info.challenger ?? info[3]
+      const votersOriginal = Number(info.votersOriginal ?? info[4])
+      const votersChallenger = Number(info.votersChallenger ?? info[5])
+      const claimed = Boolean(info.claimed ?? info[6])
+      const challengerWon = Boolean(info.challengerWon ?? info[7])
+      const poolBalance = info.poolBalance ?? info[8]
 
       const p1 = await ct.getPool1Info(BigInt(originalPool1Id))
-      const parts = p1[2]
-      const creatorAddr = p1[5]
+      const parts = p1.parts_ || p1[2]
+      const creatorAddr = p1.creator_ || p1[5]
       const p1CreatorSub = await ct.getPool1Submission(BigInt(originalPool1Id), creatorAddr)
       const originalWordRaw = p1CreatorSub[1]
 
@@ -310,7 +315,7 @@ export default function VotePage() {
             : r
         )
       )
-    } catch (e) {
+    } catch {
       // ignore
     }
   }
@@ -343,7 +348,7 @@ export default function VotePage() {
       if (filter === 'big') return r.poolUsd > 25 // tweak threshold
       if (filter === 'tight') return Math.abs(r.votersOriginal - r.votersChallenger) <= 2
       if (filter === 'claimed') return r.claimed
-      if (filter === 'active') return !r.claimed // we don't have deadlines; "active" means not claimed yet
+      if (filter === 'active') return !r.claimed // no on-chain deadline exposed; treat unclaimed as active
       return true
     })
   }, [rounds, filter])
@@ -352,8 +357,7 @@ export default function VotePage() {
     const arr = [...filtered]
     if (sortBy === 'votes') return arr.sort((a, b) => (b.votersOriginal + b.votersChallenger) - (a.votersOriginal + a.votersChallenger))
     if (sortBy === 'prize') return arr.sort((a, b) => b.poolUsd - a.poolUsd)
-    // "recent" -> higher id first
-    return arr.sort((a, b) => b.id - a.id)
+    return arr.sort((a, b) => b.id - a.id) // recent
   }, [filtered, sortBy])
 
   // ---- render helpers ----
@@ -489,10 +493,11 @@ export default function VotePage() {
                     <div className="flex flex-wrap items-center gap-3">
                       {!r.claimed ? (
                         <>
-                          <Button onClick={() => votePool2(r.id, false)} className="bg-blue-600 hover:bg-blue-500">
+                          {/* FIX: true = voteChallenger */}
+                          <Button onClick={() => votePool2(r.id, true)} className="bg-blue-600 hover:bg-blue-500">
                             Vote Challenger
                           </Button>
-                          <Button onClick={() => votePool2(r.id, true)} className="bg-green-600 hover:bg-green-500">
+                          <Button onClick={() => votePool2(r.id, false)} className="bg-green-600 hover:bg-green-500">
                             Vote Original
                           </Button>
                           <a
@@ -502,6 +507,18 @@ export default function VotePage() {
                           >
                             View Challenger Card
                           </a>
+                          <button
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(shareUrl)
+                                setStatus('Link copied')
+                                setTimeout(() => setStatus(''), 1200)
+                              } catch {}
+                            }}
+                            className="underline text-slate-300 text-sm"
+                          >
+                            Copy link
+                          </button>
                         </>
                       ) : (
                         <>
@@ -533,8 +550,8 @@ export default function VotePage() {
 
                     {/* Tiny hint about fee source */}
                     <div className="text-[11px] text-slate-500">
-                      Voting fee is set by the challenge. App is sending {fmt(toEth(VOTE_FEE_WEI), 6)} ETH. If it&apos;s not enough, the tx will revert — set
-                      <code className="mx-1 bg-slate-800 px-1 rounded">NEXT_PUBLIC_POOL2_VOTE_FEE_WEI</code> to match your Pool2 fee.
+                      Voting fee comes from the challenge. App is sending {fmt(toEth(VOTE_FEE_WEI), 6)} ETH (+ tiny buffer). To override, set{' '}
+                      <code className="mx-1 bg-slate-800 px-1 rounded">NEXT_PUBLIC_POOL2_VOTE_FEE_WEI</code>.
                     </div>
                   </CardContent>
                 </Card>
