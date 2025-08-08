@@ -1,7 +1,7 @@
 // pages/active.jsx
 'use client'
 
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { ethers } from 'ethers'
 import Head from 'next/head'
 import abi from '@/abi/FillInStoryV3_ABI.json'
@@ -10,25 +10,25 @@ import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Countdown } from '@/components/Countdown'
 import Link from 'next/link'
-import Image from 'next/image'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 import { motion } from 'framer-motion'
 import ShareBar from '@/components/ShareBar'
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
-const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
+const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_FILLIN_ADDRESS || ''
 
 // --- helpers ---
+const needsSpaceBefore = (str) => {
+  if (!str) return false
+  const ch = str[0]
+  return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
+}
+
 const buildPreviewSingle = (parts, word, idx) => {
   const n = parts?.length || 0
   if (n === 0) return ''
   const blanks = Math.max(0, n - 1)
   const iSel = Math.max(0, Math.min(Math.max(0, blanks - 1), Number(idx) || 0))
-  const needsSpaceBefore = (str) => {
-    if (!str) return false
-    const ch = str[0]
-    return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
-  }
   const out = []
   for (let i = 0; i < n; i++) {
     out.push(parts[i] || '')
@@ -65,11 +65,17 @@ export default function ActivePools() {
   })
   const roundsPerPage = 6
 
+  const provider = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [])
+  const contract = useMemo(() => {
+    if (!CONTRACT_ADDRESS) return null
+    return new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
+  }, [provider])
+
   // Load BASE price with Coinbase -> CoinGecko -> Alchemy -> $3800 fallback
-  const loadPrice = async () => {
+  const loadPrice = async (signal) => {
     let price = 0
     try {
-      const cbRes = await fetch('https://api.coinbase.com/v2/prices/ETH-USD/spot')
+      const cbRes = await fetch('https://api.coinbase.com/v2/prices/ETH-USD/spot', { signal })
       const cbJson = await cbRes.json()
       const cbPrice = parseFloat(cbJson?.data?.amount)
       if (cbPrice && cbPrice > 0.5) {
@@ -81,7 +87,7 @@ export default function ActivePools() {
     } catch {}
 
     try {
-      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=l2-standard-bridged-weth-base&vs_currencies=usd')
+      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=l2-standard-bridged-weth-base&vs_currencies=usd', { signal })
       const json = await res.json()
       price = json['l2-standard-bridged-weth-base']?.usd
       if (price && price > 0.5) {
@@ -103,7 +109,8 @@ export default function ActivePools() {
             jsonrpc: '2.0',
             method: 'alchemy_getTokenMetadata',
             params: ['0x4200000000000000000000000000000000000006']
-          })
+          }),
+          signal
         }
       )
       const data = await alchemyRes.json()
@@ -122,27 +129,29 @@ export default function ActivePools() {
     }
   }
 
-  const loadRounds = async (priceOverride) => {
+  const loadRounds = async (priceOverride, signal) => {
+    if (!contract) return
     const priceToUse = priceOverride || baseUsd
-    const provider = new ethers.JsonRpcProvider(BASE_RPC)
-    const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
-    const count = Number(await ct.pool1Count())
     const now = Math.floor(Date.now() / 1000)
     const all = []
 
+    const countRaw = await contract.pool1Count()
+    const count = Number(countRaw || 0n)
     for (let i = 1; i <= count; i++) {
+      if (signal?.aborted) break
       try {
-        const info = await ct.getPool1Info(BigInt(i))
-        const name = info[0]
-        const theme = info[1]
-        const parts = info[2]
-        const feeBase = Number(ethers.formatEther(info[3] || 0n))
-        const deadline = Number(info[4])
-        const participants = info[6]
-        const claimed = info[8]
+        const info = await contract.getPool1Info(BigInt(i))
+        const name = info.name_ || info[0]
+        const theme = info.theme_ || info[1]
+        const parts = info.parts_ || info[2]
+        const feeBaseWei = info.feeBase_ ?? info[3] ?? 0n
+        const feeBase = Number(ethers.formatEther(feeBaseWei))
+        const deadline = Number(info.deadline_ ?? info[4])
+        const participants = info.participants_ || info[6] || []
+        const claimed = Boolean(info.claimed_ ?? info[8])
 
         if (!claimed && deadline > now) {
-          // avatars
+          // avatars (don’t explode on rate limits)
           const avatars = await Promise.all(
             participants.map(async (addr) => {
               try {
@@ -162,15 +171,15 @@ export default function ActivePools() {
             })
           )
 
-          // submissions (username, word, submitter, blankIndex)
+          // submissions (V3: getPool1Submission returns username, word, submitter, blankIndex)
           const submissions = await Promise.all(
             participants.map(async (addr) => {
               try {
-                const sub = await ct.getPool1Submission(BigInt(i), addr)
-                const username = sub[0]
-                const word = sub[1]
-                const submitter = sub[2]
-                const blankIndex = Number(sub[3] ?? 0)
+                const sub = await contract.getPool1Submission(BigInt(i), addr)
+                const username = sub.username_ || sub[0] || ''
+                const word = sub.word_ || sub[1] || ''
+                const submitter = sub.submitter_ || sub[2] || addr
+                const blankIndex = Number(sub.blankIndex_ ?? sub[3] ?? 0)
                 const preview = buildPreviewSingle(parts, word, blankIndex)
                 return { address: submitter, username, word, blankIndex, preview }
               } catch {
@@ -206,14 +215,19 @@ export default function ActivePools() {
   }
 
   useEffect(() => {
-    const loadData = async () => {
-      const price = await loadPrice()
-      await loadRounds(price)
+    if (!CONTRACT_ADDRESS) return
+    const controller = new AbortController()
+    const tick = async () => {
+      const price = await loadPrice(controller.signal)
+      await loadRounds(price, controller.signal)
     }
-    loadData()
-    const interval = setInterval(loadData, 30000)
-    return () => clearInterval(interval)
-  }, [])
+    tick()
+    const interval = setInterval(tick, 30000)
+    return () => {
+      controller.abort()
+      clearInterval(interval)
+    }
+  }, [contract]) // re-run if contract address/env changes
 
   useEffect(() => {
     setPage(1)
@@ -251,6 +265,8 @@ export default function ActivePools() {
   const totalPages = Math.ceil(sorted.length / roundsPerPage)
   const paginated = sorted.slice((page - 1) * roundsPerPage, page * roundsPerPage)
 
+  const originUrl = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
+
   return (
     <Layout>
       <Head>
@@ -258,6 +274,12 @@ export default function ActivePools() {
       </Head>
       <main className="max-w-6xl mx-auto p-6 space-y-6">
         <h1 className="text-4xl font-extrabold text-white drop-shadow">🧠 Active Rounds</h1>
+
+        {!CONTRACT_ADDRESS && (
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 p-3">
+            NEXT_PUBLIC_FILLIN_ADDRESS is not set. Add it in your environment to load rounds.
+          </div>
+        )}
 
         {/* controls */}
         <div className="flex flex-wrap justify-between gap-4 text-white">
@@ -297,7 +319,6 @@ export default function ActivePools() {
             className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6"
           >
             {paginated.map(r => {
-              const originUrl = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
               const rUrl = `${originUrl}/round/${r.id}`
               const shareTxt = `Play MadFill Round #${r.id}!`
               return (
@@ -343,15 +364,14 @@ export default function ActivePools() {
                           const likeKey = `${r.id}-${idx}`
                           const displayName = s.username || p?.fallbackUsername || s.address.slice(2,6).toUpperCase()
                           return (
-                            <div key={idx} className="flex items-start gap-2">
-                              <Image
+                            <div key={`${s.address}-${idx}`} className="flex items-start gap-2">
+                              <img
                                 src={p?.avatar || '/Capitalize.PNG'}
                                 alt={displayName}
                                 width={24}
                                 height={24}
                                 className="rounded-full border border-white mt-1"
                                 onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
-                                unoptimized
                               />
                               <div className="flex-1">
                                 <p className="text-slate-300 font-semibold">@{displayName}</p>
