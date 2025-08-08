@@ -1,16 +1,3 @@
-Awesome—here’s the full updated pages/round/[id].jsx with:
-	•	Clean spacing between inserted word and next template token
-	•	One-word input (max 16 chars, safe chars), live validation
-	•	User picks which blank to fill; taken blanks are disabled
-	•	Encodes selection as index::word when submitting (backward compatible)
-	•	Parses old/new submissions to render the right preview
-
-Just paste this over your current file. 👇
-
-// pages/round/[id].jsx
-'use client'
-
-import { useRouter } from 'next/router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
