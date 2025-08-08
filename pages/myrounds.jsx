@@ -1,6 +1,10 @@
+Here’s a full drop-in pages/myrounds.jsx wired to V3 with clean previews, taken-blank handling, and a polished UI. Paste it in:
+
 // pages/myrounds.jsx
+'use client'
+
 import Head from 'next/head'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ethers } from 'ethers'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -9,223 +13,616 @@ import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import Link from 'next/link'
-import Countdown from '@/components/Countdown'
+import Image from 'next/image'
 import { fetchFarcasterProfile } from '@/lib/neynar'
+
+const CONTRACT_ADDRESS =
+  process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
+  '0x6975a550130642E5cb67A87BE25c8134542D5a0a' // FillInStoryV3
+
+const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+const BASE_CHAIN_ID_HEX = '0x2105' // 8453
 
 export default function MyRounds() {
   const [address, setAddress] = useState(null)
-  const [rounds, setRounds] = useState([])
+  const [isOnBase, setIsOnBase] = useState(true)
   const [loading, setLoading] = useState(true)
-  const [claimedId, setClaimedId] = useState(null)
-  const [filter, setFilter] = useState('all')
-  const [sortBy, setSortBy] = useState('newest')
+  const [status, setStatus] = useState('')
+  const [priceUsd, setPriceUsd] = useState(3800) // ETH-USD fallback
+
+  // data
   const [profile, setProfile] = useState(null)
+  const [entries, setEntries] = useState([]) // Pool1 entries (you participated)
+  const [wins, setWins] = useState([])       // Pool1 where you're the winner
+  const [votes, setVotes] = useState([])     // Pool2 votes (you voted)
+
+  // ui
+  const [filter, setFilter] = useState('all') // all | entries | wins | votes | unclaimed
+  const [sortBy, setSortBy] = useState('newest') // newest | oldest | prize
+  const [showConfetti, setShowConfetti] = useState(false)
   const { width, height } = useWindowSize()
+  const tickRef = useRef(null)
 
-  useEffect(() => {
-    if (window.ethereum) {
-      window.ethereum
-        .request({ method: 'eth_requestAccounts' })
-        .then(accts => setAddress(accts[0]))
-        .catch(console.error)
+  // ----- utils -----
+  const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
+  const toEth = (wei) => (wei ? Number(ethers.formatEther(wei)) : 0)
+  const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
+  const explorer = (path) => `https://basescan.org/${path}`
+
+  // parse "index::word" or plain "word"
+  function parseStoredWord(stored) {
+    if (!stored) return { index: 0, word: '' }
+    const sep = stored.indexOf('::')
+    if (sep > -1) {
+      const idxRaw = stored.slice(0, sep)
+      const w = stored.slice(sep + 2)
+      const idx = Math.max(0, Math.min(99, Number.parseInt(idxRaw, 10) || 0))
+      return { index: idx, word: w }
     }
-  }, [])
+    return { index: 0, word: stored }
+  }
 
-  useEffect(() => {
-    async function loadProfile() {
-      const fid = localStorage.getItem('fc_fid')
-      if (fid) {
-        const p = await fetchFarcasterProfile(fid)
-        setProfile(p)
+  // space between inserted word and next chunk if needed
+  const needsSpaceBefore = (str) => {
+    if (!str) return false
+    const ch = str[0]
+    return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
+  }
+
+  // preview for a single chosen blank
+  function buildPreviewSingle(parts, word, blankIndex) {
+    const n = parts?.length || 0
+    if (n === 0) return ''
+    const blanks = Math.max(0, n - 1)
+    const idx = Math.max(0, Math.min(Math.max(0, blanks - 1), blankIndex || 0))
+    const out = []
+    for (let i = 0; i < n; i++) {
+      out.push(parts[i] || '')
+      if (i < n - 1) {
+        if (i === idx) {
+          if (word) {
+            out.push(word)
+            if (needsSpaceBefore(parts[i + 1] || '')) out.push(' ')
+          } else {
+            out.push('____')
+          }
+        } else {
+          out.push('____')
+        }
       }
     }
-    loadProfile()
-  }, [])
+    return out.join('')
+  }
 
+  function buildPreviewFromStored(parts, stored) {
+    const { index, word } = parseStoredWord(stored)
+    return buildPreviewSingle(parts, word, index)
+  }
+
+  const nowSec = () => Math.floor(Date.now() / 1000)
+
+  // ----- wallet + chain -----
   useEffect(() => {
-    if (!address) return
-    setLoading(true)
-
+    if (!window?.ethereum) return
+    let cancelled = false
     ;(async () => {
       try {
-        const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
-        const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, provider)
-
-        const [poolCount, entryIds, votes] = await Promise.all([
-          ct.pool1Count(),
-          ct.getUserEntries(address),
-          ct.getUserVotes(address)
-        ])
-
-        const priceRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
-        const basePrice = (await priceRes.json()).base.usd
-
-        const result = []
-
-        for (let i = 1; i <= poolCount; i++) {
-          const info = await ct.getPool1Info(i)
-          const participants = info[6]
-          const deadline = Number(info[4]) * 1000
-          const winner = info[7]
-          const claimed = info[8]
-          const poolBalance = Number(info[9]) / 1e18
-          const isWinner = winner?.toLowerCase() === address.toLowerCase()
-          const userInPool = participants.includes(address)
-          const voted = votes.includes(BigInt(i))
-          const userInVote = voted && !userInPool && !isWinner
-
-          if (userInPool || isWinner || userInVote) {
-            const usd = (poolBalance * basePrice).toFixed(2)
-
-            const winnerProfile = winner
-              ? await fetchFarcasterProfile(winner)
-              : null
-
-            result.push({
-              id: i,
-              name: localStorage.getItem(`madfill-roundname-${i}`) || info[0] || 'Untitled',
-              usd,
-              base: poolBalance.toFixed(4),
-              deadline,
-              isWinner,
-              claimed,
-              winnerAddress: winner,
-              voted,
-              userInVote,
-              winnerProfile
-            })
-          }
-        }
-
-        setRounds(result)
-      } catch (err) {
-        console.error('Error loading My Rounds:', err)
-      } finally {
-        setLoading(false)
+        const accts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+        if (!cancelled) setAddress(accts?.[0] || null)
+      } catch {}
+      try {
+        const provider = new ethers.BrowserProvider(window.ethereum)
+        const net = await provider.getNetwork()
+        if (!cancelled) setIsOnBase(net?.chainId === 8453n)
+      } catch {
+        if (!cancelled) setIsOnBase(true)
       }
+      const onChain = () => location.reload()
+      const onAcct = (accs) => setAddress(accs?.[0] || null)
+      window.ethereum.on?.('chainChanged', onChain)
+      window.ethereum.on?.('accountsChanged', onAcct)
+      return () => {
+        window.ethereum.removeListener?.('chainChanged', onChain)
+        window.ethereum.removeListener?.('accountsChanged', onAcct)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  async function switchToBase() {
+    if (!window?.ethereum) return
+    try {
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: BASE_CHAIN_ID_HEX }],
+      })
+      setIsOnBase(true)
+    } catch (e) {
+      if (e?.code === 4902) {
+        try {
+          await window.ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: BASE_CHAIN_ID_HEX,
+              chainName: 'Base',
+              rpcUrls: [BASE_RPC],
+              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+              blockExplorerUrls: ['https://basescan.org'],
+            }],
+          })
+          setIsOnBase(true)
+        } catch (err) {
+          console.error(err)
+        }
+      }
+    }
+  }
+
+  // ----- price + ticker -----
+  useEffect(() => {
+    ;(async () => {
+      try {
+        // ETH (native on Base) — use ethereum id
+        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
+        const j = await r.json()
+        setPriceUsd(j?.ethereum?.usd || 3800)
+      } catch {
+        setPriceUsd(3800)
+      }
+    })()
+    tickRef.current = setInterval(() => setStatus((s) => (s ? s : '')), 1000)
+    return () => clearInterval(tickRef.current)
+  }, [])
+
+  // ----- profile -----
+  useEffect(() => {
+    if (!address) return
+    ;(async () => {
+      try {
+        const p = await fetchFarcasterProfile(address)
+        setProfile(p || null)
+      } catch {}
     })()
   }, [address])
 
-  async function handleClaim(id) {
+  // ----- load my stuff from V3 -----
+  useEffect(() => {
+    if (!address) return
+    let cancelled = false
+    setLoading(true)
+    setStatus('')
+
+    ;(async () => {
+      try {
+        const provider = new ethers.JsonRpcProvider(BASE_RPC)
+        const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
+
+        // getUserEntries(address) -> (pool1Ids, pool2Votes)
+        const [ids1, ids2] = await ct.getUserEntries(address)
+
+        // Pool1 entries you participated in
+        const entryCards = await Promise.all(
+          ids1.map(async (idBig) => {
+            const id = Number(idBig)
+            const info = await ct.getPool1Info(BigInt(id))
+            const name = info[0]
+            const theme = info[1]
+            const parts = info[2]
+            const feeBase = info[3]        // wei
+            const deadline = Number(info[4])
+            const creator = info[5]
+            const participants = info[6]   // addresses
+            const winner = info[7]
+            const claimed = info[8]
+            const poolBalance = info[9]    // wei
+
+            const yourSub = await ct.getPool1Submission(BigInt(id), address)
+            const username = yourSub[0]
+            const wordRaw = yourSub[1]
+            const preview = buildPreviewFromStored(parts, wordRaw)
+
+            const ended = nowSec() >= deadline
+            const youWon = winner && winner.toLowerCase() === address.toLowerCase()
+            const feeEth = toEth(feeBase)
+            const poolEth = toEth(poolBalance)
+            return {
+              kind: 'pool1',
+              id,
+              name: name || `Round #${id}`,
+              theme,
+              parts,
+              preview,
+              wordRaw,
+              username,
+              feeEth,
+              feeUsd: feeEth * priceUsd,
+              poolEth,
+              poolUsd: poolEth * priceUsd,
+              deadline,
+              creator,
+              participantsCount: participants.length,
+              winner,
+              claimed,
+              ended,
+              youWon,
+            }
+          })
+        )
+
+        // Pool2 votes you cast
+        const voteCards = await Promise.all(
+          ids2.map(async (idBig) => {
+            const id = Number(idBig)
+            const p2 = await ct.getPool2Info(BigInt(id))
+            // (originalPool1Id, challengerWord, challengerUsername, challenger, votersOriginal, votersChallenger, claimed, challengerWon, poolBalance)
+            const originalPool1Id = Number(p2[0])
+            const chWordRaw = p2[1]
+            const chUsername = p2[2]
+            const challenger = p2[3]
+            const votersOriginal = Number(p2[4])
+            const votersChallenger = Number(p2[5])
+            const claimed = p2[6]
+            const challengerWon = p2[7]
+            const p2Balance = p2[8]
+            const p2Eth = toEth(p2Balance)
+            const p2Usd = p2Eth * priceUsd
+
+            // get original pool parts for context preview
+            const info = await ct.getPool1Info(BigInt(originalPool1Id))
+            const parts = info[2]
+            const chPreview = buildPreviewFromStored(parts, chWordRaw)
+
+            return {
+              kind: 'pool2',
+              id,
+              originalPool1Id,
+              chUsername,
+              chWordRaw,
+              chPreview,
+              challenger,
+              votersOriginal,
+              votersChallenger,
+              claimed,
+              challengerWon,
+              poolEth: p2Eth,
+              poolUsd: p2Usd,
+            }
+          })
+        )
+
+        if (cancelled) return
+
+        // wins are subset of entries where youWon
+        const winsList = entryCards.filter((e) => e.youWon)
+
+        setEntries(entryCards)
+        setWins(winsList)
+        setVotes(voteCards)
+      } catch (err) {
+        console.error('Error loading My Rounds:', err)
+        if (!cancelled) setStatus('Failed to load your rounds.')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, priceUsd])
+
+  // ----- actions -----
+  async function finalizePool1(id) {
     try {
+      if (!window?.ethereum) throw new Error('Wallet not found')
+      setStatus('Finalizing round…')
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer = await provider.getSigner()
-      const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
+      const net = await provider.getNetwork()
+      if (net?.chainId !== 8453n) await switchToBase()
+      const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
       const tx = await ct.claimPool1(BigInt(id))
       await tx.wait()
-      setClaimedId(id)
-      setTimeout(() => setClaimedId(null), 3000)
-      setRounds(rs => rs.map(r => (r.id === id ? { ...r, claimed: true } : r)))
-    } catch (err) {
-      console.error('Claim failed:', err)
-      alert('❌ Error claiming prize')
+      setStatus('✅ Finalized')
+      setShowConfetti(true)
+      // update local state
+      setEntries((rs) => rs.map((r) => (r.id === id ? { ...r, claimed: true } : r)))
+      setWins((rs) => rs.map((r) => (r.id === id ? { ...r, claimed: true } : r)))
+      setTimeout(() => setShowConfetti(false), 1800)
+    } catch (e) {
+      console.error(e)
+      setStatus('❌ Finalize failed')
+      setShowConfetti(false)
     }
   }
 
-  function filteredSortedRounds() {
-    let rs = [...rounds]
-    if (filter === 'unclaimed') rs = rs.filter(r => r.isWinner && !r.claimed)
-    else if (filter === 'won') rs = rs.filter(r => r.isWinner)
+  // ----- filter/sort -----
+  const allCards = useMemo(() => {
+    const arr = [
+      ...entries.map((e) => ({ ...e, group: 'Entry' })),
+      ...wins.map((w) => ({ ...w, group: 'Win' })),
+      ...votes.map((v) => ({ ...v, group: 'Vote' })),
+    ]
+    // de-dup: if an entry is also a win, keep only the "Win" version
+    const byKey = new Map()
+    for (const c of arr) {
+      const key = `${c.kind}-${c.id}`
+      const existing = byKey.get(key)
+      if (!existing || (existing.group !== 'Win' && c.group === 'Win')) byKey.set(key, c)
+    }
+    return Array.from(byKey.values())
+  }, [entries, wins, votes])
+
+  const viewCards = useMemo(() => {
+    let rs = [...allCards]
+    if (filter === 'entries') rs = rs.filter((r) => r.kind === 'pool1' && !r.youWon)
+    else if (filter === 'wins') rs = rs.filter((r) => r.kind === 'pool1' && r.youWon)
+    else if (filter === 'votes') rs = rs.filter((r) => r.kind === 'pool2')
+    else if (filter === 'unclaimed') rs = rs.filter((r) => r.kind === 'pool1' && r.youWon && !r.claimed)
+    // sort
     if (sortBy === 'oldest') rs.sort((a, b) => a.id - b.id)
-    else if (sortBy === 'prize') rs.sort((a, b) => parseFloat(b.usd) - parseFloat(a.usd))
+    else if (sortBy === 'prize') rs.sort((a, b) => (b.poolUsd || 0) - (a.poolUsd || 0))
     else rs.sort((a, b) => b.id - a.id)
     return rs
+  }, [allCards, filter, sortBy])
+
+  // ----- rendering helpers -----
+  function statusBadge(card) {
+    if (card.kind === 'pool1') {
+      if (!card.ended) return <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 text-xs">Active</span>
+      if (card.claimed) return <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs">Completed</span>
+      return <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-400/40 text-indigo-300 text-xs">Ended — Pending</span>
+    }
+    // pool2
+    if (!card.claimed) return <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 text-xs">Voting</span>
+    return (
+      <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs">
+        {card.challengerWon ? 'Challenger Won' : 'Original Won'}
+      </span>
+    )
   }
 
+  // ----- UI -----
   return (
     <Layout>
       <Head>
-        <title>My Rounds | MadFill</title>
-        {profile && <meta name="fc:creator" content={`@${profile.username}`} />}
+        <title>My Rounds — MadFill</title>
+        {profile?.username && <meta name="fc:creator" content={`@${profile.username}`} />}
       </Head>
 
-      <div className="max-w-3xl mx-auto p-6">
-        <h2 className="text-2xl font-bold mb-6 text-white">🏆 My Rounds</h2>
+      <main className="max-w-6xl mx-auto p-4 md:p-6 text-white">
+        {/* Header */}
+        <div className="mb-6 text-center">
+          <h1 className="text-3xl md:text-4xl font-extrabold bg-gradient-to-r from-indigo-300 via-fuchsia-300 to-cyan-300 bg-clip-text text-transparent drop-shadow-sm">
+            🏆 My Rounds
+          </h1>
+          <div className="mt-2 text-sm text-slate-300">
+            <span className="mr-2">Address:</span>
+            {address ? (
+              <a className="underline decoration-dotted" href={explorer(`address/${address}`)} target="_blank" rel="noreferrer">
+                {shortAddr(address)}
+              </a>
+            ) : (
+              <span>Not connected</span>
+            )}
+          </div>
+        </div>
 
-        <div className="mb-4 flex flex-wrap items-center gap-4 text-white">
-          <div>
-            <label className="mr-2">Filter:</label>
-            <select className="bg-slate-800 border p-1 rounded" value={filter} onChange={e => setFilter(e.target.value)}>
+        {/* Controls */}
+        <div className="mb-5 flex flex-wrap items-center justify-center gap-3">
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-slate-300">Filter</label>
+            <select
+              className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-indigo-400"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+            >
               <option value="all">All</option>
+              <option value="entries">Entries</option>
+              <option value="wins">Wins</option>
               <option value="unclaimed">Unclaimed Wins</option>
-              <option value="won">Wins Only</option>
+              <option value="votes">Votes</option>
             </select>
           </div>
-          <div>
-            <label className="mr-2">Sort by:</label>
-            <select className="bg-slate-800 border p-1 rounded" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-slate-300">Sort</label>
+            <select
+              className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-indigo-400"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+            >
               <option value="newest">Newest</option>
               <option value="oldest">Oldest</option>
               <option value="prize">Prize (USD)</option>
             </select>
           </div>
+          {!isOnBase && (
+            <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600 text-sm">
+              Switch to Base
+            </Button>
+          )}
         </div>
 
-        {loading && <p className="text-white">Loading your rounds…</p>}
-
-        {!loading && filteredSortedRounds().length === 0 && (
-          <p className="text-white">No rounds to show based on selected filter.</p>
+        {/* Loading / Empty */}
+        {loading && <div className="rounded-xl bg-slate-900/70 p-6 animate-pulse text-slate-300 text-center">Loading your rounds…</div>}
+        {!loading && viewCards.length === 0 && (
+          <div className="rounded-xl bg-slate-900/70 p-6 text-slate-300 text-center">
+            No rounds to show based on selected filter.
+          </div>
         )}
 
-        {filteredSortedRounds().map(r => {
-          const baseLink = `https://madfill.vercel.app/round/${r.id}`
-          const text = encodeURIComponent(`I just played MadFill Round #${r.id}! 🧠\nCheck it out: ${baseLink}`)
-          return (
-            <Card key={r.id} className="mb-4 bg-slate-800 text-white shadow-xl border border-indigo-700 rounded-lg">
-              <CardHeader className="flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                  {r.winnerProfile?.pfp_url && (
-                    <img src={r.winnerProfile.pfp_url} alt="avatar" className="w-8 h-8 rounded-full border border-white" />
-                  )}
-                  <div>
-                    <h3 className="font-bold text-lg">#{r.id} — {r.name}</h3>
-                    <p className="text-sm text-indigo-300">
-                      💰 {r.base} BASE (${r.usd})
-                    </p>
+        {/* Cards */}
+        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
+          {viewCards.map((r) => {
+            const shareUrl = typeof window !== 'undefined' ? `${window.location.origin}/round/${r.kind === 'pool1' ? r.id : r.originalPool1Id}` : ''
+            const shareText =
+              r.kind === 'pool1'
+                ? `I just played MadFill Round #${r.id}! ${shareUrl}`
+                : `I voted in a MadFill challenge #${r.id} (Pool2) — check it out! ${shareUrl}`
+
+            return (
+              <Card key={`${r.kind}-${r.id}`} className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
+                <CardHeader className="flex items-start justify-between gap-2 bg-slate-800/60 border-b border-slate-700">
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs">{statusBadge(r)}</span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800/80 border border-slate-700">
+                        {r.kind === 'pool1' ? 'Pool 1' : 'Pool 2'}
+                      </span>
+                    </div>
+                    <div className="text-lg font-bold">
+                      {r.kind === 'pool1' ? (
+                        <>#{r.id} — {r.name}</>
+                      ) : (
+                        <>Challenge #{r.id} → Round #{r.originalPool1Id}</>
+                      )}
+                    </div>
+                    {r.kind === 'pool1' && (
+                      <div className="text-xs text-slate-300">🎨 {r.theme || 'General'}</div>
+                    )}
                   </div>
-                </div>
-                <Link href={`/round/${r.id}`} className="text-indigo-400 underline text-sm">🔍 View</Link>
-              </CardHeader>
+                  <Link
+                    href={r.kind === 'pool1' ? `/round/${r.id}` : `/round/${r.originalPool1Id}`}
+                    className="text-indigo-300 underline text-sm"
+                  >
+                    🔍 View
+                  </Link>
+                </CardHeader>
 
-              <CardContent className="space-y-2 text-sm">
-                <p>⏰ Ends in: <Countdown endTime={r.deadline} /></p>
+                <CardContent className="p-5 space-y-3">
+                  {/* Preview */}
+                  <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3 text-sm">
+                    <div className="text-slate-300">{r.kind === 'pool1' ? 'Your Card Preview' : 'Challenger Preview'}</div>
+                    <div className="mt-1 italic text-[15px] leading-relaxed">
+                      {r.kind === 'pool1' ? r.preview : r.chPreview}
+                    </div>
+                  </div>
 
-                {r.isWinner && !r.claimed && (
-                  <Button onClick={() => handleClaim(r.id)} className="bg-green-600 hover:bg-green-500 mt-2">
-                    🎉 Claim Prize
-                  </Button>
-                )}
-                {r.isWinner && r.claimed && (
-                  <p className="text-green-400 font-semibold">✅ Prize Claimed</p>
-                )}
-                {r.userInVote && (
-                  <p className="text-yellow-400 font-medium">🗳️ You voted in this round</p>
-                )}
-                {!r.isWinner && !r.userInVote && (
-                  <p className="text-slate-300">🎮 You participated in this round</p>
-                )}
+                  {/* Prize / Meta */}
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    {r.kind === 'pool1' ? (
+                      <>
+                        <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
+                          Prize Pool: {fmt(r.poolEth, 6)} ETH (~${fmt(r.poolUsd)})
+                        </span>
+                        <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
+                          Entrants: {r.participantsCount}
+                        </span>
+                        <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
+                          Ends: {new Date(r.deadline * 1000).toLocaleString()}
+                        </span>
+                        {r.youWon && (
+                          <span className="px-2 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300">
+                            🎉 You Won
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
+                          Pool: {fmt(r.poolEth, 6)} ETH (~${fmt(r.poolUsd)})
+                        </span>
+                        <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
+                          Votes — Orig: {r.votersOriginal} • Chall: {r.votersChallenger}
+                        </span>
+                      </>
+                    )}
+                  </div>
 
-                {/* Optional future: show sticker/preview */}
-                <div className="mt-2 text-slate-400 text-xs italic">🖼️ Card preview coming soon…</div>
+                  {/* Actions */}
+                  <div className="flex flex-wrap items-center gap-3">
+                    {r.kind === 'pool1' && r.ended && !r.claimed && (
+                      <Button onClick={() => finalizePool1(r.id)} className="bg-indigo-600 hover:bg-indigo-500">
+                        💸 Finalize & Payout
+                      </Button>
+                    )}
+                    {r.kind === 'pool1' && r.youWon && r.claimed && (
+                      <span className="text-sm font-semibold text-emerald-300">✅ Prize Claimed</span>
+                    )}
+                    <a
+                      href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline text-blue-400 text-sm"
+                    >
+                      🐦 Share
+                    </a>
+                    <a
+                      href={`https://warpcast.com/~/compose?text=${encodeURIComponent(shareText)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline text-purple-300 text-sm"
+                    >
+                      🌀 Cast
+                    </a>
+                    <a
+                      className="underline text-slate-300 text-sm"
+                      target="_blank"
+                      rel="noreferrer"
+                      href={
+                        r.kind === 'pool1'
+                          ? explorer(`address/${CONTRACT_ADDRESS}`)
+                          : explorer(`address/${CONTRACT_ADDRESS}`)
+                      }
+                    >
+                      Contract
+                    </a>
+                  </div>
 
-                <div className="mt-3 flex gap-2 flex-wrap">
-                  <a href={`https://twitter.com/intent/tweet?text=${text}`} target="_blank" rel="noreferrer" className="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-white text-sm">
-                    🐦 Share
-                  </a>
-                  <a href={`https://warpcast.com/~/compose?text=${text}`} target="_blank" rel="noreferrer" className="bg-purple-600 hover:bg-purple-500 px-3 py-1 rounded text-white text-sm">
-                    🌀 Cast
-                  </a>
-                  <a href={`https://warpcast.com/~/compose?text=${text}&embeds[]=${baseLink}`} target="_blank" rel="noreferrer" className="bg-fuchsia-600 hover:bg-fuchsia-500 px-3 py-1 rounded text-white text-sm">
-                    📚 Story
-                  </a>
-                </div>
-              </CardContent>
-            </Card>
-          )
-        })}
+                  {/* People (winner / challenger) */}
+                  {r.kind === 'pool1' && r.winner && (
+                    <PoolPerson line="Winner" address={r.winner} />
+                  )}
+                  {r.kind === 'pool2' && (
+                    <PoolPerson line="Challenger" address={r.challenger} />
+                  )}
+                </CardContent>
+              </Card>
+            )
+          })}
+        </div>
 
-        {claimedId && <Confetti width={width} height={height} />}
-      </div>
+        {/* Footer status */}
+        {status && <div className="mt-6 text-center text-yellow-300">{status}</div>}
+        {(showConfetti) && <Confetti width={width} height={height} />}
+      </main>
     </Layout>
+  )
+}
+
+/* ---------- Mini person row (Farcaster/addr) ---------- */
+function PoolPerson({ line, address }) {
+  const [p, setP] = useState(null)
+  useEffect(() => {
+    let c = false
+    ;(async () => {
+      try {
+        const prof = await fetchFarcasterProfile(address)
+        if (!c) setP(prof || null)
+      } catch {}
+    })()
+    return () => { c = true }
+  }, [address])
+  const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
+  const explorer = (path) => `https://basescan.org/${path}`
+
+  return (
+    <div className="flex items-center gap-2 text-sm text-slate-300">
+      <span className="text-slate-400">{line}:</span>
+      <Image
+        src={p?.pfp_url || `https://effigy.im/a/${address}`}
+        alt="avatar"
+        width={20}
+        height={20}
+        className="rounded-full ring-1 ring-slate-700"
+      />
+      <a
+        className="underline decoration-dotted"
+        href={p?.username ? `https://warpcast.com/${p.username}` : explorer(`address/${address}`)}
+        target="_blank"
+        rel="noreferrer"
+      >
+        {p?.username ? `@${p.username}` : shortAddr(address)}
+      </a>
+    </div>
   )
 }
