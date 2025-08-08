@@ -5,15 +5,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import Web3Modal from 'web3modal'
 import WalletConnectProvider from '@walletconnect/web3-provider'
 import { ethers } from 'ethers'
-
-const BASE_CHAIN_ID_DEC = 8453
-const BASE_CHAIN_ID_HEX = '0x2105'
-const BASE_RPC = 'https://mainnet.base.org'
-const BASE_EXPLORER = 'https://basescan.org'
+import { BASE } from '@/lib/chain' // central constants (see below)
 
 export default function WalletConnectButton({
   onConnect,
   onDisconnect,
+  onError,
+  onAutoConnect,
   className = '',
   buttonClassName = '',
   showNetworkPill = true,
@@ -29,7 +27,7 @@ export default function WalletConnectButton({
   const shortAddr = (a) => (a ? `${a.slice(0, 6)}...${a.slice(-4)}` : '')
 
   const explorerUrl = useMemo(
-    () => (address ? `${BASE_EXPLORER}/address/${address}` : '#'),
+    () => (address ? `${BASE.explorer}/address/${address}` : '#'),
     [address]
   )
 
@@ -41,8 +39,8 @@ export default function WalletConnectButton({
           walletconnect: {
             package: WalletConnectProvider,
             options: {
-              rpc: { [BASE_CHAIN_ID_DEC]: BASE_RPC },
-              chainId: BASE_CHAIN_ID_DEC,
+              rpc: { [BASE.idDec]: BASE.rpc },
+              chainId: BASE.idDec,
             },
           },
         },
@@ -51,24 +49,26 @@ export default function WalletConnectButton({
     return modalRef.current
   }
 
-  // Try to restore from cache / injected
+  // Auto-connect if cached or injected has selectedAddress
   useEffect(() => {
     if (typeof window === 'undefined') return
     const w3m = getWeb3Modal()
-    if (w3m.cachedProvider || window.ethereum?.selectedAddress) {
-      connect().catch(() => {})
+    const should = w3m.cachedProvider || window.ethereum?.selectedAddress
+    if (should) {
+      connect(true).catch((e) => onError?.(e))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Wallet event listeners
+  // Attach listeners to whichever provider is “active”
   useEffect(() => {
     const eth = instanceRef.current || (typeof window !== 'undefined' ? window.ethereum : null)
     if (!eth?.on) return
+
     const onAccountsChanged = async (accs) => {
       const a = Array.isArray(accs) ? accs[0] : null
       if (!a) {
-        handleDisconnect()
+        await handleDisconnect()
         return
       }
       setAddress(a)
@@ -78,27 +78,43 @@ export default function WalletConnectButton({
         setProvider(p)
         setSigner(s)
         onConnect?.({ address: a, signer: s, provider: p })
-      } catch {}
+      } catch (e) {
+        onError?.(e)
+      }
     }
+
     const onChainChanged = async () => {
       try {
         await ensureBase(eth)
-      } catch {}
+      } catch (e) {
+        onError?.(e)
+      }
     }
+
+    const onDisconnectEvt = async () => {
+      // WalletConnect v1 sometimes fires disconnect after QR tab closes
+      await handleDisconnect()
+    }
+
     eth.on('accountsChanged', onAccountsChanged)
     eth.on('chainChanged', onChainChanged)
+    eth.on?.('disconnect', onDisconnectEvt)
+
     return () => {
-      eth.removeListener?.('accountsChanged', onAccountsChanged)
-      eth.removeListener?.('chainChanged', onChainChanged)
+      try {
+        eth.removeListener?.('accountsChanged', onAccountsChanged)
+        eth.removeListener?.('chainChanged', onChainChanged)
+        eth.removeListener?.('disconnect', onDisconnectEvt)
+      } catch {}
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onConnect])
+  }, [onConnect, onError])
 
   async function ensureBase(ethLike) {
     try {
       await ethLike.request({
         method: 'wallet_switchEthereumChain',
-        params: [{ chainId: BASE_CHAIN_ID_HEX }],
+        params: [{ chainId: BASE.idHex }],
       })
       return true
     } catch (e) {
@@ -107,11 +123,11 @@ export default function WalletConnectButton({
         await ethLike.request({
           method: 'wallet_addEthereumChain',
           params: [{
-            chainId: BASE_CHAIN_ID_HEX,
-            chainName: 'Base',
-            rpcUrls: [BASE_RPC],
-            nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-            blockExplorerUrls: [BASE_EXPLORER],
+            chainId: BASE.idHex,
+            chainName: BASE.name,
+            rpcUrls: [BASE.rpc],
+            nativeCurrency: BASE.nativeCurrency,
+            blockExplorerUrls: [BASE.explorer],
           }],
         })
         return true
@@ -120,10 +136,10 @@ export default function WalletConnectButton({
     }
   }
 
-  async function connect() {
+  async function connect(isAuto = false) {
     try {
       let ethLike = null
-      if (window?.ethereum) {
+      if (typeof window !== 'undefined' && window.ethereum) {
         ethLike = window.ethereum
       } else {
         const w3m = getWeb3Modal()
@@ -136,7 +152,7 @@ export default function WalletConnectButton({
 
       const p = new ethers.BrowserProvider(ethLike)
       const net = await p.getNetwork()
-      if (net.chainId !== BigInt(BASE_CHAIN_ID_DEC)) {
+      if (net.chainId !== BigInt(BASE.idDec)) {
         await ensureBase(ethLike)
       }
 
@@ -149,9 +165,11 @@ export default function WalletConnectButton({
       setOpen(false)
 
       localStorage.setItem('walletAddress', a)
+      if (isAuto) onAutoConnect?.({ address: a, signer: s, provider: p })
       onConnect?.({ address: a, signer: s, provider: p })
     } catch (err) {
       console.error('Wallet connect error:', err)
+      onError?.(err)
     }
   }
 
@@ -184,7 +202,7 @@ export default function WalletConnectButton({
     <div className={`relative inline-block ${className}`}>
       {!address ? (
         <button
-          onClick={connect}
+          onClick={() => connect(false)}
           className={`px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-full shadow-xl whitespace-nowrap ${buttonClassName}`}
         >
           Connect Wallet
@@ -200,11 +218,12 @@ export default function WalletConnectButton({
               src={`https://effigy.im/a/${address}`}
               alt="avatar"
               className="w-6 h-6 rounded-full ring-1 ring-slate-700"
+              onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
             />
             <span className="text-sm">{shortAddr(address)}</span>
             {showNetworkPill && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-700/80 border border-emerald-500">
-                Base
+                {BASE.shortName}
               </span>
             )}
           </button>
