@@ -14,13 +14,15 @@ import Layout from '@/components/Layout'
 import Footer from '@/components/Footer'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 import ShareBar from '@/components/ShareBar'
+import Link from 'next/link'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x6975a550130642E5cb67A87BE25c8134542D5a0a'
+  '0x6975a550130642E5cb67A87BE25c8134542D5a0a' // FillInStoryV3
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
-const BASE_CHAIN_ID_HEX = '0x2105' // 8453
+const BASE_CHAIN_ID_HEX = '0x2105' // 8453 Base
+const FEATURED_TAKE = 9
 
 export default function Home() {
   const [status, setStatus] = useState('')
@@ -38,20 +40,21 @@ export default function Home() {
 
   const [word, setWord] = useState('')
   const [duration, setDuration] = useState(durations[0].value)
-  const [feeEth, setFeeEth] = useState(0.01) // in ETH on Base
+  const [feeEth, setFeeEth] = useState(0.01) // entry fee in ETH on Base
   const [busy, setBusy] = useState(false)
 
   const [profile, setProfile] = useState(null)
   const [showConfetti, setShowConfetti] = useState(false)
-  const [createdShareUrl, setCreatedShareUrl] = useState('')
-  const [createdShareText, setCreatedShareText] = useState('')
+
+  const [featured, setFeatured] = useState([])
+  const [loadingFeatured, setLoadingFeatured] = useState(true)
 
   const { width, height } = useWindowSize()
 
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx] // { name, parts, blanks }
 
-  // ---------- utils ----------
+  // utils
   const log = (msg) => {
     setLogs((prev) => [...prev, msg])
     setTimeout(() => {
@@ -61,5 +64,613 @@ export default function Home() {
     }, 50)
   }
 
+  const needsSpaceBefore = (str) => {
+    if (!str) return false
+    const ch = str[0]
+    return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
+  }
+
+  function buildPreviewSingle(parts, w, idx) {
+    const n = parts?.length || 0
+    if (n === 0) return ''
+    const blanks = Math.max(0, n - 1)
+    const iSel = Math.max(0, Math.min(Math.max(0, blanks - 1), idx || 0))
+    const out = []
+    for (let i = 0; i < n; i++) {
+      out.push(parts[i] || '')
+      if (i < n - 1) {
+        if (i === iSel) {
+          if (w) {
+            out.push(w)
+            if (needsSpaceBefore(parts[i + 1] || '')) out.push(' ')
+          } else {
+            out.push('____')
+          }
+        } else {
+          out.push('____')
+        }
+      }
+    }
+    return out.join('')
+  }
+
   function sanitizeWord(raw) {
-    // one token (letters/numbers/_/-), max 16 chars
+    // one token, letters/numbers/_/-, max 16 chars
+    const token = (raw || '')
+      .trim()
+      .split(' ')[0]
+      .replace(/[^a-zA-Z0-9\-_]/g, '')
+      .slice(0, 16)
+    return token
+  }
+
+  function parseStoredWord(stored) {
+    if (!stored) return { index: 0, word: '' }
+    const sep = stored.indexOf('::')
+    if (sep > -1) {
+      const idxRaw = stored.slice(0, sep)
+      const w = stored.slice(sep + 2)
+      const idx = Math.max(0, Math.min(99, Number.parseInt(idxRaw, 10) || 0))
+      return { index: idx, word: w }
+    }
+    return { index: 0, word: stored }
+  }
+
+  function buildPreviewFromStored(parts, stored) {
+    const { index, word } = parseStoredWord(stored)
+    return buildPreviewSingle(parts, word, index)
+  }
+
+  // wallet + chain
+  useEffect(() => {
+    if (!window?.ethereum) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const accts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+        if (!cancelled) setAddress(accts?.[0] || null)
+      } catch {}
+      try {
+        const provider = new ethers.BrowserProvider(window.ethereum)
+        const net = await provider.getNetwork()
+        if (!cancelled) setIsOnBase(net?.chainId === 8453n)
+      } catch {
+        if (!cancelled) setIsOnBase(true)
+      }
+      const onChain = () => location.reload()
+      const onAcct = (accs) => setAddress(accs?.[0] || null)
+      window.ethereum.on?.('chainChanged', onChain)
+      window.ethereum.on?.('accountsChanged', onAcct)
+      return () => {
+        window.ethereum.removeListener?.('chainChanged', onChain)
+        window.ethereum.removeListener?.('accountsChanged', onAcct)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  async function switchToBase() {
+    if (!window?.ethereum) return
+    try {
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: BASE_CHAIN_ID_HEX }],
+      })
+      setIsOnBase(true)
+    } catch (e) {
+      if (e?.code === 4902) {
+        try {
+          await window.ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: BASE_CHAIN_ID_HEX,
+              chainName: 'Base',
+              rpcUrls: [BASE_RPC],
+              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+              blockExplorerUrls: ['https://basescan.org'],
+            }],
+          })
+          setIsOnBase(true)
+        } catch (err) {
+          console.error(err)
+        }
+      }
+    }
+  }
+
+  // profile flair
+  useEffect(() => {
+    if (!address) return
+    ;(async () => {
+      try {
+        const p = await fetchFarcasterProfile(address)
+        setProfile(p || null)
+      } catch {}
+    })()
+  }, [address])
+
+  // featured pools (latest N)
+  useEffect(() => {
+    let cancelled = false
+    setLoadingFeatured(true)
+    ;(async () => {
+      try {
+        const provider = new ethers.JsonRpcProvider(BASE_RPC)
+        const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
+        const total = Number(await ct.pool1Count())
+        if (total === 0) {
+          if (!cancelled) setFeatured([])
+          return
+        }
+        const start = Math.max(1, total - FEATURED_TAKE + 1)
+        const ids = []
+        for (let i = total; i >= start; i--) ids.push(i)
+
+        const rows = []
+        for (const id of ids) {
+          const info = await ct.getPool1Info(BigInt(id))
+          const name = info[0]
+          const theme = info[1]
+          const parts = info[2]
+          const feeBase = info[3]
+          const deadline = Number(info[4])
+          const creator = info[5]
+          const participants = info[6] || []
+          const winner = info[7]
+          const claimed = info[8]
+          const poolBalance = info[9]
+
+          // original submission from creator for preview
+          let creatorPreview = ''
+          try {
+            const sub = await ct.getPool1Submission(BigInt(id), creator)
+            creatorPreview = buildPreviewFromStored(parts, sub[1])
+          } catch {}
+
+          rows.push({
+            id,
+            name: name || `Round #${id}`,
+            theme,
+            parts,
+            preview: creatorPreview || buildPreviewSingle(parts, '', 0),
+            entrants: participants.length,
+            feeEth: Number(ethers.formatEther(feeBase || 0n)),
+            poolEth: Number(ethers.formatEther(poolBalance || 0n)),
+            deadline,
+            winner,
+            claimed
+          })
+        }
+
+        // simple sort: newest first (already), but bump ones with bigger pool
+        rows.sort((a, b) => (b.poolEth - a.poolEth) || (b.id - a.id))
+
+        if (!cancelled) setFeatured(rows)
+      } catch (e) {
+        console.error('Featured fetch failed', e)
+        if (!cancelled) setFeatured([])
+      } finally {
+        if (!cancelled) setLoadingFeatured(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  const preview = useMemo(() => buildPreviewSingle(tpl.parts, sanitizeWord(word), blankIndex), [tpl.parts, word, blankIndex])
+
+  async function handleCreateRound() {
+    const cleanWord = sanitizeWord(word)
+    if (!cleanWord) {
+      setStatus('Enter one word (letters/numbers/_/-), up to 16 chars.')
+      log('Invalid word')
+      return
+    }
+    if ((tpl?.parts?.length || 0) !== (tpl?.blanks || 0) + 1) {
+      setStatus('Template error: parts must equal blanks + 1.')
+      log('Template mismatch')
+      return
+    }
+    if (!window?.ethereum) {
+      setStatus('No wallet detected.')
+      return
+    }
+
+    try {
+      setBusy(true)
+      setStatus('')
+      log('Connecting wallet...')
+      const provider = new ethers.BrowserProvider(window.ethereum)
+      const signer = await provider.getSigner()
+      const net = await provider.getNetwork()
+      if (net?.chainId !== 8453n) {
+        log('Switching to Base...')
+        await switchToBase()
+      }
+      const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
+
+      // encode as "index::word" so other pages can render it in the right blank
+      const encodedWord = `${blankIndex}::${cleanWord}`
+
+      const feeBase = ethers.parseUnits(String(feeEth), 18) // ETH on Base
+      const value = (feeBase * 1005n) / 1000n // tiny buffer
+
+      log(`Creating round "${roundName || 'Untitled'}"...`)
+      // createPool1(string name, string theme, string[] parts, string word, string username, uint256 feeBase, uint256 duration) payable
+      const tx = await ct.createPool1(
+        roundName || 'Untitled',
+        selectedCategory.name,
+        tpl.parts.map((p) => p.trim()),
+        encodedWord,
+        profile?.username || 'anon',
+        feeBase,
+        BigInt(duration * 86400),
+        { value }
+      )
+      const rc = await tx.wait()
+
+      // find Pool1Created event
+      let newId = ''
+      try {
+        const evt = rc.logs?.find((l) => l.fragment?.name === 'Pool1Created')
+        if (evt?.args?.id) newId = evt.args.id.toString()
+      } catch {}
+      if (!newId) {
+        // fallback: read pool1Count
+        const providerR = new ethers.JsonRpcProvider(BASE_RPC)
+        const ctR = new ethers.Contract(CONTRACT_ADDRESS, abi, providerR)
+        newId = String(await ctR.pool1Count())
+      }
+
+      setRoundId(newId)
+      setShowConfetti(true)
+      log(`Round #${newId} created.`)
+      setStatus('Success!')
+    } catch (err) {
+      console.error(err)
+      setStatus('' + (err?.shortMessage || err?.message || 'Failed to create round'))
+      log('Create failed')
+    } finally {
+      setBusy(false)
+      setTimeout(() => setShowConfetti(false), 1800)
+    }
+  }
+
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
+  const roundUrl = roundId ? `${origin}/round/${roundId}` : origin
+  const shareText = roundId
+    ? `I just created a MadFill round! Join Round #${roundId}.`
+    : `Play MadFill on Base.`
+
+  const blankPill = (active) =>
+    [
+      'inline-flex items-center justify-center w-8 h-7 text-center border-b-2 font-bold cursor-pointer mx-1 rounded',
+      active ? 'border-yellow-300 text-yellow-200 bg-yellow-300/10' : 'border-slate-400 text-slate-200 bg-slate-700/40'
+    ].join(' ')
+
+  return (
+    <Layout>
+      <Head>
+        <title>MadFill — Create or Join a Round</title>
+        <meta name="description" content="MadFill on Base. Fill the blank, vote, and win the pool." />
+        <meta property="og:title" content="MadFill — Create or Join a Round" />
+        <meta property="og:description" content="MadFill on Base. Fill the blank, vote, and win the pool." />
+        <meta property="og:url" content={origin} />
+      </Head>
+      {showConfetti && <Confetti width={width} height={height} />}
+
+      <main className="max-w-6xl mx-auto p-4 md:p-6 space-y-6 text-white">
+        {/* Hero */}
+        <div className="rounded-2xl bg-gradient-to-br from-indigo-700 via-fuchsia-700 to-cyan-700 p-6 md:p-8 shadow-xl ring-1 ring-white/10">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">MadFill</h1>
+              <p className="text-indigo-100 mt-2 max-w-2xl">
+                Fill the blank. Make it funny. Win the pot. Create rounds, enter with one word, and let the community decide the best punchline.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {!isOnBase && (
+                <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600">
+                  Switch to Base
+                </Button>
+              )}
+              <Link href="/active" className="underline text-white/90 text-sm">
+                View Active Rounds
+              </Link>
+            </div>
+          </div>
+        </div>
+
+        {/* What is MadFill */}
+        <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
+          <CardHeader className="border-b border-slate-700 bg-slate-800/50">
+            <h2 className="text-xl font-bold">What is MadFill?</h2>
+          </CardHeader>
+          <CardContent className="p-5 space-y-3 text-sm">
+            <div className="grid md:grid-cols-3 gap-3">
+              <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
+                <div className="text-2xl">🧩</div>
+                <div className="font-semibold mt-1">Simple rules</div>
+                <div className="text-slate-300 mt-1">Each template has blanks. You drop one word into a specific blank.</div>
+              </div>
+              <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
+                <div className="text-2xl">🎲</div>
+                <div className="font-semibold mt-1">Chance or vote</div>
+                <div className="text-slate-300 mt-1">Rounds can end with a random winner, or face a Challenger in a community vote.</div>
+              </div>
+              <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
+                <div className="text-2xl">💰</div>
+                <div className="font-semibold mt-1">Win the pool</div>
+                <div className="text-slate-300 mt-1">Entry fees go into the prize pool. Winner takes it when the round settles.</div>
+              </div>
+            </div>
+            <div className="text-xs text-slate-400">
+              Powered by smart contracts on Base. Your wallet is your identity. No accounts, no emails.
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Create Round */}
+        <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
+          <CardHeader className="border-b border-slate-700 bg-slate-800/50">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold">Create a new round</h2>
+              {profile?.username && (
+                <div className="text-xs text-slate-300">Hi @{profile.username}</div>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="p-5 space-y-5">
+            {status && <div className="rounded-lg bg-slate-800/70 border border-slate-700 p-2 text-sm">{status}</div>}
+
+            {/* Name + Category/Template */}
+            <div className="grid md:grid-cols-2 gap-4">
+              <label className="block text-sm text-slate-300">
+                Round name (optional)
+                <input
+                  value={roundName}
+                  onChange={(e) => setRoundName(e.target.value.slice(0, 32))}
+                  placeholder="My spicy round"
+                  className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                  disabled={busy}
+                />
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-sm text-slate-300">
+                  Category
+                  <select
+                    className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                    value={catIdx}
+                    onChange={(e) => setCatIdx(Number(e.target.value))}
+                    disabled={busy}
+                  >
+                    {categories.map((c, i) => <option key={i} value={i}>{c.name}</option>)}
+                  </select>
+                </label>
+                <label className="block text-sm text-slate-300">
+                  Template
+                  <select
+                    className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                    value={tplIdx}
+                    onChange={(e) => setTplIdx(Number(e.target.value))}
+                    disabled={busy}
+                  >
+                    {selectedCategory.templates.map((t, i) => <option key={i} value={i}>{t.name}</option>)}
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            {/* Preview with blank picker */}
+            <div className="rounded-xl bg-slate-800/60 border border-slate-700 p-4">
+              <div className="text-slate-300 text-sm mb-2">Card preview</div>
+              <div className="text-base leading-relaxed">
+                {tpl.parts.map((p, i) => (
+                  <span key={i}>
+                    {p}
+                    {i < tpl.parts.length - 1 && (
+                      <span
+                        role="button"
+                        className={blankPill(i === Number(blankIndex))}
+                        onClick={() => setBlankIndex(i)}
+                        title={`Insert into blank #${i + 1}`}
+                      >
+                        {i === Number(blankIndex) ? (sanitizeWord(word) || '____') : '____'}
+                      </span>
+                    )}
+                  </span>
+                ))}
+              </div>
+              <div className="text-xs text-slate-400 mt-2">
+                Click a blank to choose where your word goes.
+              </div>
+            </div>
+
+            {/* Your word */}
+            <label className="block text-sm text-slate-300">
+              Your word (one word, letters/numbers/_/-, max 16 chars)
+              <input
+                value={word}
+                onChange={(e) => setWord(e.target.value)}
+                onBlur={() => setWord((w) => sanitizeWord(w))}
+                placeholder="neon"
+                className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                disabled={busy}
+              />
+            </label>
+
+            {/* Fee + Duration */}
+            <div className="grid md:grid-cols-2 gap-4">
+              <label className="block text-sm text-slate-300">
+                Duration
+                <select
+                  className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                  value={duration}
+                  onChange={(e) => setDuration(Number(e.target.value))}
+                  disabled={busy}
+                >
+                  {durations.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+                </select>
+                <div className="text-[11px] text-slate-400 mt-1">How long entries are open.</div>
+              </label>
+
+              <label className="block text-sm text-slate-300">
+                Entry fee (ETH on Base)
+                <input
+                  type="range"
+                  min="0.001"
+                  max="0.1"
+                  step="0.001"
+                  value={feeEth}
+                  onChange={(e) => setFeeEth(Number(e.target.value))}
+                  className="mt-1 w-full"
+                  disabled={busy}
+                />
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="px-2 py-1 rounded bg-slate-800/80 border border-slate-700 text-xs">
+                    {feeEth.toFixed(3)} ETH
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    This is what each entrant pays to join your round.
+                  </span>
+                </div>
+              </label>
+            </div>
+
+            {/* Submit */}
+            <div className="flex flex-wrap items-center gap-3">
+              {!isOnBase && (
+                <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600">
+                  Switch to Base
+                </Button>
+              )}
+              <Button
+                onClick={handleCreateRound}
+                disabled={busy || !word}
+                className="bg-indigo-600 hover:bg-indigo-500"
+              >
+                Create round and submit
+              </Button>
+              {roundId && (
+                <Link href={`/round/${roundId}`} className="underline text-indigo-300 text-sm">
+                  View your round
+                </Link>
+              )}
+            </div>
+
+            {/* Share */}
+            <div className="pt-2">
+              <ShareBar url={roundUrl} text={shareText} embedUrl={roundUrl} />
+            </div>
+
+            {/* Logs */}
+            {logs.length > 0 && (
+              <div
+                className="text-green-200 text-xs mt-4 max-h-40 overflow-y-auto p-2 bg-black/40 border border-green-400 rounded"
+                ref={loggerRef}
+              >
+                {logs.map((m, i) => <div key={i}>→ {m}</div>)}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Featured Pools */}
+        <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
+          <CardHeader className="border-b border-slate-700 bg-slate-800/50">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold">Featured rounds</h2>
+              <Link href="/active" className="underline text-indigo-300 text-sm">
+                View all active
+              </Link>
+            </div>
+          </CardHeader>
+          <CardContent className="p-5">
+            {loadingFeatured ? (
+              <div className="rounded-xl bg-slate-900/70 p-6 animate-pulse text-slate-300">
+                Loading featured…
+              </div>
+            ) : featured.length === 0 ? (
+              <div className="text-slate-300">No rounds yet. Be the first to create one!</div>
+            ) : (
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {featured.map((r) => {
+                  const originUrl = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
+                  const rUrl = `${originUrl}/round/${r.id}`
+                  const shareTxt = `Play MadFill Round #${r.id}!`
+                  return (
+                    <div key={r.id} className="rounded-xl bg-slate-800/60 border border-slate-700 p-4 flex flex-col gap-3">
+                      <div className="flex items-center justify-between">
+                        <div className="font-semibold">#{r.id} — {r.name}</div>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800/80 border border-slate-700">
+                          {r.theme || 'General'}
+                        </span>
+                      </div>
+                      <div className="text-sm italic leading-relaxed line-clamp-4">
+                        {r.preview}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
+                        <span className="px-2 py-1 rounded bg-slate-900/60 border border-slate-700">
+                          Entrants: {r.entrants}
+                        </span>
+                        <span className="px-2 py-1 rounded bg-slate-900/60 border border-slate-700">
+                          Pool: {r.poolEth.toFixed(4)} ETH
+                        </span>
+                        <span className="px-2 py-1 rounded bg-slate-900/60 border border-slate-700">
+                          Ends: {new Date(r.deadline * 1000).toLocaleDateString()}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <Link href={`/round/${r.id}`} className="underline text-indigo-300 text-sm">
+                          Open
+                        </Link>
+                        <ShareBar url={rUrl} text={shareTxt} embedUrl={rUrl} small />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Fees, explained */}
+        <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
+          <CardHeader className="border-b border-slate-700 bg-slate-800/50">
+            <h2 className="text-xl font-bold">How fees work</h2>
+          </CardHeader>
+          <CardContent className="p-5 space-y-4 text-sm">
+            <div className="grid md:grid-cols-3 gap-4">
+              <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
+                <div className="text-2xl">🎟️</div>
+                <div className="font-semibold mt-1">Entry fee</div>
+                <div className="text-slate-300 mt-1">
+                  You set the entry fee when creating the round. Every entrant pays this to join.
+                </div>
+              </div>
+              <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
+                <div className="text-2xl">🏆</div>
+                <div className="font-semibold mt-1">Prize pool</div>
+                <div className="text-slate-300 mt-1">
+                  99.5% of each entry goes straight into the pool. Winner takes the pool when the round ends.
+                </div>
+              </div>
+              <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
+                <div className="text-2xl">⚙️</div>
+                <div className="font-semibold mt-1">Protocol fee</div>
+                <div className="text-slate-300 mt-1">
+                  A tiny 0.5% keeps the lights on. No hidden costs. Everything happens on-chain.
+                </div>
+              </div>
+            </div>
+            <div className="text-xs text-slate-400">
+              All amounts are in ETH on Base. The app sends a tiny buffer with your transaction to avoid rounding issues.
+            </div>
+          </CardContent>
+        </Card>
+
+        <Footer />
+      </main>
+    </Layout>
+  )
+}
