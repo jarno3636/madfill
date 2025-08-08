@@ -92,9 +92,10 @@ export default function ActivePools() {
       console.warn('Alchemy failed, falling back to $3800...', e)
       // 4️⃣ Fallback to manual price
       console.log('💰 Price source: Fallback (~3800 USD)')
-      setBaseUsd(3800)
+      price = 3800
+      setBaseUsd(price)
       setFallbackPrice(true)
-      return 3800
+      return price
     }
   }
 
@@ -167,12 +168,12 @@ export default function ActivePools() {
   }
 
   useEffect(() => {
-    const fetchData = async () => {
+    const loadData = async () => {
       const price = await loadPrice()
       await loadRounds(price)
     }
-    fetchData()
-    const interval = setInterval(fetchData, 30000)
+    loadData()
+    const interval = setInterval(loadData, 30000)
     return () => clearInterval(interval)
   }, [])
 
@@ -212,7 +213,8 @@ export default function ActivePools() {
         <title>MadFill – Active Rounds</title>
       </Head>
       <main className="max-w-6xl mx-auto p-6 space-y-6">
-        <h1 className="text-4xl font-extrabold text-white drop-shadow">🧠 Active Rounds</
+        <h1 className="text-4xl font-extrabold text-white drop-shadow">🧠 Active Rounds</h1>
+
         <div className="flex flex-wrap justify-between gap-4 text-white">
           <input
             type="text"
@@ -342,5 +344,3 @@ export default function ActivePools() {
     </Layout>
   )
 }
-
-Can you add fix to this code last one had a lot missing still
