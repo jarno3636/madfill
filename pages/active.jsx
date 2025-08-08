@@ -1,3 +1,4 @@
+// pages/active.jsx
 import React, { useEffect, useState } from 'react'
 import { ethers } from 'ethers'
 import Head from 'next/head'
@@ -18,6 +19,7 @@ export default function ActivePools() {
   const [filter, setFilter] = useState('all')
   const [page, setPage] = useState(1)
   const [baseUsd, setBaseUsd] = useState(0)
+  const [fallbackPrice, setFallbackPrice] = useState(false)
   const [expanded, setExpanded] = useState({})
   const [likes, setLikes] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -27,13 +29,66 @@ export default function ActivePools() {
   })
   const roundsPerPage = 6
 
+  // Load BASE price with Coinbase -> CoinGecko -> Alchemy -> $3800 fallback
   const loadPrice = async () => {
     try {
-      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
-      const json = await res.json()
-      setBaseUsd(json.base?.usd || 0)
+      // 1️⃣ Try Coinbase ETH-USD spot (BASE == ETH peg)
+      const cbRes = await fetch('https://api.coinbase.com/v2/prices/ETH-USD/spot')
+      const cbJson = await cbRes.json()
+      const cbPrice = parseFloat(cbJson?.data?.amount)
+      if (cbPrice && cbPrice > 0.5) {
+        setBaseUsd(cbPrice)
+        setFallbackPrice(false)
+        return
+      }
+      throw new Error('Invalid Coinbase price')
     } catch (e) {
-      console.error('Failed to fetch BASE price', e)
+      console.warn('Coinbase failed, trying CoinGecko...', e)
+    }
+
+    try {
+      // 2️⃣ Try CoinGecko BASE token price
+      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=l2-standard-bridged-weth-base&vs_currencies=usd')
+      const json = await res.json()
+      const price = json['l2-standard-bridged-weth-base']?.usd
+      if (price && price > 0.5) {
+        setBaseUsd(price)
+        setFallbackPrice(false)
+        return
+      }
+      throw new Error('Invalid CoinGecko price')
+    } catch (e) {
+      console.warn('CoinGecko failed, trying Alchemy...', e)
+    }
+
+    try {
+      // 3️⃣ Try Alchemy token metadata
+      const alchemyRes = await fetch(
+        `https://eth-mainnet.g.alchemy.com/v2/${process.env.NEXT_PUBLIC_ALCHEMY_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: 1,
+            jsonrpc: '2.0',
+            method: 'alchemy_getTokenMetadata',
+            params: ['0x4200000000000000000000000000000000000006']
+          })
+        }
+      )
+      const data = await alchemyRes.json()
+      const price = data?.result?.price?.usd
+      if (price && price > 0.5) {
+        setBaseUsd(price)
+        setFallbackPrice(false)
+        return
+      }
+      throw new Error('Invalid Alchemy price')
+    } catch (e) {
+      console.warn('Alchemy failed, falling back to $3800...', e)
+      // 4️⃣ Manual fallback
+      setBaseUsd(3800)
+      setFallbackPrice(true)
     }
   }
 
@@ -56,23 +111,27 @@ export default function ActivePools() {
         const claimed = info[8]
 
         if (!claimed && deadline > now) {
-          const avatars = await Promise.all(participants.map(async (addr) => {
-            const res = await fetchFarcasterProfile(addr)
-            return {
-              address: addr,
-              avatar: res?.pfp_url || '/Capitalize.PNG',
-              fallbackUsername: res?.username || addr.slice(2, 6).toUpperCase()
-            }
-          }))
+          const avatars = await Promise.all(
+            participants.map(async (addr) => {
+              const res = await fetchFarcasterProfile(addr)
+              return {
+                address: addr,
+                avatar: res?.pfp_url || '/Capitalize.PNG',
+                fallbackUsername: res?.username || addr.slice(2, 6).toUpperCase()
+              }
+            })
+          )
 
-          const submissions = await Promise.all(participants.map(async (addr) => {
-            try {
-              const [username, word] = await ct.getPool1Submission(i, addr)
-              return { address: addr, username, word }
-            } catch {
-              return { address: addr, username: '', word: '' }
-            }
-          }))
+          const submissions = await Promise.all(
+            participants.map(async (addr) => {
+              try {
+                const [username, word] = await ct.getPool1Submission(i, addr)
+                return { address: addr, username, word }
+              } catch {
+                return { address: addr, username: '', word: '' }
+              }
+            })
+          )
 
           const estimatedUsd = baseUsd * participants.length * feeBase
 
@@ -85,6 +144,7 @@ export default function ActivePools() {
             deadline,
             count: participants.length,
             usd: estimatedUsd.toFixed(2),
+            usdApprox: fallbackPrice,
             participants: avatars,
             submissions,
             badge: deadline - now < 3600 ? '🔥 Ends Soon' : estimatedUsd > 5 ? '💰 Top Pool' : null,
@@ -202,7 +262,10 @@ export default function ActivePools() {
                 <CardContent className="space-y-2 text-sm font-medium">
                   <p><strong>Entry Fee:</strong> {r.feeBase} BASE</p>
                   <p><strong>Participants:</strong> {r.count}</p>
-                  <p><strong>Total Pool:</strong> ${r.usd}</p>
+                  <p>
+                    <strong>Total Pool:</strong>{' '}
+                    {r.usdApprox ? '~' : ''}${r.usd}
+                  </p>
 
                   <button
                     onClick={() => setExpanded(prev => ({ ...prev, [r.id]: !prev[r.id] }))}
