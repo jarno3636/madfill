@@ -1,5 +1,3 @@
-Here’s a full drop-in pages/myrounds.jsx wired to V3 with clean previews, taken-blank handling, and a polished UI. Paste it in:
-
 // pages/myrounds.jsx
 'use client'
 
@@ -30,26 +28,22 @@ export default function MyRounds() {
   const [status, setStatus] = useState('')
   const [priceUsd, setPriceUsd] = useState(3800) // ETH-USD fallback
 
-  // data
   const [profile, setProfile] = useState(null)
-  const [entries, setEntries] = useState([]) // Pool1 entries (you participated)
-  const [wins, setWins] = useState([])       // Pool1 where you're the winner
-  const [votes, setVotes] = useState([])     // Pool2 votes (you voted)
+  const [entries, setEntries] = useState([])
+  const [wins, setWins] = useState([])
+  const [votes, setVotes] = useState([])
 
-  // ui
-  const [filter, setFilter] = useState('all') // all | entries | wins | votes | unclaimed
-  const [sortBy, setSortBy] = useState('newest') // newest | oldest | prize
+  const [filter, setFilter] = useState('all')
+  const [sortBy, setSortBy] = useState('newest')
   const [showConfetti, setShowConfetti] = useState(false)
   const { width, height } = useWindowSize()
   const tickRef = useRef(null)
 
-  // ----- utils -----
   const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
   const toEth = (wei) => (wei ? Number(ethers.formatEther(wei)) : 0)
   const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
   const explorer = (path) => `https://basescan.org/${path}`
 
-  // parse "index::word" or plain "word"
   function parseStoredWord(stored) {
     if (!stored) return { index: 0, word: '' }
     const sep = stored.indexOf('::')
@@ -62,14 +56,12 @@ export default function MyRounds() {
     return { index: 0, word: stored }
   }
 
-  // space between inserted word and next chunk if needed
   const needsSpaceBefore = (str) => {
     if (!str) return false
     const ch = str[0]
     return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
   }
 
-  // preview for a single chosen blank
   function buildPreviewSingle(parts, word, blankIndex) {
     const n = parts?.length || 0
     if (n === 0) return ''
@@ -101,7 +93,6 @@ export default function MyRounds() {
 
   const nowSec = () => Math.floor(Date.now() / 1000)
 
-  // ----- wallet + chain -----
   useEffect(() => {
     if (!window?.ethereum) return
     let cancelled = false
@@ -158,11 +149,9 @@ export default function MyRounds() {
     }
   }
 
-  // ----- price + ticker -----
   useEffect(() => {
     ;(async () => {
       try {
-        // ETH (native on Base) — use ethereum id
         const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
         const j = await r.json()
         setPriceUsd(j?.ethereum?.usd || 3800)
@@ -174,7 +163,6 @@ export default function MyRounds() {
     return () => clearInterval(tickRef.current)
   }, [])
 
-  // ----- profile -----
   useEffect(() => {
     if (!address) return
     ;(async () => {
@@ -185,7 +173,6 @@ export default function MyRounds() {
     })()
   }, [address])
 
-  // ----- load my stuff from V3 -----
   useEffect(() => {
     if (!address) return
     let cancelled = false
@@ -197,10 +184,8 @@ export default function MyRounds() {
         const provider = new ethers.JsonRpcProvider(BASE_RPC)
         const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
 
-        // getUserEntries(address) -> (pool1Ids, pool2Votes)
         const [ids1, ids2] = await ct.getUserEntries(address)
 
-        // Pool1 entries you participated in
         const entryCards = await Promise.all(
           ids1.map(async (idBig) => {
             const id = Number(idBig)
@@ -208,13 +193,13 @@ export default function MyRounds() {
             const name = info[0]
             const theme = info[1]
             const parts = info[2]
-            const feeBase = info[3]        // wei
+            const feeBase = info[3]
             const deadline = Number(info[4])
             const creator = info[5]
-            const participants = info[6]   // addresses
+            const participants = info[6]
             const winner = info[7]
             const claimed = info[8]
-            const poolBalance = info[9]    // wei
+            const poolBalance = info[9]
 
             const yourSub = await ct.getPool1Submission(BigInt(id), address)
             const username = yourSub[0]
@@ -249,12 +234,10 @@ export default function MyRounds() {
           })
         )
 
-        // Pool2 votes you cast
         const voteCards = await Promise.all(
           ids2.map(async (idBig) => {
             const id = Number(idBig)
             const p2 = await ct.getPool2Info(BigInt(id))
-            // (originalPool1Id, challengerWord, challengerUsername, challenger, votersOriginal, votersChallenger, claimed, challengerWon, poolBalance)
             const originalPool1Id = Number(p2[0])
             const chWordRaw = p2[1]
             const chUsername = p2[2]
@@ -267,7 +250,6 @@ export default function MyRounds() {
             const p2Eth = toEth(p2Balance)
             const p2Usd = p2Eth * priceUsd
 
-            // get original pool parts for context preview
             const info = await ct.getPool1Info(BigInt(originalPool1Id))
             const parts = info[2]
             const chPreview = buildPreviewFromStored(parts, chWordRaw)
@@ -292,7 +274,6 @@ export default function MyRounds() {
 
         if (cancelled) return
 
-        // wins are subset of entries where youWon
         const winsList = entryCards.filter((e) => e.youWon)
 
         setEntries(entryCards)
@@ -307,10 +288,8 @@ export default function MyRounds() {
     })()
 
     return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address, priceUsd])
 
-  // ----- actions -----
   async function finalizePool1(id) {
     try {
       if (!window?.ethereum) throw new Error('Wallet not found')
@@ -322,27 +301,24 @@ export default function MyRounds() {
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
       const tx = await ct.claimPool1(BigInt(id))
       await tx.wait()
-      setStatus('✅ Finalized')
+      setStatus('Finalized')
       setShowConfetti(true)
-      // update local state
       setEntries((rs) => rs.map((r) => (r.id === id ? { ...r, claimed: true } : r)))
       setWins((rs) => rs.map((r) => (r.id === id ? { ...r, claimed: true } : r)))
       setTimeout(() => setShowConfetti(false), 1800)
     } catch (e) {
       console.error(e)
-      setStatus('❌ Finalize failed')
+      setStatus('Finalize failed')
       setShowConfetti(false)
     }
   }
 
-  // ----- filter/sort -----
   const allCards = useMemo(() => {
     const arr = [
       ...entries.map((e) => ({ ...e, group: 'Entry' })),
       ...wins.map((w) => ({ ...w, group: 'Win' })),
       ...votes.map((v) => ({ ...v, group: 'Vote' })),
     ]
-    // de-dup: if an entry is also a win, keep only the "Win" version
     const byKey = new Map()
     for (const c of arr) {
       const key = `${c.kind}-${c.id}`
@@ -358,21 +334,18 @@ export default function MyRounds() {
     else if (filter === 'wins') rs = rs.filter((r) => r.kind === 'pool1' && r.youWon)
     else if (filter === 'votes') rs = rs.filter((r) => r.kind === 'pool2')
     else if (filter === 'unclaimed') rs = rs.filter((r) => r.kind === 'pool1' && r.youWon && !r.claimed)
-    // sort
     if (sortBy === 'oldest') rs.sort((a, b) => a.id - b.id)
     else if (sortBy === 'prize') rs.sort((a, b) => (b.poolUsd || 0) - (a.poolUsd || 0))
     else rs.sort((a, b) => b.id - a.id)
     return rs
   }, [allCards, filter, sortBy])
 
-  // ----- rendering helpers -----
   function statusBadge(card) {
     if (card.kind === 'pool1') {
       if (!card.ended) return <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 text-xs">Active</span>
       if (card.claimed) return <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs">Completed</span>
       return <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-400/40 text-indigo-300 text-xs">Ended — Pending</span>
     }
-    // pool2
     if (!card.claimed) return <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 text-xs">Voting</span>
     return (
       <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs">
@@ -381,7 +354,6 @@ export default function MyRounds() {
     )
   }
 
-  // ----- UI -----
   return (
     <Layout>
       <Head>
@@ -390,10 +362,9 @@ export default function MyRounds() {
       </Head>
 
       <main className="max-w-6xl mx-auto p-4 md:p-6 text-white">
-        {/* Header */}
         <div className="mb-6 text-center">
           <h1 className="text-3xl md:text-4xl font-extrabold bg-gradient-to-r from-indigo-300 via-fuchsia-300 to-cyan-300 bg-clip-text text-transparent drop-shadow-sm">
-            🏆 My Rounds
+            My Rounds
           </h1>
           <div className="mt-2 text-sm text-slate-300">
             <span className="mr-2">Address:</span>
@@ -407,7 +378,6 @@ export default function MyRounds() {
           </div>
         </div>
 
-        {/* Controls */}
         <div className="mb-5 flex flex-wrap items-center justify-center gap-3">
           <div className="flex items-center gap-2">
             <label className="text-sm text-slate-300">Filter</label>
@@ -442,7 +412,6 @@ export default function MyRounds() {
           )}
         </div>
 
-        {/* Loading / Empty */}
         {loading && <div className="rounded-xl bg-slate-900/70 p-6 animate-pulse text-slate-300 text-center">Loading your rounds…</div>}
         {!loading && viewCards.length === 0 && (
           <div className="rounded-xl bg-slate-900/70 p-6 text-slate-300 text-center">
@@ -450,14 +419,13 @@ export default function MyRounds() {
           </div>
         )}
 
-        {/* Cards */}
         <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
           {viewCards.map((r) => {
             const shareUrl = typeof window !== 'undefined' ? `${window.location.origin}/round/${r.kind === 'pool1' ? r.id : r.originalPool1Id}` : ''
             const shareText =
               r.kind === 'pool1'
                 ? `I just played MadFill Round #${r.id}! ${shareUrl}`
-                : `I voted in a MadFill challenge #${r.id} (Pool2) — check it out! ${shareUrl}`
+                : `I voted in a MadFill challenge #${r.id} — check it out! ${shareUrl}`
 
             return (
               <Card key={`${r.kind}-${r.id}`} className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
@@ -477,19 +445,18 @@ export default function MyRounds() {
                       )}
                     </div>
                     {r.kind === 'pool1' && (
-                      <div className="text-xs text-slate-300">🎨 {r.theme || 'General'}</div>
+                      <div className="text-xs text-slate-300">Theme: {r.theme || 'General'}</div>
                     )}
                   </div>
                   <Link
                     href={r.kind === 'pool1' ? `/round/${r.id}` : `/round/${r.originalPool1Id}`}
                     className="text-indigo-300 underline text-sm"
                   >
-                    🔍 View
+                    View
                   </Link>
                 </CardHeader>
 
                 <CardContent className="p-5 space-y-3">
-                  {/* Preview */}
                   <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3 text-sm">
                     <div className="text-slate-300">{r.kind === 'pool1' ? 'Your Card Preview' : 'Challenger Preview'}</div>
                     <div className="mt-1 italic text-[15px] leading-relaxed">
@@ -497,7 +464,6 @@ export default function MyRounds() {
                     </div>
                   </div>
 
-                  {/* Prize / Meta */}
                   <div className="flex flex-wrap items-center gap-2 text-sm">
                     {r.kind === 'pool1' ? (
                       <>
@@ -512,7 +478,7 @@ export default function MyRounds() {
                         </span>
                         {r.youWon && (
                           <span className="px-2 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300">
-                            🎉 You Won
+                            You Won
                           </span>
                         )}
                       </>
@@ -528,15 +494,14 @@ export default function MyRounds() {
                     )}
                   </div>
 
-                  {/* Actions */}
                   <div className="flex flex-wrap items-center gap-3">
                     {r.kind === 'pool1' && r.ended && !r.claimed && (
                       <Button onClick={() => finalizePool1(r.id)} className="bg-indigo-600 hover:bg-indigo-500">
-                        💸 Finalize & Payout
+                        Finalize & Payout
                       </Button>
                     )}
                     {r.kind === 'pool1' && r.youWon && r.claimed && (
-                      <span className="text-sm font-semibold text-emerald-300">✅ Prize Claimed</span>
+                      <span className="text-sm font-semibold text-emerald-300">Prize Claimed</span>
                     )}
                     <a
                       href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}`}
@@ -544,7 +509,7 @@ export default function MyRounds() {
                       rel="noreferrer"
                       className="underline text-blue-400 text-sm"
                     >
-                      🐦 Share
+                      Share
                     </a>
                     <a
                       href={`https://warpcast.com/~/compose?text=${encodeURIComponent(shareText)}`}
@@ -552,23 +517,18 @@ export default function MyRounds() {
                       rel="noreferrer"
                       className="underline text-purple-300 text-sm"
                     >
-                      🌀 Cast
+                      Cast
                     </a>
                     <a
                       className="underline text-slate-300 text-sm"
                       target="_blank"
                       rel="noreferrer"
-                      href={
-                        r.kind === 'pool1'
-                          ? explorer(`address/${CONTRACT_ADDRESS}`)
-                          : explorer(`address/${CONTRACT_ADDRESS}`)
-                      }
+                      href={explorer(`address/${CONTRACT_ADDRESS}`)}
                     >
                       Contract
                     </a>
                   </div>
 
-                  {/* People (winner / challenger) */}
                   {r.kind === 'pool1' && r.winner && (
                     <PoolPerson line="Winner" address={r.winner} />
                   )}
@@ -581,15 +541,13 @@ export default function MyRounds() {
           })}
         </div>
 
-        {/* Footer status */}
         {status && <div className="mt-6 text-center text-yellow-300">{status}</div>}
-        {(showConfetti) && <Confetti width={width} height={height} />}
+        {showConfetti && <Confetti width={width} height={height} />}
       </main>
     </Layout>
   )
 }
 
-/* ---------- Mini person row (Farcaster/addr) ---------- */
 function PoolPerson({ line, address }) {
   const [p, setP] = useState(null)
   useEffect(() => {
