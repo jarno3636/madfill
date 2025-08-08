@@ -15,10 +15,10 @@ import Link from 'next/link'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // FillInStoryV3 (env wins)
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // env wins
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
-const BASE_CHAIN_ID_HEX = '0x2105' // 8453 Base
+const BASE_CHAIN_ID_HEX = '0x2105' // 8453
 
 export default function RoundDetailPage() {
   const router = useRouter()
@@ -40,6 +40,7 @@ export default function RoundDetailPage() {
   const [selectedBlank, setSelectedBlank] = useState(0)
   const [inputError, setInputError] = useState('')
   const [status, setStatus] = useState('')
+  const [busy, setBusy] = useState(false)
 
   const [priceUsd, setPriceUsd] = useState(3800) // ETH-USD fallback
   const [claimedNow, setClaimedNow] = useState(false)
@@ -51,18 +52,22 @@ export default function RoundDetailPage() {
 
   // ---------- utils ----------
   const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
-  const toEth = (wei) => (wei ? Number(ethers.formatEther(wei)) : 0)
+  const toEth = (wei) => {
+    try {
+      if (wei == null) return 0
+      const bi = typeof wei === 'bigint' ? wei : BigInt(wei.toString())
+      return Number(ethers.formatEther(bi))
+    } catch { return 0 }
+  }
   const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
   const explorer = (path) => `https://basescan.org/${path}`
 
-  // need a space if the next chunk doesn't already start with whitespace or punctuation
   const needsSpaceBefore = (str) => {
     if (!str) return false
     const ch = str[0]
     return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
   }
 
-  // Build preview for a single chosen blank (others as ____), with smart spacing.
   function buildPreviewSingle(parts, word, blankIndex) {
     const n = parts?.length || 0
     if (n === 0) return ''
@@ -99,7 +104,7 @@ export default function RoundDetailPage() {
 
   const alreadyEntered = useMemo(() => {
     if (!address || !submissions?.length) return false
-    return submissions.some((s) => s.addr.toLowerCase() === address.toLowerCase())
+    return submissions.some((s) => s.addr?.toLowerCase?.() === address.toLowerCase())
   }, [address, submissions])
 
   const timeLeft = useMemo(() => {
@@ -131,7 +136,8 @@ export default function RoundDetailPage() {
     let cancelled = false
     ;(async () => {
       try {
-        const accts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+        // Ask passively first (doesn't trigger prompt)
+        const accts = await window.ethereum.request({ method: 'eth_accounts' })
         if (!cancelled) setAddress(accts?.[0] || null)
       } catch {}
       try {
@@ -150,10 +156,21 @@ export default function RoundDetailPage() {
         window.ethereum.removeListener?.('accountsChanged', onAcct)
       }
     })()
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [])
+
+  async function connectWallet() {
+    if (!window?.ethereum) {
+      setStatus('Wallet not found')
+      return
+    }
+    try {
+      const accts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+      setAddress(accts?.[0] || null)
+    } catch (e) {
+      setStatus(e?.message || 'Wallet connection rejected')
+    }
+  }
 
   async function switchToBase() {
     if (!window?.ethereum) return
@@ -218,41 +235,59 @@ export default function RoundDetailPage() {
 
         // getPool1Info => (name, theme, parts, feeBase, deadline, creator, participants, winner, claimed, poolBalance)
         const info = await ct.getPool1Info(BigInt(id))
-        const name = info.name_ || info[0]
-        const theme = info.theme_ || info[1]
-        const parts = info.parts_ || info[2]
+        const name = info.name_ ?? info[0]
+        const theme = info.theme_ ?? info[1]
+        const parts = info.parts_ ?? info[2]
         const feeBase = info.feeBase_ ?? info[3]
         const deadline = Number(info.deadline_ ?? info[4])
-        const creator = info.creator_ || info[5]
-        const participants = info.participants_ || info[6]
-        const winner = info.winner_ || info[7]
+        const creator = info.creator_ ?? info[5]
+        const participants = info.participants_ ?? info[6]
+        const winner = info.winner_ ?? info[7]
         const claimed = info.claimed_ ?? info[8]
         const poolBalance = info.poolBalance_ ?? info[9]
 
-        // Efficient pulls:
-        // 1) All submissions in one call
-        const packed = await ct.getPool1SubmissionsPacked(BigInt(id))
-        const addrs = packed.addrs || packed[0]
-        const usernames = packed.usernames || packed[1]
-        const words = packed.words || packed[2]
-        const blankIdxs = packed.blankIndexes || packed[3]
+        // ---------- Submissions & taken blanks (packed with fallback) ----------
+        let subms = []
+        let takenSetLocal = new Set()
+        try {
+          const packed = await ct.getPool1SubmissionsPacked(BigInt(id))
+          const addrs = packed.addrs || packed[0] || []
+          const usernames = packed.usernames || packed[1] || []
+          const words = packed.words || packed[2] || []
+          const blankIdxs = packed.blankIndexes || packed[3] || []
+          subms = addrs.map((addr, i) => {
+            const username = usernames[i] || ''
+            const word = words[i] || ''
+            const idx = Number(blankIdxs[i] ?? 0)
+            return { addr, username, word, index: idx, preview: buildPreviewSingle(parts, word, idx) }
+          })
+        } catch {
+          // ignore
+        }
 
-        const subms = (addrs || []).map((addr, i) => {
-          const username = usernames?.[i] || ''
-          const word = words?.[i] || ''
-          const idx = Number(blankIdxs?.[i] ?? 0)
-          return {
-            addr,
-            username,
-            word,
-            index: idx,
-            preview: buildPreviewSingle(parts, word, idx),
-          }
-        })
+        if (subms.length === 0 && (participants?.length || 0) > 0) {
+          subms = await Promise.all(
+            participants.map(async (addr) => {
+              try {
+                // (username, word, submitter, blankIndex)
+                const s = await ct.getPool1Submission(BigInt(id), addr)
+                const username = s?.[0] || ''
+                const word = s?.[1] || ''
+                const idx = Number(s?.[3] ?? 0)
+                return { addr, username, word, index: idx, preview: buildPreviewSingle(parts, word, idx) }
+              } catch {
+                return { addr, username: '', word: '', index: 0, preview: buildPreviewSingle(parts, '', 0) }
+              }
+            })
+          )
+        }
 
-        // 2) Which blanks are taken
-        const taken = await ct.getPool1Taken(BigInt(id)) // bool[]
-        const takenSetLocal = new Set((taken || []).map((b, i) => (b ? i : null)).filter((x) => x !== null))
+        try {
+          const taken = await ct.getPool1Taken(BigInt(id)) // bool[]
+          takenSetLocal = new Set((taken || []).map((b, i) => (b ? i : null)).filter((x) => x !== null))
+        } catch {
+          takenSetLocal = new Set(subms.map((s) => s.index))
+        }
 
         if (cancelled) return
         setTakenSet(takenSetLocal)
@@ -271,7 +306,7 @@ export default function RoundDetailPage() {
           entrants: participants?.length ?? subms.length,
         })
 
-        // clamp any previous selection
+        // clamp selection
         setSelectedBlank((prev) => Math.min(Math.max(prev, 0), Math.max(0, parts.length - 2)))
       } catch (e) {
         console.error(e)
@@ -281,14 +316,12 @@ export default function RoundDetailPage() {
       }
     })()
 
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [id])
 
   // ---------- input handling ----------
   function sanitizeWord(raw) {
-    // allow letters, numbers, hyphen, underscore; single token; max 16 chars
+    // one word, letters/numbers/_/-, max 16
     const token = (raw || '')
       .replace(/\s+/g, ' ')
       .trim()
@@ -301,11 +334,8 @@ export default function RoundDetailPage() {
   function onWordChange(e) {
     const clean = sanitizeWord(e.target.value)
     setWordInput(clean)
-    if (!clean) {
-      setInputError('Please enter one word (max 16 chars).')
-    } else {
-      setInputError('')
-    }
+    if (!clean) setInputError('Please enter one word (max 16 chars).')
+    else setInputError('')
   }
 
   // ---------- actions (V3) ----------
@@ -317,18 +347,32 @@ export default function RoundDetailPage() {
       if (!wordInput.trim()) throw new Error('Please enter one word')
       if (inputError) throw new Error(inputError)
       if (alreadyEntered) throw new Error('You already entered this round')
-      if (takenSet.has(selectedBlank)) throw new Error('That blank is already taken. Pick a different one.')
+      if (takenSet.has(selectedBlank)) throw new Error('That blank is already taken')
 
+      setBusy(true)
       setStatus('Submitting your entry…')
+      // Force a wallet prompt so the signer is live
+      await window.ethereum.request({ method: 'eth_requestAccounts' })
+
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer = await provider.getSigner()
       const net = await provider.getNetwork()
       if (net?.chainId !== 8453n) {
         await switchToBase()
       }
+
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
-      // NEW SIG: joinPool1(uint256 id, string word, string username, uint8 blankIndex) payable
-      const tx = await ct.joinPool1(BigInt(id), wordInput, usernameInput || '', selectedBlank, { value: round.feeBase })
+      const fee = round?.feeBase ?? 0n
+      const value = typeof fee === 'bigint' ? fee : BigInt(fee.toString())
+
+      // joinPool1(uint256 id, string word, string username, uint8 blankIndex) payable
+      const tx = await ct.joinPool1(
+        BigInt(id),
+        sanitizeWord(wordInput),
+        (usernameInput || '').trim(),
+        Number(selectedBlank),
+        { value }
+      )
       await tx.wait()
       setStatus('Entry submitted!')
       setShowConfetti(true)
@@ -338,6 +382,8 @@ export default function RoundDetailPage() {
       const msg = e?.shortMessage || e?.reason || e?.message || 'Join failed'
       setStatus(msg.split('\n')[0])
       setShowConfetti(false)
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -345,7 +391,9 @@ export default function RoundDetailPage() {
     try {
       if (!window?.ethereum) throw new Error('Wallet not found')
       if (!round) throw new Error('Round not ready')
+      setBusy(true)
       setStatus('Finalizing and paying out…')
+      await window.ethereum.request({ method: 'eth_requestAccounts' })
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer = await provider.getSigner()
       const net = await provider.getNetwork()
@@ -353,7 +401,7 @@ export default function RoundDetailPage() {
         await switchToBase()
       }
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
-      // V3 claimPool1(uint256 id) — anyone can call after deadline; pays winner immediately
+      // claimPool1(uint256 id)
       const tx = await ct.claimPool1(BigInt(id))
       await tx.wait()
       setStatus('Payout executed')
@@ -365,6 +413,8 @@ export default function RoundDetailPage() {
       const msg = e?.shortMessage || e?.reason || e?.message || 'Finalize failed'
       setStatus(msg.split('\n')[0])
       setShowConfetti(false)
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -379,21 +429,9 @@ export default function RoundDetailPage() {
     !!wordInput.trim() &&
     !inputError &&
     blanksCount > 0 &&
-    !takenSet.has(selectedBlank)
-  const canFinalize = ended && !round?.claimed && !claimedNow && (round?.entrants || 0) > 0
-
-  // label for blank options: show context around each blank
-  const blankLabels = useMemo(() => {
-    const p = round?.parts || []
-    const labels = []
-    const blanks = Math.max(0, p.length - 1)
-    for (let i = 0; i < blanks; i++) {
-      const left = (p[i] || '').trim().slice(-10)
-      const right = (p[i + 1] || '').trim().slice(0, 10)
-      labels.push(`Blank #${i + 1} — "…${left} ____ ${right}…"`)
-    }
-    return labels
-  }, [round?.parts])
+    !takenSet.has(selectedBlank) &&
+    !busy
+  const canFinalize = ended && !round?.claimed && !claimedNow && (round?.entrants || 0) > 0 && !busy
 
   return (
     <Layout>
@@ -414,12 +452,17 @@ export default function RoundDetailPage() {
           <div className="mt-2 text-sm text-slate-300">
             <span className="mr-2">🎨 {round?.theme || 'General'}</span>
             <span className="mx-2">•</span>
-            <span className="mr-2">⌛ {ended ? 'Ended' : `Time left: ${timeLeft}`}</span>
+            <span className="mr-2">⌛ {round ? (ended ? 'Ended' : `Time left: ${timeLeft}`) : '—'}</span>
             <span className="mx-2">•</span>
             <a className="underline decoration-dotted" href={explorer(`address/${CONTRACT_ADDRESS}`)} target="_blank" rel="noreferrer">
               View Contract
             </a>
           </div>
+          {!address && (
+            <div className="mt-3">
+              <Button onClick={connectWallet} className="bg-cyan-700 hover:bg-cyan-600">Connect Wallet</Button>
+            </div>
+          )}
         </div>
 
         {/* Status / Errors */}
@@ -440,14 +483,10 @@ export default function RoundDetailPage() {
                   😂 Original Card
                 </CardHeader>
                 <CardContent className="p-5 min-h-[140px]">
-                  {/* Build an approximate creator preview from their submission if present */}
                   <p className="text-center italic text-lg leading-relaxed">
-                    {/* If you want exact creator preview, you can compute it from submissions where addr==creator */}
                     {(() => {
-                      const creatorSub = submissions.find(s => s.addr.toLowerCase() === round.creator.toLowerCase())
-                      if (creatorSub) return creatorSub.preview
-                      // fallback: just show template with default blank
-                      return buildPreviewSingle(round.parts, '', 0)
+                      const creatorSub = submissions.find(s => s.addr?.toLowerCase?.() === round.creator?.toLowerCase?.())
+                      return creatorSub?.preview || buildPreviewSingle(round.parts, '', 0)
                     })()}
                   </p>
                   <div className="mt-3 text-center text-slate-300 text-sm">
@@ -477,6 +516,7 @@ export default function RoundDetailPage() {
                         onChange={(e) => setUsernameInput(e.target.value.slice(0, 32))}
                         placeholder="e.g., frogtown"
                         className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                        disabled={busy}
                       />
                     </label>
 
@@ -495,7 +535,7 @@ export default function RoundDetailPage() {
                                 key={i}
                                 type="button"
                                 onClick={() => !isTaken && setSelectedBlank(i)}
-                                disabled={isTaken}
+                                disabled={isTaken || busy}
                                 className={[
                                   'px-3 py-1 rounded-lg border text-sm',
                                   isTaken
@@ -519,8 +559,10 @@ export default function RoundDetailPage() {
                       <input
                         value={wordInput}
                         onChange={onWordChange}
+                        onBlur={() => setWordInput((w) => sanitizeWord(w))}
                         placeholder="e.g., neon"
                         className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                        disabled={busy || blanksCount === 0}
                       />
                     </label>
                     {inputError && <div className="text-xs text-amber-300">{inputError}</div>}
@@ -550,7 +592,7 @@ export default function RoundDetailPage() {
 
                     <div className="flex flex-wrap items-center gap-3">
                       {!isOnBase && (
-                        <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600">
+                        <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600" disabled={busy}>
                           Switch to Base
                         </Button>
                       )}
@@ -567,13 +609,17 @@ export default function RoundDetailPage() {
                             ? 'That blank is taken'
                             : inputError
                             ? inputError
+                            : busy
+                            ? 'Submitting…'
                             : 'Join this round'
                         }
                       >
-                        Join Round
+                        {busy ? 'Submitting…' : 'Join Round'}
                       </Button>
-                      {alreadyEntered && !ended && (
-                        <span className="text-xs text-amber-300">You already entered this round.</span>
+                      {!address && (
+                        <Button onClick={connectWallet} className="bg-slate-700 hover:bg-slate-600" disabled={busy}>
+                          Connect Wallet
+                        </Button>
                       )}
                       <span className="text-xs text-slate-400">
                         USD is informational. Fees handled on-chain.
@@ -599,7 +645,7 @@ export default function RoundDetailPage() {
                 <div className="flex items-center gap-2">
                   {canFinalize && (
                     <Button onClick={handleFinalizePayout} className="bg-indigo-600 hover:bg-indigo-500" title="Anyone can finalize after the deadline.">
-                      Finalize & Payout
+                      {busy ? 'Finalizing…' : 'Finalize & Payout'}
                     </Button>
                   )}
                   {round.claimed && round.winner && (
@@ -627,7 +673,6 @@ export default function RoundDetailPage() {
               <div className="text-slate-200 mb-3">Entrants ({submissions.length})</div>
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {submissions.map((s, i) => {
-                  // avatar with fallback to /Capitalize.PNG if it fails
                   const primary = `https://effigy.im/a/${s.addr}`
                   return (
                     <div key={`${s.addr}-${i}`} className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
