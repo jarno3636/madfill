@@ -12,12 +12,10 @@ import { Button } from '@/components/ui/button'
 import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
 import Link from 'next/link'
-import Image from 'next/image'
-import { fetchFarcasterProfile } from '@/lib/neynar'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x6975a550130642E5cb67A87BE25c8134542D5a0a' // FillInStoryV3
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // FillInStoryV3 (env wins)
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID_HEX = '0x2105' // 8453 Base
@@ -34,8 +32,8 @@ export default function RoundDetailPage() {
   const [isOnBase, setIsOnBase] = useState(true)
 
   const [round, setRound] = useState(null)
-  const [submissions, setSubmissions] = useState([]) // [{addr, username, wordRaw, word, index, preview}]
-  const [profiles, setProfiles] = useState({}) // addrLower -> {username,pfp_url}
+  const [submissions, setSubmissions] = useState([]) // [{addr, username, word, index, preview}]
+  const [takenSet, setTakenSet] = useState(new Set()) // Set<number>
 
   const [wordInput, setWordInput] = useState('')
   const [usernameInput, setUsernameInput] = useState('')
@@ -56,19 +54,6 @@ export default function RoundDetailPage() {
   const toEth = (wei) => (wei ? Number(ethers.formatEther(wei)) : 0)
   const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
   const explorer = (path) => `https://basescan.org/${path}`
-
-  // Parse stored submission "index::word" or plain "word"
-  function parseStoredWord(stored) {
-    if (!stored) return { index: 0, word: '' }
-    const sep = stored.indexOf('::')
-    if (sep > -1) {
-      const idxRaw = stored.slice(0, sep)
-      const w = stored.slice(sep + 2)
-      const idx = Math.max(0, Math.min(99, Number.parseInt(idxRaw, 10) || 0))
-      return { index: idx, word: w }
-    }
-    return { index: 0, word: stored }
-  }
 
   // need a space if the next chunk doesn't already start with whitespace or punctuation
   const needsSpaceBefore = (str) => {
@@ -102,12 +87,6 @@ export default function RoundDetailPage() {
     return out.join('')
   }
 
-  // Build preview from stored submission value ("index::word" or "word")
-  function buildPreviewFromStored(parts, stored) {
-    const { index, word } = parseStoredWord(stored)
-    return buildPreviewSingle(parts, word, index)
-  }
-
   const ended = useMemo(() => {
     if (!round?.deadline) return false
     return Math.floor(Date.now() / 1000) >= Number(round.deadline)
@@ -139,23 +118,12 @@ export default function RoundDetailPage() {
 
   const blanksCount = useMemo(() => Math.max(0, (round?.parts?.length || 0) - 1), [round?.parts])
 
-  // which blanks are already taken by submissions
-  const takenBlanks = useMemo(() => {
-    if (!submissions?.length || blanksCount === 0) return new Set()
-    const set = new Set()
-    for (const s of submissions) {
-      const idx = Number(s.index ?? 0)
-      if (idx >= 0 && idx < blanksCount) set.add(idx)
-    }
-    return set
-  }, [submissions, blanksCount])
-
-  // auto-pick first available blank on load/change
+  // Auto-pick first available blank whenever taken set updates
   useEffect(() => {
     if (!blanksCount) return
-    const firstOpen = [...Array(blanksCount).keys()].find((i) => !takenBlanks.has(i))
+    const firstOpen = [...Array(blanksCount).keys()].find((i) => !takenSet.has(i))
     if (firstOpen !== undefined) setSelectedBlank(firstOpen)
-  }, [blanksCount, takenBlanks])
+  }, [blanksCount, takenSet])
 
   // ---------- wallet + chain ----------
   useEffect(() => {
@@ -248,57 +216,46 @@ export default function RoundDetailPage() {
         const provider = new ethers.JsonRpcProvider(BASE_RPC)
         const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
 
-        // V3: getPool1Info => (name, theme, parts, feeBase, deadline, creator, participants, winner, claimed, poolBalance)
+        // getPool1Info => (name, theme, parts, feeBase, deadline, creator, participants, winner, claimed, poolBalance)
         const info = await ct.getPool1Info(BigInt(id))
+        const name = info.name_ || info[0]
+        const theme = info.theme_ || info[1]
+        const parts = info.parts_ || info[2]
+        const feeBase = info.feeBase_ ?? info[3]
+        const deadline = Number(info.deadline_ ?? info[4])
+        const creator = info.creator_ || info[5]
+        const participants = info.participants_ || info[6]
+        const winner = info.winner_ || info[7]
+        const claimed = info.claimed_ ?? info[8]
+        const poolBalance = info.poolBalance_ ?? info[9]
 
-        const name = info[0]
-        const theme = info[1]
-        const parts = info[2]
-        const feeBase = info[3] // bigint
-        const deadline = Number(info[4])
-        const creator = info[5]
-        const participants = info[6]
-        const winner = info[7]
-        const claimed = info[8]
-        const poolBalance = info[9] // bigint
+        // Efficient pulls:
+        // 1) All submissions in one call
+        const packed = await ct.getPool1SubmissionsPacked(BigInt(id))
+        const addrs = packed.addrs || packed[0]
+        const usernames = packed.usernames || packed[1]
+        const words = packed.words || packed[2]
+        const blankIdxs = packed.blankIndexes || packed[3]
 
-        // Pull each participant's submission via V3: getPool1Submission(id, addr) => (username, word, submitter)
-        const subms = await Promise.all(
-          participants.map(async (addr) => {
-            const s = await ct.getPool1Submission(BigInt(id), addr)
-            const username = s[0]
-            const wordRaw = s[1]
-            const parsed = parseStoredWord(wordRaw)
-            const preview = buildPreviewSingle(parts, parsed.word, parsed.index)
-            return { addr, username, wordRaw, word: parsed.word, index: parsed.index, preview }
-          })
-        )
+        const subms = (addrs || []).map((addr, i) => {
+          const username = usernames?.[i] || ''
+          const word = words?.[i] || ''
+          const idx = Number(blankIdxs?.[i] ?? 0)
+          return {
+            addr,
+            username,
+            word,
+            index: idx,
+            preview: buildPreviewSingle(parts, word, idx),
+          }
+        })
 
-        const creatorSub = subms.find((s) => s.addr.toLowerCase() === creator.toLowerCase())
-
-        // Prefetch Farcaster profiles (bounded)
-        const toLookup = Array.from(
-          new Set(
-            subms
-              .slice(0, 24)
-              .map((x) => x.addr.toLowerCase())
-              .concat(creator?.toLowerCase() || [])
-              .concat(winner ? winner.toLowerCase() : [])
-          )
-        )
-
-        const profileMap = {}
-        await Promise.all(
-          toLookup.map(async (addr) => {
-            try {
-              const p = await fetchFarcasterProfile(addr)
-              if (p) profileMap[addr] = p
-            } catch {}
-          })
-        )
+        // 2) Which blanks are taken
+        const taken = await ct.getPool1Taken(BigInt(id)) // bool[]
+        const takenSetLocal = new Set((taken || []).map((b, i) => (b ? i : null)).filter((x) => x !== null))
 
         if (cancelled) return
-        setProfiles(profileMap)
+        setTakenSet(takenSetLocal)
         setSubmissions(subms)
         setRound({
           id,
@@ -311,8 +268,7 @@ export default function RoundDetailPage() {
           winner,
           claimed,
           poolBalance,
-          creatorPreview: buildPreviewFromStored(parts, creatorSub?.wordRaw || ''),
-          entrants: participants.length,
+          entrants: participants?.length ?? subms.length,
         })
 
         // clamp any previous selection
@@ -357,12 +313,11 @@ export default function RoundDetailPage() {
     try {
       if (!window?.ethereum) throw new Error('Wallet not found')
       if (!round) throw new Error('Round not ready')
+      if (ended) throw new Error('Round ended')
       if (!wordInput.trim()) throw new Error('Please enter one word')
       if (inputError) throw new Error(inputError)
       if (alreadyEntered) throw new Error('You already entered this round')
-      if (takenBlanks.has(selectedBlank)) throw new Error('That blank is already taken. Pick a different one.')
-
-      const encodedWord = `${selectedBlank}::${wordInput}`
+      if (takenSet.has(selectedBlank)) throw new Error('That blank is already taken. Pick a different one.')
 
       setStatus('Submitting your entry…')
       const provider = new ethers.BrowserProvider(window.ethereum)
@@ -372,15 +327,16 @@ export default function RoundDetailPage() {
         await switchToBase()
       }
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
-      // V3 joinPool1(uint256 id, string word, string username) payable
-      const tx = await ct.joinPool1(BigInt(id), encodedWord, usernameInput || '', { value: round.feeBase })
+      // NEW SIG: joinPool1(uint256 id, string word, string username, uint8 blankIndex) payable
+      const tx = await ct.joinPool1(BigInt(id), wordInput, usernameInput || '', selectedBlank, { value: round.feeBase })
       await tx.wait()
       setStatus('Entry submitted!')
       setShowConfetti(true)
       router.replace(router.asPath)
     } catch (e) {
       console.error(e)
-      setStatus('Join failed')
+      const msg = e?.shortMessage || e?.reason || e?.message || 'Join failed'
+      setStatus(msg.split('\n')[0])
       setShowConfetti(false)
     }
   }
@@ -406,7 +362,8 @@ export default function RoundDetailPage() {
       setTimeout(() => router.replace(router.asPath), 1500)
     } catch (e) {
       console.error(e)
-      setStatus('Finalize failed')
+      const msg = e?.shortMessage || e?.reason || e?.message || 'Finalize failed'
+      setStatus(msg.split('\n')[0])
       setShowConfetti(false)
     }
   }
@@ -422,10 +379,10 @@ export default function RoundDetailPage() {
     !!wordInput.trim() &&
     !inputError &&
     blanksCount > 0 &&
-    !takenBlanks.has(selectedBlank)
+    !takenSet.has(selectedBlank)
   const canFinalize = ended && !round?.claimed && !claimedNow && (round?.entrants || 0) > 0
 
-  // label for blank options: show a tiny context preview around each blank
+  // label for blank options: show context around each blank
   const blankLabels = useMemo(() => {
     const p = round?.parts || []
     const labels = []
@@ -476,29 +433,32 @@ export default function RoundDetailPage() {
         {/* Body */}
         {!loading && !error && round && (
           <>
-            {/* Hero cards */}
+            {/* Hero + Join */}
             <div className="grid md:grid-cols-2 gap-6">
               <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
                 <CardHeader className="text-center font-bold bg-slate-800/60 border-b border-slate-700">
                   😂 Original Card
                 </CardHeader>
                 <CardContent className="p-5 min-h-[140px]">
-                  <p className="text-center italic text-lg leading-relaxed">{round.creatorPreview}</p>
+                  {/* Build an approximate creator preview from their submission if present */}
+                  <p className="text-center italic text-lg leading-relaxed">
+                    {/* If you want exact creator preview, you can compute it from submissions where addr==creator */}
+                    {(() => {
+                      const creatorSub = submissions.find(s => s.addr.toLowerCase() === round.creator.toLowerCase())
+                      if (creatorSub) return creatorSub.preview
+                      // fallback: just show template with default blank
+                      return buildPreviewSingle(round.parts, '', 0)
+                    })()}
+                  </p>
                   <div className="mt-3 text-center text-slate-300 text-sm">
                     by{' '}
                     <a
                       className="underline decoration-dotted"
-                      href={
-                        profiles[round.creator?.toLowerCase()]?.username
-                          ? `https://warpcast.com/${profiles[round.creator?.toLowerCase()]?.username}`
-                          : explorer(`address/${round.creator}`)
-                      }
+                      href={explorer(`address/${round.creator}`)}
                       target="_blank"
                       rel="noreferrer"
                     >
-                      {profiles[round.creator?.toLowerCase()]?.username
-                        ? `@${profiles[round.creator?.toLowerCase()]?.username}`
-                        : shortAddr(round.creator)}
+                      {shortAddr(round.creator)}
                     </a>
                   </div>
                 </CardContent>
@@ -528,7 +488,7 @@ export default function RoundDetailPage() {
                       ) : (
                         <div className="flex flex-wrap gap-2">
                           {[...Array(blanksCount).keys()].map((i) => {
-                            const isTaken = takenBlanks.has(i)
+                            const isTaken = takenSet.has(i)
                             const isActive = selectedBlank === i
                             return (
                               <button
@@ -546,7 +506,7 @@ export default function RoundDetailPage() {
                                 ].join(' ')}
                                 title={isTaken ? 'Already taken by another entry' : `Insert into Blank #${i + 1}`}
                               >
-                                #{i + 1} {isTaken ? '— Taken' : ''}
+                                #{i + 1}
                               </button>
                             )
                           })}
@@ -584,7 +544,7 @@ export default function RoundDetailPage() {
                       </span>
                     </div>
 
-                    {blanksCount > 0 && takenBlanks.size === blanksCount && (
+                    {blanksCount > 0 && takenSet.size === blanksCount && (
                       <div className="text-xs text-amber-300">All blanks are already taken for this round.</div>
                     )}
 
@@ -603,7 +563,7 @@ export default function RoundDetailPage() {
                             ? 'Round ended'
                             : alreadyEntered
                             ? 'You already entered'
-                            : takenBlanks.has(selectedBlank)
+                            : takenSet.has(selectedBlank)
                             ? 'That blank is taken'
                             : inputError
                             ? inputError
@@ -647,17 +607,11 @@ export default function RoundDetailPage() {
                       Winner:{' '}
                       <a
                         className="underline decoration-dotted"
-                        href={
-                          profiles[round.winner?.toLowerCase()]?.username
-                            ? `https://warpcast.com/${profiles[round.winner?.toLowerCase()]?.username}`
-                            : explorer(`address/${round.winner}`)
-                        }
+                        href={explorer(`address/${round.winner}`)}
                         target="_blank"
                         rel="noreferrer"
                       >
-                        {profiles[round.winner?.toLowerCase()]?.username
-                          ? `@${profiles[round.winner?.toLowerCase()]?.username}`
-                          : shortAddr(round.winner)}
+                        {shortAddr(round.winner)}
                       </a>
                     </span>
                   )}
@@ -673,32 +627,23 @@ export default function RoundDetailPage() {
               <div className="text-slate-200 mb-3">Entrants ({submissions.length})</div>
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {submissions.map((s, i) => {
-                  const p = profiles[s.addr.toLowerCase()]
-                  const name = p?.username ? `@${p.username}` : s.username || shortAddr(s.addr)
-                  const avatar = p?.pfp_url || `https://effigy.im/a/${s.addr}`
-                  const wcMsg = `gm ${p?.username ? `@${p.username}` : shortAddr(s.addr)} — saw your entry in MadFill round #${id}!`
+                  // avatar with fallback to /Capitalize.PNG if it fails
+                  const primary = `https://effigy.im/a/${s.addr}`
                   return (
                     <div key={`${s.addr}-${i}`} className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
                       <div className="flex items-center gap-2">
-                        <Image
-                          src={avatar}
+                        <img
+                          src={primary}
                           alt="avatar"
                           width={28}
                           height={28}
                           className="rounded-full ring-1 ring-slate-700"
+                          onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
                         />
-                        <div className="truncate text-sm">{name}</div>
+                        <div className="truncate text-sm">{s.username || shortAddr(s.addr)}</div>
                       </div>
                       <div className="mt-2 text-xs italic line-clamp-3">{s.preview}</div>
                       <div className="mt-2 flex items-center gap-3 text-[11px]">
-                        <a
-                          className="underline text-purple-300"
-                          target="_blank"
-                          rel="noreferrer"
-                          href={`https://warpcast.com/~/compose?text=${encodeURIComponent(wcMsg)}`}
-                        >
-                          Message
-                        </a>
                         <a
                           className="underline text-slate-300"
                           target="_blank"
