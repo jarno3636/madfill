@@ -18,7 +18,7 @@ import Link from 'next/link'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x6975a550130642E5cb67A87BE25c8134542D5a0a' // FillInStoryV3
+  '0x6975a550130642E5cb67A87BE25c8134542D5a0a' // fallback
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID_HEX = '0x2105' // 8453 Base
@@ -74,7 +74,7 @@ export default function Home() {
     const n = parts?.length || 0
     if (n === 0) return ''
     const blanks = Math.max(0, n - 1)
-    const iSel = Math.max(0, Math.min(Math.max(0, blanks - 1), idx || 0))
+    const iSel = Math.max(0, Math.min(Math.max(0, blanks - 1), idx ?? 0))
     const out = []
     for (let i = 0; i < n; i++) {
       out.push(parts[i] || '')
@@ -94,31 +94,14 @@ export default function Home() {
     return out.join('')
   }
 
+  // one token, letters/numbers/_/-, max 16 chars
   function sanitizeWord(raw) {
-    // one token, letters/numbers/_/-, max 16 chars
     const token = (raw || '')
       .trim()
       .split(' ')[0]
       .replace(/[^a-zA-Z0-9\-_]/g, '')
       .slice(0, 16)
     return token
-  }
-
-  function parseStoredWord(stored) {
-    if (!stored) return { index: 0, word: '' }
-    const sep = stored.indexOf('::')
-    if (sep > -1) {
-      const idxRaw = stored.slice(0, sep)
-      const w = stored.slice(sep + 2)
-      const idx = Math.max(0, Math.min(99, Number.parseInt(idxRaw, 10) || 0))
-      return { index: idx, word: w }
-    }
-    return { index: 0, word: stored }
-  }
-
-  function buildPreviewFromStored(parts, stored) {
-    const { index, word } = parseStoredWord(stored)
-    return buildPreviewSingle(parts, word, index)
   }
 
   // wallet + chain
@@ -189,7 +172,7 @@ export default function Home() {
     })()
   }, [address])
 
-  // featured pools (latest N)
+  // featured pools (latest N) — updated to use separate blankIndex from ABI
   useEffect(() => {
     let cancelled = false
     setLoadingFeatured(true)
@@ -220,11 +203,13 @@ export default function Home() {
           const claimed = info[8]
           const poolBalance = info[9]
 
-          // original submission from creator for preview
+          // getPool1Submission(id, creator) returns (username, word, submitter, uint8 blankIndex)
           let creatorPreview = ''
           try {
             const sub = await ct.getPool1Submission(BigInt(id), creator)
-            creatorPreview = buildPreviewFromStored(parts, sub[1])
+            const word = sub[1]
+            const bIdx = Number(sub[3] ?? 0)
+            creatorPreview = buildPreviewSingle(parts, word, bIdx)
           } catch {}
 
           rows.push({
@@ -242,7 +227,7 @@ export default function Home() {
           })
         }
 
-        // simple sort: newest first (already), but bump ones with bigger pool
+        // newest first (already), but bump ones with bigger pool
         rows.sort((a, b) => (b.poolEth - a.poolEth) || (b.id - a.id))
 
         if (!cancelled) setFeatured(rows)
@@ -256,8 +241,12 @@ export default function Home() {
     return () => { cancelled = true }
   }, [])
 
-  const preview = useMemo(() => buildPreviewSingle(tpl.parts, sanitizeWord(word), blankIndex), [tpl.parts, word, blankIndex])
+  const preview = useMemo(
+    () => buildPreviewSingle(tpl.parts, sanitizeWord(word), blankIndex),
+    [tpl.parts, word, blankIndex]
+  )
 
+  // create round — UPDATED to pass blankIndex separately (per ABI)
   async function handleCreateRound() {
     const cleanWord = sanitizeWord(word)
     if (!cleanWord) {
@@ -265,7 +254,8 @@ export default function Home() {
       log('Invalid word')
       return
     }
-    if ((tpl?.parts?.length || 0) !== (tpl?.blanks || 0) + 1) {
+    const expectedBlanks = Math.max(0, (tpl?.parts?.length || 0) - 1)
+    if (expectedBlanks !== (tpl?.blanks || 0)) {
       setStatus('Template error: parts must equal blanks + 1.')
       log('Template mismatch')
       return
@@ -288,22 +278,23 @@ export default function Home() {
       }
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
-      // encode as "index::word" so other pages can render it in the right blank
-      const encodedWord = `${blankIndex}::${cleanWord}`
-
       const feeBase = ethers.parseUnits(String(feeEth), 18) // ETH on Base
       const value = (feeBase * 1005n) / 1000n // tiny buffer
 
       log(`Creating round "${roundName || 'Untitled'}"...`)
-      // createPool1(string name, string theme, string[] parts, string word, string username, uint256 feeBase, uint256 duration) payable
+      // createPool1(
+      //   string name, string theme, string[] parts,
+      //   string word, string username, uint256 feeBase, uint256 duration, uint8 blankIndex
+      // ) payable
       const tx = await ct.createPool1(
         roundName || 'Untitled',
         selectedCategory.name,
         tpl.parts.map((p) => p.trim()),
-        encodedWord,
+        cleanWord,
         profile?.username || 'anon',
         feeBase,
         BigInt(duration * 86400),
+        Number(blankIndex),
         { value }
       )
       const rc = await tx.wait()
@@ -560,7 +551,11 @@ export default function Home() {
 
             {/* Share */}
             <div className="pt-2">
-              <ShareBar url={roundUrl} text={shareText} embedUrl={roundUrl} />
+              <ShareBar
+                url={roundId ? `${origin}/round/${roundId}` : origin}
+                text={roundId ? `I just created a MadFill round! Join Round #${roundId}.` : `Play MadFill on Base.`}
+                embedUrl={roundId ? `${origin}/round/${roundId}` : origin}
+              />
             </div>
 
             {/* Logs */}
