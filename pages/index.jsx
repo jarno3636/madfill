@@ -3,6 +3,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import Head from 'next/head'
+import Link from 'next/link'
 import { ethers } from 'ethers'
 import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
@@ -14,22 +15,21 @@ import Layout from '@/components/Layout'
 import Footer from '@/components/Footer'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 import ShareBar from '@/components/ShareBar'
-import Link from 'next/link'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x6975a550130642E5cb67A87BE25c8134542D5a0a' // fallback
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
-const BASE_CHAIN_ID_HEX = '0x2105' // 8453 Base
+const BASE_CHAIN_ID_HEX = '0x2105' // 8453
 const FEATURED_TAKE = 9
 
 export default function Home() {
   const [status, setStatus] = useState('')
-  const [logs, setLogs] = useState([])
-  const loggerRef = useRef(null)
+  const [logs, setLogs] = useState<string[]>([])
+  const loggerRef = useRef<HTMLDivElement | null>(null)
 
-  const [address, setAddress] = useState(null)
+  const [address, setAddress] = useState<string | null>(null)
   const [isOnBase, setIsOnBase] = useState(true)
 
   const [roundId, setRoundId] = useState('')
@@ -40,13 +40,13 @@ export default function Home() {
 
   const [word, setWord] = useState('')
   const [duration, setDuration] = useState(durations[0].value)
-  const [feeEth, setFeeEth] = useState(0.01) // entry fee in ETH on Base
+  const [feeEth, setFeeEth] = useState(0.01) // entry fee in ETH (Base)
   const [busy, setBusy] = useState(false)
 
-  const [profile, setProfile] = useState(null)
+  const [profile, setProfile] = useState<any>(null)
   const [showConfetti, setShowConfetti] = useState(false)
 
-  const [featured, setFeatured] = useState([])
+  const [featured, setFeatured] = useState<any[]>([])
   const [loadingFeatured, setLoadingFeatured] = useState(true)
 
   const { width, height } = useWindowSize()
@@ -54,28 +54,26 @@ export default function Home() {
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx] // { name, parts, blanks }
 
-  // utils
-  const log = (msg) => {
+  // --- utils ---
+  const log = (msg: string) => {
     setLogs((prev) => [...prev, msg])
     setTimeout(() => {
-      if (loggerRef.current) {
-        loggerRef.current.scrollTop = loggerRef.current.scrollHeight
-      }
+      if (loggerRef.current) loggerRef.current.scrollTop = loggerRef.current.scrollHeight
     }, 50)
   }
 
-  const needsSpaceBefore = (str) => {
+  const needsSpaceBefore = (str: string) => {
     if (!str) return false
     const ch = str[0]
     return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
   }
 
-  function buildPreviewSingle(parts, w, idx) {
+  function buildPreviewSingle(parts: string[], w: string, idx: number) {
     const n = parts?.length || 0
     if (n === 0) return ''
     const blanks = Math.max(0, n - 1)
-    const iSel = Math.max(0, Math.min(Math.max(0, blanks - 1), idx ?? 0))
-    const out = []
+    const iSel = Math.max(0, Math.min(Math.max(0, blanks - 1), idx || 0))
+    const out: string[] = []
     for (let i = 0; i < n; i++) {
       out.push(parts[i] || '')
       if (i < n - 1) {
@@ -94,8 +92,8 @@ export default function Home() {
     return out.join('')
   }
 
-  // one token, letters/numbers/_/-, max 16 chars
-  function sanitizeWord(raw) {
+  function sanitizeWord(raw: string) {
+    // one token, letters/numbers/_/-, max 16 chars
     const token = (raw || '')
       .trim()
       .split(' ')[0]
@@ -104,24 +102,28 @@ export default function Home() {
     return token
   }
 
-  // wallet + chain
+  // --- wallet + chain ---
   useEffect(() => {
     if (!window?.ethereum) return
     let cancelled = false
     ;(async () => {
       try {
-        const accts = await window.ethereum.request({ method: 'eth_requestAccounts' })
-        if (!cancelled) setAddress(accts?.[0] || null)
-      } catch {}
-      try {
         const provider = new ethers.BrowserProvider(window.ethereum)
+        const accts = await provider.listAccounts()
+        const addr =
+          (Array.isArray(accts) && (accts[0] as any)?.address) ||
+          (Array.isArray(accts) && (accts[0] as any)) ||
+          null
+        if (!cancelled) setAddress(addr)
+
         const net = await provider.getNetwork()
         if (!cancelled) setIsOnBase(net?.chainId === 8453n)
       } catch {
         if (!cancelled) setIsOnBase(true)
       }
+
       const onChain = () => location.reload()
-      const onAcct = (accs) => setAddress(accs?.[0] || null)
+      const onAcct = (accs: string[]) => setAddress(accs?.[0] || null)
       window.ethereum.on?.('chainChanged', onChain)
       window.ethereum.on?.('accountsChanged', onAcct)
       return () => {
@@ -129,8 +131,20 @@ export default function Home() {
         window.ethereum.removeListener?.('accountsChanged', onAcct)
       }
     })()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [])
+
+  async function connectWallet() {
+    if (!window?.ethereum) {
+      setStatus('No wallet detected.')
+      return
+    }
+    const provider = new ethers.BrowserProvider(window.ethereum)
+    const accts = await provider.send('eth_requestAccounts', [])
+    setAddress(accts?.[0] || null)
+  }
 
   async function switchToBase() {
     if (!window?.ethereum) return
@@ -140,18 +154,20 @@ export default function Home() {
         params: [{ chainId: BASE_CHAIN_ID_HEX }],
       })
       setIsOnBase(true)
-    } catch (e) {
+    } catch (e: any) {
       if (e?.code === 4902) {
         try {
           await window.ethereum.request({
             method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: BASE_CHAIN_ID_HEX,
-              chainName: 'Base',
-              rpcUrls: [BASE_RPC],
-              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-              blockExplorerUrls: ['https://basescan.org'],
-            }],
+            params: [
+              {
+                chainId: BASE_CHAIN_ID_HEX,
+                chainName: 'Base',
+                rpcUrls: [BASE_RPC],
+                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+                blockExplorerUrls: ['https://basescan.org'],
+              },
+            ],
           })
           setIsOnBase(true)
         } catch (err) {
@@ -161,7 +177,7 @@ export default function Home() {
     }
   }
 
-  // profile flair
+  // profile flair (optional)
   useEffect(() => {
     if (!address) return
     ;(async () => {
@@ -172,7 +188,7 @@ export default function Home() {
     })()
   }, [address])
 
-  // featured pools (latest N) — updated to use separate blankIndex from ABI
+  // featured pools (latest N)
   useEffect(() => {
     let cancelled = false
     setLoadingFeatured(true)
@@ -186,10 +202,10 @@ export default function Home() {
           return
         }
         const start = Math.max(1, total - FEATURED_TAKE + 1)
-        const ids = []
+        const ids: number[] = []
         for (let i = total; i >= start; i--) ids.push(i)
 
-        const rows = []
+        const rows: any[] = []
         for (const id of ids) {
           const info = await ct.getPool1Info(BigInt(id))
           const name = info[0]
@@ -203,21 +219,25 @@ export default function Home() {
           const claimed = info[8]
           const poolBalance = info[9]
 
-          // getPool1Submission(id, creator) returns (username, word, submitter, uint8 blankIndex)
+          // original submission from creator for preview
           let creatorPreview = ''
           try {
             const sub = await ct.getPool1Submission(BigInt(id), creator)
-            const word = sub[1]
-            const bIdx = Number(sub[3] ?? 0)
-            creatorPreview = buildPreviewSingle(parts, word, bIdx)
-          } catch {}
+            // V3 stores (username, word, submitter, blankIndex) — but your ABI may differ;
+            // safely render a generic preview:
+            const storedWord = sub[1]
+            const bIndex = Number(sub[3] ?? 0)
+            creatorPreview = buildPreviewSingle(parts, storedWord, bIndex)
+          } catch {
+            creatorPreview = buildPreviewSingle(parts, '', 0)
+          }
 
           rows.push({
             id,
             name: name || `Round #${id}`,
             theme,
             parts,
-            preview: creatorPreview || buildPreviewSingle(parts, '', 0),
+            preview: creatorPreview,
             entrants: participants.length,
             feeEth: Number(ethers.formatEther(feeBase || 0n)),
             poolEth: Number(ethers.formatEther(poolBalance || 0n)),
@@ -227,9 +247,7 @@ export default function Home() {
           })
         }
 
-        // newest first (already), but bump ones with bigger pool
         rows.sort((a, b) => (b.poolEth - a.poolEth) || (b.id - a.id))
-
         if (!cancelled) setFeatured(rows)
       } catch (e) {
         console.error('Featured fetch failed', e)
@@ -238,15 +256,17 @@ export default function Home() {
         if (!cancelled) setLoadingFeatured(false)
       }
     })()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const preview = useMemo(
-    () => buildPreviewSingle(tpl.parts, sanitizeWord(word), blankIndex),
+    () => buildPreviewSingle(tpl.parts, sanitizeWord(word), Number(blankIndex)),
     [tpl.parts, word, blankIndex]
   )
 
-  // create round — UPDATED to pass blankIndex separately (per ABI)
+  // --- CREATE ROUND (fixed: pass blankIndex as arg) ---
   async function handleCreateRound() {
     const cleanWord = sanitizeWord(word)
     if (!cleanWord) {
@@ -254,8 +274,7 @@ export default function Home() {
       log('Invalid word')
       return
     }
-    const expectedBlanks = Math.max(0, (tpl?.parts?.length || 0) - 1)
-    if (expectedBlanks !== (tpl?.blanks || 0)) {
+    if ((tpl?.parts?.length || 0) !== (tpl?.blanks || 0) + 1) {
       setStatus('Template error: parts must equal blanks + 1.')
       log('Template mismatch')
       return
@@ -264,12 +283,17 @@ export default function Home() {
       setStatus('No wallet detected.')
       return
     }
+    if (!address) {
+      setStatus('Please connect your wallet first.')
+      return
+    }
 
     try {
       setBusy(true)
       setStatus('')
       log('Connecting wallet...')
       const provider = new ethers.BrowserProvider(window.ethereum)
+      await provider.send('eth_requestAccounts', [])
       const signer = await provider.getSigner()
       const net = await provider.getNetwork()
       if (net?.chainId !== 8453n) {
@@ -279,17 +303,14 @@ export default function Home() {
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
       const feeBase = ethers.parseUnits(String(feeEth), 18) // ETH on Base
-      const value = (feeBase * 1005n) / 1000n // tiny buffer
+      const value = (feeBase * 1005n) / 1000n // tiny buffer for rounding
 
       log(`Creating round "${roundName || 'Untitled'}"...`)
-      // createPool1(
-      //   string name, string theme, string[] parts,
-      //   string word, string username, uint256 feeBase, uint256 duration, uint8 blankIndex
-      // ) payable
+      // createPool1(name, theme, parts, word, username, feeBase, duration, blankIndex) payable
       const tx = await ct.createPool1(
         roundName || 'Untitled',
         selectedCategory.name,
-        tpl.parts.map((p) => p.trim()),
+        tpl.parts.map((p: string) => p.trim()),
         cleanWord,
         profile?.username || 'anon',
         feeBase,
@@ -299,14 +320,13 @@ export default function Home() {
       )
       const rc = await tx.wait()
 
-      // find Pool1Created event
+      // try to pull id from event
       let newId = ''
       try {
-        const evt = rc.logs?.find((l) => l.fragment?.name === 'Pool1Created')
+        const evt = rc.logs?.find((l: any) => l.fragment?.name === 'Pool1Created')
         if (evt?.args?.id) newId = evt.args.id.toString()
       } catch {}
       if (!newId) {
-        // fallback: read pool1Count
         const providerR = new ethers.JsonRpcProvider(BASE_RPC)
         const ctR = new ethers.Contract(CONTRACT_ADDRESS, abi, providerR)
         newId = String(await ctR.pool1Count())
@@ -316,9 +336,9 @@ export default function Home() {
       setShowConfetti(true)
       log(`Round #${newId} created.`)
       setStatus('Success!')
-    } catch (err) {
+    } catch (err: any) {
       console.error(err)
-      setStatus('' + (err?.shortMessage || err?.message || 'Failed to create round'))
+      setStatus(err?.shortMessage || err?.message || 'Failed to create round')
       log('Create failed')
     } finally {
       setBusy(false)
@@ -332,10 +352,14 @@ export default function Home() {
     ? `I just created a MadFill round! Join Round #${roundId}.`
     : `Play MadFill on Base.`
 
-  const blankPill = (active) =>
+  // expanded, wrap-friendly pill
+  const blankPill = (active: boolean) =>
     [
-      'inline-flex items-center justify-center w-8 h-7 text-center border-b-2 font-bold cursor-pointer mx-1 rounded',
-      active ? 'border-yellow-300 text-yellow-200 bg-yellow-300/10' : 'border-slate-400 text-slate-200 bg-slate-700/40'
+      'inline-block align-baseline px-2 py-0.5 rounded border font-bold mx-1',
+      'whitespace-pre break-words', // let long words wrap
+      active
+        ? 'border-yellow-300 text-yellow-200 bg-yellow-300/10'
+        : 'border-slate-400 text-slate-200 bg-slate-700/40 hover:bg-slate-700/60'
     ].join(' ')
 
   return (
@@ -360,6 +384,11 @@ export default function Home() {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              {!address && (
+                <Button onClick={connectWallet} className="bg-cyan-700 hover:bg-cyan-600">
+                  Connect Wallet
+                </Button>
+              )}
               {!isOnBase && (
                 <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600">
                   Switch to Base
@@ -452,11 +481,11 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Preview with blank picker */}
+            {/* Preview with blank picker (wrap-friendly) */}
             <div className="rounded-xl bg-slate-800/60 border border-slate-700 p-4">
               <div className="text-slate-300 text-sm mb-2">Card preview</div>
-              <div className="text-base leading-relaxed">
-                {tpl.parts.map((p, i) => (
+              <div className="text-base leading-relaxed whitespace-pre-wrap break-words">
+                {tpl.parts.map((p: string, i: number) => (
                   <span key={i}>
                     {p}
                     {i < tpl.parts.length - 1 && (
@@ -530,6 +559,11 @@ export default function Home() {
 
             {/* Submit */}
             <div className="flex flex-wrap items-center gap-3">
+              {!address && (
+                <Button onClick={connectWallet} className="bg-cyan-700 hover:bg-cyan-600">
+                  Connect Wallet
+                </Button>
+              )}
               {!isOnBase && (
                 <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600">
                   Switch to Base
@@ -537,7 +571,7 @@ export default function Home() {
               )}
               <Button
                 onClick={handleCreateRound}
-                disabled={busy || !word}
+                disabled={busy || !word || !address}
                 className="bg-indigo-600 hover:bg-indigo-500"
               >
                 Create round and submit
@@ -551,11 +585,7 @@ export default function Home() {
 
             {/* Share */}
             <div className="pt-2">
-              <ShareBar
-                url={roundId ? `${origin}/round/${roundId}` : origin}
-                text={roundId ? `I just created a MadFill round! Join Round #${roundId}.` : `Play MadFill on Base.`}
-                embedUrl={roundId ? `${origin}/round/${roundId}` : origin}
-              />
+              <ShareBar url={roundUrl} text={shareText} embedUrl={roundUrl} />
             </div>
 
             {/* Logs */}
@@ -647,7 +677,7 @@ export default function Home() {
                 <div className="text-2xl">🏆</div>
                 <div className="font-semibold mt-1">Prize pool</div>
                 <div className="text-slate-300 mt-1">
-                  99.5% of each entry goes straight into the pool. Winner takes the pool when the round ends.
+                  99.5% of each entry goes straight into the pool. Winner takes it when the round ends.
                 </div>
               </div>
               <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
