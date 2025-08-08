@@ -8,9 +8,10 @@ export const durations = [
   { label: '5 Days', value: 5 },
   { label: '6 Days', value: 6 },
   { label: '1 Week', value: 7 },
-];
+]
 
-export const categories = [
+// --- raw categories as authored (don’t worry about blanks accuracy here) ---
+const RAW_CATEGORIES = [
   {
     name: 'Cryptocurrency',
     templates: [
@@ -37,6 +38,7 @@ export const categories = [
         ]
       },
       {
+        // NOTE: this one had only 5 parts but blanks:5 — we’ll auto-derive blanks
         id: 'crypto3', name: 'HODL Story', blanks: 5,
         parts: [
           'I bought ',
@@ -146,6 +148,7 @@ export const categories = [
         ]
       },
       {
+        // NOTE: this had only 5 parts vs blanks:5; we’ll derive blanks
         id: 'pop2', name: 'Movie Tagline', blanks: 5,
         parts: [
           'In a world where ',
@@ -477,9 +480,7 @@ export const categories = [
     name: 'Technology',
     templates: [
       {
-        id: 'tech1',
-        name: 'AI Assistant',
-        blanks: 5,
+        id: 'tech1', name: 'AI Assistant', blanks: 5,
         parts: [
           'My AI assistant can now ',
           ' my ',
@@ -490,9 +491,7 @@ export const categories = [
         ]
       },
       {
-        id: 'tech2',
-        name: 'Startup Pitch',
-        blanks: 5,
+        id: 'tech2', name: 'Startup Pitch', blanks: 5,
         parts: [
           'We’re building a platform that ',
           ' the way people ',
@@ -502,9 +501,7 @@ export const categories = [
         ]
       },
       {
-        id: 'tech3',
-        name: 'Gadget Review',
-        blanks: 5,
+        id: 'tech3', name: 'Gadget Review', blanks: 5,
         parts: [
           'The new ',
           ' boasts a ',
@@ -515,9 +512,7 @@ export const categories = [
         ]
       },
       {
-        id: 'tech4',
-        name: 'Cybersecurity Alert',
-        blanks: 4,
+        id: 'tech4', name: 'Cybersecurity Alert', blanks: 4,
         parts: [
           'A recent breach exposed ',
           ' accounts, exploited a ',
@@ -527,9 +522,7 @@ export const categories = [
         ]
       },
       {
-        id: 'tech5',
-        name: 'Space Tech',
-        blanks: 5,
+        id: 'tech5', name: 'Space Tech', blanks: 5,
         parts: [
           'By 2030, rockets will be able to ',
           ' payloads of ',
@@ -545,8 +538,7 @@ export const categories = [
     name: 'Frog Lore',
     templates: [
       {
-        name: 'Toad Prophecy',
-        blanks: 3,
+        id: 'frog1', name: 'Toad Prophecy', blanks: 3,
         parts: [
           'The sacred toad shall rise on the ',
           ', bearing the ',
@@ -555,8 +547,7 @@ export const categories = [
         ]
       },
       {
-        name: "Toby's Quest",
-        blanks: 4,
+        id: 'frog2', name: "Toby's Quest", blanks: 4,
         parts: [
           'In the marshes of ',
           ', young Toby found a ',
@@ -572,8 +563,7 @@ export const categories = [
     name: 'Classic Fun',
     templates: [
       {
-        name: 'Birthday Bash',
-        blanks: 3,
+        id: 'classic1', name: 'Birthday Bash', blanks: 3,
         parts: [
           'I went to a birthday party and ate ',
           ', danced with a ',
@@ -582,8 +572,7 @@ export const categories = [
         ]
       },
       {
-        name: 'Embarrassing Day',
-        blanks: 3,
+        id: 'classic2', name: 'Embarrassing Day', blanks: 3,
         parts: [
           'It was the most embarrassing moment when I slipped on a ',
           ', landed in a ',
@@ -598,8 +587,7 @@ export const categories = [
     name: 'Holidays',
     templates: [
       {
-        name: 'Frosty Chaos',
-        blanks: 3,
+        id: 'hol1', name: 'Frosty Chaos', blanks: 3,
         parts: [
           'This holiday, I decorated the tree with ',
           ', fed Santa a ',
@@ -608,8 +596,7 @@ export const categories = [
         ]
       },
       {
-        name: 'New Year Plan',
-        blanks: 4,
+        id: 'hol2', name: 'New Year Plan', blanks: 4,
         parts: [
           'In 2025, I vow to ',
           ', avoid ',
@@ -625,8 +612,7 @@ export const categories = [
     name: 'Spooky Season',
     templates: [
       {
-        name: "Witch's Brew",
-        blanks: 3,
+        id: 'spooky1', name: "Witch's Brew", blanks: 3,
         parts: [
           'In the cauldron we stirred ',
           ', mixed in ',
@@ -635,8 +621,7 @@ export const categories = [
         ]
       },
       {
-        name: 'Haunted House',
-        blanks: 4,
+        id: 'spooky2', name: 'Haunted House', blanks: 4,
         parts: [
           'Inside the haunted house I saw a ',
           ', heard a ',
@@ -652,8 +637,7 @@ export const categories = [
     name: 'Summer',
     templates: [
       {
-        name: 'Beach Day',
-        blanks: 3,
+        id: 'sum1', name: 'Beach Day', blanks: 3,
         parts: [
           'We built a sandcastle with ',
           ', chased crabs with a ',
@@ -662,8 +646,7 @@ export const categories = [
         ]
       },
       {
-        name: 'Sunburn Saga',
-        blanks: 4,
+        id: 'sum2', name: 'Sunburn Saga', blanks: 4,
         parts: [
           'I forgot sunscreen and ended up looking like a ',
           ', hiding under a ',
@@ -679,8 +662,7 @@ export const categories = [
     name: 'Fantasy',
     templates: [
       {
-        name: "Dragon's Lair",
-        blanks: 4,
+        id: 'fan1', name: "Dragon's Lair", blanks: 4,
         parts: [
           'The knight drew their ',
           ', mounted a ',
@@ -690,8 +672,7 @@ export const categories = [
         ]
       },
       {
-        name: 'Wizard Mishap',
-        blanks: 3,
+        id: 'fan2', name: 'Wizard Mishap', blanks: 3,
         parts: [
           'The spell backfired, turning my wand into a ',
           ', summoning a ',
@@ -706,8 +687,7 @@ export const categories = [
     name: 'AI & Robots',
     templates: [
       {
-        name: 'Bot Apocalypse',
-        blanks: 4,
+        id: 'ai1', name: 'Bot Apocalypse', blanks: 4,
         parts: [
           'The robots rose up with ',
           ', marched through ',
@@ -717,8 +697,7 @@ export const categories = [
         ]
       },
       {
-        name: 'AI Roommate',
-        blanks: 3,
+        id: 'ai2', name: 'AI Roommate', blanks: 3,
         parts: [
           'My AI roommate makes ',
           ', argues about ',
@@ -733,8 +712,7 @@ export const categories = [
     name: 'Shower Thoughts',
     templates: [
       {
-        name: 'Deep Realization',
-        blanks: 3,
+        id: 'shower1', name: 'Deep Realization', blanks: 3,
         parts: [
           'While washing my hair, I realized that ',
           ', means ',
@@ -743,8 +721,7 @@ export const categories = [
         ]
       },
       {
-        name: 'Toothbrush Paradox',
-        blanks: 3,
+        id: 'shower2', name: 'Toothbrush Paradox', blanks: 3,
         parts: [
           'I’ve been using a ',
           ', brushing with ',
@@ -755,3 +732,57 @@ export const categories = [
     ]
   }
 ]
+
+// --- helpers: normalize + validate ---
+function normalizeCategories(cats) {
+  return cats.map(cat => ({
+    ...cat,
+    templates: (cat.templates || []).map(t => {
+      const parts = (t.parts || []).map(p => (typeof p === 'string' ? p : String(p || '')))
+      const blanks = Math.max(0, parts.length - 1)
+      return {
+        id: t.id || `${cat.name}-${t.name}`.toLowerCase().replace(/\s+/g, '-'),
+        name: t.name || 'Untitled',
+        parts,
+        blanks, // derived, authoritative
+      }
+    })
+  }))
+}
+
+/**
+ * Validate that each template has parts.length = blanks+1,
+ * and that parts are non-empty strings.
+ * Returns an array of human-friendly issue strings.
+ */
+export function validateTemplates(categories = CATEGORIES) {
+  const issues = []
+  categories.forEach(cat => {
+    (cat.templates || []).forEach(t => {
+      const expected = (t.parts?.length || 0) - 1
+      if (t.blanks !== expected) {
+        issues.push(`Template "${t.name}" (${t.id}) in category "${cat.name}": blanks=${t.blanks} but should be ${expected}.`)
+      }
+      if (!Array.isArray(t.parts) || t.parts.length < 2) {
+        issues.push(`Template "${t.name}" (${t.id}) in category "${cat.name}": must have at least 2 parts.`)
+      }
+    })
+  })
+  return issues
+}
+
+// Export normalized categories (blanks derived)
+export const categories = normalizeCategories(RAW_CATEGORIES)
+
+// Convenience getters
+export function getTemplateById(id) {
+  for (const cat of categories) {
+    const t = (cat.templates || []).find(x => x.id === id)
+    if (t) return t
+  }
+  return null
+}
+
+export function getAllTemplates() {
+  return categories.flatMap(c => c.templates.map(t => ({ ...t, category: c.name })))
+}
