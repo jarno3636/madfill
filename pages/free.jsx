@@ -42,17 +42,16 @@ export default function FreeGame() {
   const [submitted, setSubmitted] = useState(false)
   const [profile, setProfile] = useState(null)
   const [showConfetti, setShowConfetti] = useState(false)
+  const [copied, setCopied] = useState(false)
   const { width, height } = useWindowSize()
 
-  // data wiring
   const category = categories[catIdx] || { name: 'General', templates: [] }
   const template = category.templates[tplIdx] || { parts: [], blanks: 0, name: 'Untitled' }
 
-  // profile flair
   useEffect(() => {
     async function loadProfile() {
       try {
-        const fid = localStorage.getItem('fc_fid')
+        const fid = typeof window !== 'undefined' ? localStorage.getItem('fc_fid') : null
         if (fid) {
           const p = await fetchFarcasterProfile(fid)
           setProfile(p)
@@ -62,7 +61,6 @@ export default function FreeGame() {
     loadProfile()
   }, [])
 
-  // read URL params for remix links (?c=0&t=2&w=foo,bar)
   useEffect(() => {
     if (typeof window === 'undefined') return
     const u = new URL(window.location.href)
@@ -70,14 +68,15 @@ export default function FreeGame() {
     const t = Number(u.searchParams.get('t') || '0')
     const wordsParam = u.searchParams.get('w') || ''
     const safeCat = Number.isFinite(c) ? Math.max(0, Math.min(categories.length - 1, c)) : 0
-    const safeTpl = Number.isFinite(t) ? Math.max(0, Math.min((categories[safeCat]?.templates.length || 1) - 1, t)) : 0
+    const safeTpl = Number.isFinite(t)
+      ? Math.max(0, Math.min((categories[safeCat]?.templates.length || 1) - 1, t))
+      : 0
     setCatIdx(safeCat)
     setTplIdx(safeTpl)
     const blanks = categories[safeCat]?.templates?.[safeTpl]?.blanks || 0
     setWords(parseWordsParam(wordsParam, blanks))
   }, [])
 
-  // keep URL in sync (so shares include the card)
   useEffect(() => {
     if (typeof window === 'undefined') return
     const blanks = template.blanks
@@ -92,7 +91,6 @@ export default function FreeGame() {
     return Array.from({ length: template.blanks }).every((_, i) => !!sanitizeWord(words[i]))
   }, [template.blanks, words])
 
-  // pretty plain-text for shares
   const filledText = useMemo(() => {
     const out = []
     for (let i = 0; i < template.parts.length; i++) {
@@ -103,7 +101,11 @@ export default function FreeGame() {
   }, [template, words])
 
   const origin = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
-  const pageUrl = `${origin}/free`
+  const permalink = useMemo(() => {
+    if (typeof window === 'undefined') return `${origin}/free`
+    return window.location.href
+  }, [origin, catIdx, tplIdx, words, template.blanks])
+
   const shareText = `I just played the Free MadFill Game!\n\n${filledText}\n\nPlay free:`
 
   function handleWordChange(i, val) {
@@ -121,7 +123,6 @@ export default function FreeGame() {
   }
 
   function surpriseMe() {
-    // silly but safe: pick random short tokens
     const tokens = ['neon', 'taco', 'llama', 'vibe', 'sprocket', 'laser', 'bop', 'glow', 'noodle', 'vortex', 'biscuit', 'snack', 'jazz', 'pixel', 'dino', 'meta']
     const next = {}
     for (let i = 0; i < template.blanks; i++) {
@@ -140,13 +141,23 @@ export default function FreeGame() {
     setSubmitted(false)
   }
 
+  async function copyToClipboard() {
+    try {
+      await navigator.clipboard.writeText(filledText)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      alert('Failed to copy')
+    }
+  }
+
   return (
     <Layout>
       <Head>
         <title>Free Game — MadFill</title>
         <meta property="og:title" content="Play the Free MadFill Game!" />
         <meta property="og:description" content="Create, laugh, and share your own fill-in-the-blank card. No wallet needed!" />
-        <meta property="og:url" content={pageUrl} />
+        <meta property="og:url" content={permalink} />
         <meta property="og:image" content="https://madfill.vercel.app/api/og?free=1" />
         <meta name="twitter:card" content="summary_large_image" />
         {profile?.username && <meta name="fc:creator" content={`@${profile.username}`} />}
@@ -241,9 +252,22 @@ export default function FreeGame() {
             </div>
 
             {/* Preview */}
-            <div className="rounded-xl bg-slate-800/60 border border-slate-700 p-4">
-              <div className="text-slate-300 text-sm mb-2">Live preview</div>
+            <div className="rounded-xl bg-slate-800/60 border border-slate-700 p-4 space-y-3">
+              <div className="text-slate-300 text-sm">Live preview</div>
               <StyledCard parts={template.parts} blanks={template.blanks} words={words} />
+
+              {/* Copy text button */}
+              {allWordsFilled && (
+                <div>
+                  <Button
+                    onClick={copyToClipboard}
+                    className="bg-slate-700 hover:bg-slate-600 w-full"
+                    type="button"
+                  >
+                    {copied ? '✅ Copied!' : '📋 Copy text'}
+                  </Button>
+                </div>
+              )}
             </div>
 
             {/* Actions */}
@@ -264,14 +288,18 @@ export default function FreeGame() {
                   </div>
                   {profile && (
                     <div className="flex items-center gap-2 mt-3 text-sm text-yellow-200">
-                      <img src={profile.pfp_url} alt="Avatar" className="w-6 h-6 rounded-full border border-white" />
+                      <img
+                        src={profile.pfp_url || '/Capitalize.PNG'}
+                        alt="Avatar"
+                        className="w-6 h-6 rounded-full border border-white"
+                        onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
+                      />
                       <span>Shared by @{profile.username}</span>
                     </div>
                   )}
                 </div>
 
-                {/* Share bar */}
-                <ShareBar url={pageUrl} text={shareText} embedUrl={pageUrl} />
+                <ShareBar url={permalink} text={shareText} embedUrl={permalink} />
 
                 <div className="flex flex-wrap gap-2">
                   <Button onClick={handleRemix} className="bg-slate-700 hover:bg-slate-600" type="button">
