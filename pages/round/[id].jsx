@@ -1,3 +1,12 @@
+Awesome—here’s the full updated pages/round/[id].jsx with:
+	•	Clean spacing between inserted word and next template token
+	•	One-word input (max 16 chars, safe chars), live validation
+	•	User picks which blank to fill; taken blanks are disabled
+	•	Encodes selection as index::word when submitting (backward compatible)
+	•	Parses old/new submissions to render the right preview
+
+Just paste this over your current file. 👇
+
 // pages/round/[id].jsx
 'use client'
 
@@ -34,11 +43,13 @@ export default function RoundDetailPage() {
   const [isOnBase, setIsOnBase] = useState(true)
 
   const [round, setRound] = useState(null)
-  const [submissions, setSubmissions] = useState([]) // [{addr, username, word, preview}]
+  const [submissions, setSubmissions] = useState([]) // [{addr, username, wordRaw, word, index, preview}]
   const [profiles, setProfiles] = useState({}) // addrLower -> {username,pfp_url}
 
   const [wordInput, setWordInput] = useState('')
   const [usernameInput, setUsernameInput] = useState('')
+  const [selectedBlank, setSelectedBlank] = useState(0)
+  const [inputError, setInputError] = useState('')
   const [status, setStatus] = useState('')
 
   const [priceUsd, setPriceUsd] = useState(3800) // ETH-USD fallback
@@ -55,19 +66,55 @@ export default function RoundDetailPage() {
   const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
   const explorer = (path) => `https://basescan.org/${path}`
 
-  const buildPreview = (parts, wordOrWords) => {
-    const words = (wordOrWords || '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
-    const pieces = []
-    for (let i = 0; i < (parts?.length || 0); i++) {
-      pieces.push(parts[i] || '')
-      if (i < (parts?.length || 0) - 1) {
-        pieces.push(words[i] || '____')
+  // Parse stored submission "index::word" or plain "word"
+  function parseStoredWord(stored) {
+    if (!stored) return { index: 0, word: '' }
+    const sep = stored.indexOf('::')
+    if (sep > -1) {
+      const idxRaw = stored.slice(0, sep)
+      const w = stored.slice(sep + 2)
+      const idx = Math.max(0, Math.min(99, Number.parseInt(idxRaw, 10) || 0))
+      return { index: idx, word: w }
+    }
+    return { index: 0, word: stored }
+  }
+
+  // need a space if the next chunk doesn't already start with whitespace or punctuation
+  const needsSpaceBefore = (str) => {
+    if (!str) return false
+    const ch = str[0]
+    return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
+  }
+
+  // Build preview for a single chosen blank (others as ____), with smart spacing.
+  function buildPreviewSingle(parts, word, blankIndex) {
+    const n = parts?.length || 0
+    if (n === 0) return ''
+    const blanks = Math.max(0, n - 1)
+    const idx = Math.max(0, Math.min(Math.max(0, blanks - 1), blankIndex || 0))
+    const out = []
+    for (let i = 0; i < n; i++) {
+      out.push(parts[i] || '')
+      if (i < n - 1) {
+        if (i === idx) {
+          if (word) {
+            out.push(word)
+            if (needsSpaceBefore(parts[i + 1] || '')) out.push(' ')
+          } else {
+            out.push('____')
+          }
+        } else {
+          out.push('____')
+        }
       }
     }
-    return pieces.join('')
+    return out.join('')
+  }
+
+  // Build preview from stored submission value ("index::word" or "word")
+  function buildPreviewFromStored(parts, stored) {
+    const { index, word } = parseStoredWord(stored)
+    return buildPreviewSingle(parts, word, index)
   }
 
   const ended = useMemo(() => {
@@ -98,6 +145,26 @@ export default function RoundDetailPage() {
     if (m > 0) return `${m}m ${sec}s`
     return `${sec}s`
   }, [round?.deadline, status])
+
+  const blanksCount = useMemo(() => Math.max(0, (round?.parts?.length || 0) - 1), [round?.parts])
+
+  // which blanks are already taken by submissions
+  const takenBlanks = useMemo(() => {
+    if (!submissions?.length || blanksCount === 0) return new Set()
+    const set = new Set()
+    for (const s of submissions) {
+      const idx = Number(s.index ?? 0)
+      if (idx >= 0 && idx < blanksCount) set.add(idx)
+    }
+    return set
+  }, [submissions, blanksCount])
+
+  // auto-pick first available blank on load/change
+  useEffect(() => {
+    if (!blanksCount) return
+    const firstOpen = [...Array(blanksCount).keys()].find((i) => !takenBlanks.has(i))
+    if (firstOpen !== undefined) setSelectedBlank(firstOpen)
+  }, [blanksCount, takenBlanks])
 
   // ---------- wallet + chain ----------
   useEffect(() => {
@@ -211,9 +278,10 @@ export default function RoundDetailPage() {
           participants.map(async (addr) => {
             const s = await ct.getPool1Submission(BigInt(id), addr)
             const username = s[0]
-            const word = s[1]
-            const preview = buildPreview(parts, word)
-            return { addr, username, word, preview }
+            const wordRaw = s[1]
+            const parsed = parseStoredWord(wordRaw)
+            const preview = buildPreviewSingle(parts, parsed.word, parsed.index)
+            return { addr, username, wordRaw, word: parsed.word, index: parsed.index, preview }
           })
         )
 
@@ -254,9 +322,12 @@ export default function RoundDetailPage() {
           winner,
           claimed,
           poolBalance,
-          creatorPreview: buildPreview(parts, creatorSub?.word || ''),
+          creatorPreview: buildPreviewFromStored(parts, creatorSub?.wordRaw || ''),
           entrants: participants.length,
         })
+
+        // clamp any previous selection
+        setSelectedBlank((prev) => Math.min(Math.max(prev, 0), Math.max(0, parts.length - 2)))
       } catch (e) {
         console.error(e)
         if (!cancelled) setError(e?.shortMessage || e?.message || 'Failed to load round')
@@ -270,13 +341,39 @@ export default function RoundDetailPage() {
     }
   }, [id])
 
+  // ---------- input handling ----------
+  function sanitizeWord(raw) {
+    // allow letters, numbers, hyphen, underscore; single token; max 16 chars
+    const token = (raw || '')
+      .replace(/\s+/g, ' ') // collapse spaces
+      .trim()
+      .split(' ')[0] // first token only
+      .replace(/[^a-zA-Z0-9\-_]/g, '') // strip other chars
+      .slice(0, 16)
+    return token
+  }
+
+  function onWordChange(e) {
+    const clean = sanitizeWord(e.target.value)
+    setWordInput(clean)
+    if (!clean) {
+      setInputError('Please enter one word (max 16 chars).')
+    } else {
+      setInputError('')
+    }
+  }
+
   // ---------- actions (V3) ----------
   async function handleJoin() {
     try {
       if (!window?.ethereum) throw new Error('Wallet not found')
-      if (!wordInput.trim()) throw new Error('Please enter at least one word')
       if (!round) throw new Error('Round not ready')
+      if (!wordInput.trim()) throw new Error('Please enter one word')
+      if (inputError) throw new Error(inputError)
       if (alreadyEntered) throw new Error('You already entered this round')
+      if (takenBlanks.has(selectedBlank)) throw new Error('That blank is already taken. Pick a different one.')
+
+      const encodedWord = `${selectedBlank}::${wordInput}`
 
       setStatus('Submitting your entry…')
       const provider = new ethers.BrowserProvider(window.ethereum)
@@ -287,7 +384,7 @@ export default function RoundDetailPage() {
       }
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
       // V3 joinPool1(uint256 id, string word, string username) payable
-      const tx = await ct.joinPool1(BigInt(id), wordInput, usernameInput || '', { value: round.feeBase })
+      const tx = await ct.joinPool1(BigInt(id), encodedWord, usernameInput || '', { value: round.feeBase })
       await tx.wait()
       setStatus('✅ Entry submitted!')
       setShowConfetti(true)
@@ -330,8 +427,27 @@ export default function RoundDetailPage() {
   const poolEth = toEth(round?.poolBalance)
   const feeUsd = feeEth * priceUsd
   const poolUsd = poolEth * priceUsd
-  const canJoin = !ended && !alreadyEntered && !!wordInput.trim()
+  const canJoin =
+    !ended &&
+    !alreadyEntered &&
+    !!wordInput.trim() &&
+    !inputError &&
+    blanksCount > 0 &&
+    !takenBlanks.has(selectedBlank)
   const canFinalize = ended && !round?.claimed && !claimedNow && (round?.entrants || 0) > 0
+
+  // label for blank options: show a tiny context preview around each blank
+  const blankLabels = useMemo(() => {
+    const p = round?.parts || []
+    const labels = []
+    const blanks = Math.max(0, p.length - 1)
+    for (let i = 0; i < blanks; i++) {
+      const left = (p[i] || '').trim().slice(-10)
+      const right = (p[i + 1] || '').trim().slice(0, 10)
+      labels.push(`Blank #${i + 1} — “…${left} ____ ${right}…”`)
+    }
+    return labels
+  }, [round?.parts])
 
   return (
     <Layout>
@@ -414,19 +530,57 @@ export default function RoundDetailPage() {
                         className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                       />
                     </label>
+
+                    {/* Blank picker */}
+                    <div className="space-y-2">
+                      <div className="text-sm text-slate-300">Choose a blank</div>
+                      {blanksCount === 0 ? (
+                        <div className="text-xs text-amber-300">This template has no blanks.</div>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {[...Array(blanksCount).keys()].map((i) => {
+                            const isTaken = takenBlanks.has(i)
+                            const isActive = selectedBlank === i
+                            return (
+                              <button
+                                key={i}
+                                type="button"
+                                onClick={() => !isTaken && setSelectedBlank(i)}
+                                disabled={isTaken}
+                                className={[
+                                  'px-3 py-1 rounded-lg border text-sm',
+                                  isTaken
+                                    ? 'bg-slate-800/40 border-slate-700 text-slate-500 cursor-not-allowed'
+                                    : isActive
+                                    ? 'bg-indigo-600 border-indigo-500 text-white'
+                                    : 'bg-slate-800/70 border-slate-700 text-slate-200 hover:bg-slate-700/70'
+                                ].join(' ')}
+                                title={isTaken ? 'Already taken by another entry' : `Insert into Blank #${i + 1}`}
+                              >
+                                #{i + 1} {isTaken ? '— Taken' : ''}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+
                     <label className="block text-sm text-slate-300">
-                      Your word(s) (comma-separated for multiple blanks)
+                      Your word (single word, max 16 chars)
                       <input
                         value={wordInput}
-                        onChange={(e) => setWordInput(e.target.value)}
-                        placeholder="e.g., neon, sandwich, galaxy"
+                        onChange={onWordChange}
+                        placeholder="e.g., neon"
                         className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                       />
                     </label>
+                    {inputError && <div className="text-xs text-amber-300">{inputError}</div>}
 
                     <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3 text-sm">
                       <div className="text-slate-300">Preview</div>
-                      <div className="mt-1 italic">{buildPreview(round.parts, wordInput)}</div>
+                      <div className="mt-1 italic">
+                        {buildPreviewSingle(round.parts, wordInput, selectedBlank)}
+                      </div>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -440,6 +594,10 @@ export default function RoundDetailPage() {
                         Prize Pool: {fmt(poolEth, 6)} ETH (~${fmt(poolUsd)})
                       </span>
                     </div>
+
+                    {blanksCount > 0 && takenBlanks.size === blanksCount && (
+                      <div className="text-xs text-amber-300">All blanks are already taken for this round.</div>
+                    )}
 
                     <div className="flex flex-wrap items-center gap-3">
                       {!isOnBase && (
@@ -456,6 +614,10 @@ export default function RoundDetailPage() {
                             ? 'Round ended'
                             : alreadyEntered
                             ? 'You already entered'
+                            : takenBlanks.has(selectedBlank)
+                            ? 'That blank is taken'
+                            : inputError
+                            ? inputError
                             : 'Join this round'
                         }
                       >
@@ -613,3 +775,5 @@ export default function RoundDetailPage() {
     </Layout>
   )
 }
+
+Want me to push the same parser/preview to /active, /vote, and /myrounds so index::word never leaks raw anywhere?
