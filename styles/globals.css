@@ -3,4 +3,36 @@
 @tailwind components;
 @tailwind utilities;
 
-/* custom overrides if needed */
+/* Global font & background settings */
+html, body {
+  @apply bg-gradient-to-br from-slate-950 via-indigo-950 to-purple-950 text-white antialiased;
+  font-family: 'Inter', sans-serif;
+}
+
+/* Headings & text smoothness */
+h1, h2, h3, h4, h5, h6 {
+  @apply tracking-tight;
+}
+
+a {
+  @apply transition-colors duration-200;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-slate-900;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-indigo-700 rounded-full;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-indigo-500;
+}
+
+/* Utility: neon glow for buttons & special elements */
+.neon-glow {
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.7), 0 0 20px rgba(99, 102, 241, 0.5);
+}
