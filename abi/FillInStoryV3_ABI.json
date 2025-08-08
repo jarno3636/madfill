@@ -65,6 +65,12 @@
         "internalType": "address",
         "name": "winner",
         "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "amount",
+        "type": "uint256"
       }
     ],
     "name": "Pool1Claimed",
@@ -84,6 +90,18 @@
         "internalType": "address",
         "name": "creator",
         "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "deadline",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "feeBase",
+        "type": "uint256"
       }
     ],
     "name": "Pool1Created",
@@ -103,6 +121,18 @@
         "internalType": "address",
         "name": "user",
         "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint8",
+        "name": "blankIndex",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "word",
+        "type": "string"
       }
     ],
     "name": "Pool1Joined",
@@ -122,6 +152,18 @@
         "internalType": "bool",
         "name": "challengerWon",
         "type": "bool"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "perWinner",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "winnersCount",
+        "type": "uint256"
       }
     ],
     "name": "Pool2Claimed",
@@ -147,6 +189,18 @@
         "internalType": "address",
         "name": "challenger",
         "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "deadline",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "feeBase",
+        "type": "uint256"
       }
     ],
     "name": "Pool2Created",
@@ -172,6 +226,12 @@
         "internalType": "bool",
         "name": "votedChallenger",
         "type": "bool"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "value",
+        "type": "uint256"
       }
     ],
     "name": "Pool2Voted",
@@ -265,6 +325,11 @@
         "internalType": "uint256",
         "name": "duration",
         "type": "uint256"
+      },
+      {
+        "internalType": "uint8",
+        "name": "blankIndex",
+        "type": "uint8"
       }
     ],
     "name": "createPool1",
@@ -330,53 +395,72 @@
     "outputs": [
       {
         "internalType": "string",
-        "name": "",
+        "name": "name_",
         "type": "string"
       },
       {
         "internalType": "string",
-        "name": "",
+        "name": "theme_",
         "type": "string"
       },
       {
         "internalType": "string[]",
-        "name": "",
+        "name": "parts_",
         "type": "string[]"
       },
       {
         "internalType": "uint256",
-        "name": "",
+        "name": "feeBase_",
         "type": "uint256"
       },
       {
         "internalType": "uint256",
-        "name": "",
+        "name": "deadline_",
         "type": "uint256"
       },
       {
         "internalType": "address",
-        "name": "",
+        "name": "creator_",
         "type": "address"
       },
       {
         "internalType": "address[]",
-        "name": "",
+        "name": "participants_",
         "type": "address[]"
       },
       {
         "internalType": "address",
-        "name": "",
+        "name": "winner_",
         "type": "address"
       },
       {
         "internalType": "bool",
-        "name": "",
+        "name": "claimed_",
         "type": "bool"
       },
       {
         "internalType": "uint256",
-        "name": "",
+        "name": "poolBalance_",
         "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      }
+    ],
+    "name": "getPool1Participants",
+    "outputs": [
+      {
+        "internalType": "address[]",
+        "name": "",
+        "type": "address[]"
       }
     ],
     "stateMutability": "view",
@@ -399,18 +483,76 @@
     "outputs": [
       {
         "internalType": "string",
-        "name": "",
+        "name": "username",
         "type": "string"
       },
       {
         "internalType": "string",
-        "name": "",
+        "name": "word",
         "type": "string"
       },
       {
         "internalType": "address",
-        "name": "",
+        "name": "submitter",
         "type": "address"
+      },
+      {
+        "internalType": "uint8",
+        "name": "blankIndex",
+        "type": "uint8"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      }
+    ],
+    "name": "getPool1SubmissionsPacked",
+    "outputs": [
+      {
+        "internalType": "address[]",
+        "name": "addrs",
+        "type": "address[]"
+      },
+      {
+        "internalType": "string[]",
+        "name": "usernames",
+        "type": "string[]"
+      },
+      {
+        "internalType": "string[]",
+        "name": "words",
+        "type": "string[]"
+      },
+      {
+        "internalType": "uint8[]",
+        "name": "blankIndexes",
+        "type": "uint8[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      }
+    ],
+    "name": "getPool1Taken",
+    "outputs": [
+      {
+        "internalType": "bool[]",
+        "name": "taken",
+        "type": "bool[]"
       }
     ],
     "stateMutability": "view",
@@ -428,47 +570,140 @@
     "outputs": [
       {
         "internalType": "uint256",
-        "name": "",
+        "name": "originalPool1Id",
         "type": "uint256"
       },
       {
         "internalType": "string",
-        "name": "",
+        "name": "challengerWord",
         "type": "string"
       },
       {
         "internalType": "string",
-        "name": "",
+        "name": "challengerUsername",
         "type": "string"
       },
       {
         "internalType": "address",
-        "name": "",
+        "name": "challenger",
         "type": "address"
       },
       {
         "internalType": "uint256",
-        "name": "",
+        "name": "votersOriginalCount",
         "type": "uint256"
       },
       {
         "internalType": "uint256",
-        "name": "",
+        "name": "votersChallengerCount",
         "type": "uint256"
       },
       {
         "internalType": "bool",
-        "name": "",
+        "name": "claimed",
         "type": "bool"
       },
       {
         "internalType": "bool",
-        "name": "",
+        "name": "challengerWon",
         "type": "bool"
       },
       {
         "internalType": "uint256",
-        "name": "",
+        "name": "poolBalance",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      }
+    ],
+    "name": "getPool2InfoFull",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "originalPool1Id",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "challengerWord",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "challengerUsername",
+        "type": "string"
+      },
+      {
+        "internalType": "address",
+        "name": "challenger",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "votersOriginalCount",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "votersChallengerCount",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bool",
+        "name": "claimed",
+        "type": "bool"
+      },
+      {
+        "internalType": "bool",
+        "name": "challengerWon",
+        "type": "bool"
+      },
+      {
+        "internalType": "uint256",
+        "name": "poolBalance",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "feeBase",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "deadline",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      }
+    ],
+    "name": "getPool2Tallies",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "votersOriginal",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "votersChallenger",
         "type": "uint256"
       }
     ],
@@ -492,7 +727,7 @@
       },
       {
         "internalType": "uint256[]",
-        "name": "pool2Votes",
+        "name": "pool2Votes_",
         "type": "uint256[]"
       }
     ],
@@ -515,6 +750,11 @@
         "internalType": "string",
         "name": "username",
         "type": "string"
+      },
+      {
+        "internalType": "uint8",
+        "name": "blankIndex",
+        "type": "uint8"
       }
     ],
     "name": "joinPool1",
@@ -564,6 +804,32 @@
   {
     "inputs": [],
     "name": "renounceOwnership",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "newFeeBps",
+        "type": "uint256"
+      }
+    ],
+    "name": "setFeeBps",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "wallet",
+        "type": "address"
+      }
+    ],
+    "name": "setFeeWallet",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
