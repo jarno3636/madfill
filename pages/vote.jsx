@@ -1,5 +1,7 @@
 // pages/vote.jsx
-import { useEffect, useState } from 'react'
+'use client'
+
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
 import Layout from '@/components/Layout'
@@ -9,221 +11,530 @@ import abi from '@/abi/FillInStoryV3_ABI.json'
 import { useWindowSize } from 'react-use'
 import Confetti from 'react-confetti'
 import Link from 'next/link'
-import CompareCards from '@/components/CompareCards'
+
+// ---- Config ----
+const CONTRACT_ADDRESS =
+  process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
+  '0x6975a550130642E5cb67A87BE25c8134542D5a0a' // FillInStoryV3
+
+const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+const BASE_CHAIN_ID_HEX = '0x2105' // 8453
+// IMPORTANT: V3 does not expose Pool2 feeBase in views. Set it here for your app:
+const VOTE_FEE_WEI =
+  (process.env.NEXT_PUBLIC_POOL2_VOTE_FEE_WEI && BigInt(process.env.NEXT_PUBLIC_POOL2_VOTE_FEE_WEI)) ||
+  // fallback: 0.0005 ETH
+  (ethers.parseUnits ? ethers.parseUnits('0.0005', 18) : BigInt('500000000000000'))
 
 export default function VotePage() {
-  const [rounds, setRounds] = useState([])
+  // state
+  const [rounds, setRounds] = useState([]) // array of Pool2 "cards" with original/challenger previews
   const [loading, setLoading] = useState(true)
   const [status, setStatus] = useState('')
   const [address, setAddress] = useState(null)
+  const [isOnBase, setIsOnBase] = useState(true)
   const [success, setSuccess] = useState(false)
   const [claimedId, setClaimedId] = useState(null)
   const [filter, setFilter] = useState('all')
   const [sortBy, setSortBy] = useState('recent')
-  const { width, height } = useWindowSize()
+  const [priceUsd, setPriceUsd] = useState(3800)
 
-  useEffect(() => {
-    if (window.ethereum) {
-      window.ethereum
-        .request({ method: 'eth_requestAccounts' })
-        .then(accounts => setAddress(accounts[0]))
-        .catch(console.error)
+  const { width, height } = useWindowSize()
+  const tickRef = useRef(null)
+
+  // ---- utils ----
+  const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
+  const toEth = (wei) => (wei ? Number(ethers.formatEther(wei)) : 0)
+  const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
+  const explorer = (path) => `https://basescan.org/${path}`
+
+  function parseStoredWord(stored) {
+    if (!stored) return { index: 0, word: '' }
+    const sep = stored.indexOf('::')
+    if (sep > -1) {
+      const idxRaw = stored.slice(0, sep)
+      const w = stored.slice(sep + 2)
+      const idx = Math.max(0, Math.min(99, Number.parseInt(idxRaw, 10) || 0))
+      return { index: idx, word: w }
     }
+    return { index: 0, word: stored }
+  }
+  const needsSpaceBefore = (str) => {
+    if (!str) return false
+    const ch = str[0]
+    return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
+  }
+  function buildPreviewSingle(parts, word, blankIndex) {
+    const n = parts?.length || 0
+    if (n === 0) return ''
+    const blanks = Math.max(0, n - 1)
+    const idx = Math.max(0, Math.min(Math.max(0, blanks - 1), blankIndex || 0))
+    const out = []
+    for (let i = 0; i < n; i++) {
+      out.push(parts[i] || '')
+      if (i < n - 1) {
+        if (i === idx) {
+          if (word) {
+            out.push(word)
+            if (needsSpaceBefore(parts[i + 1] || '')) out.push(' ')
+          } else {
+            out.push('____')
+          }
+        } else {
+          out.push('____')
+        }
+      }
+    }
+    return out.join('')
+  }
+  function buildPreviewFromStored(parts, stored) {
+    const { index, word } = parseStoredWord(stored)
+    return buildPreviewSingle(parts, word, index)
+  }
+
+  // ---- wallet / chain ----
+  useEffect(() => {
+    if (!window?.ethereum) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const accts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+        if (!cancelled) setAddress(accts?.[0] || null)
+      } catch {}
+      try {
+        const provider = new ethers.BrowserProvider(window.ethereum)
+        const net = await provider.getNetwork()
+        if (!cancelled) setIsOnBase(net?.chainId === 8453n)
+      } catch {
+        if (!cancelled) setIsOnBase(true)
+      }
+      const onChain = () => location.reload()
+      const onAcct = (accs) => setAddress(accs?.[0] || null)
+      window.ethereum.on?.('chainChanged', onChain)
+      window.ethereum.on?.('accountsChanged', onAcct)
+      return () => {
+        window.ethereum.removeListener?.('chainChanged', onChain)
+        window.ethereum.removeListener?.('accountsChanged', onAcct)
+      }
+    })()
+    return () => { cancelled = true }
   }, [])
 
+  async function switchToBase() {
+    if (!window?.ethereum) return
+    try {
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: BASE_CHAIN_ID_HEX }],
+      })
+      setIsOnBase(true)
+    } catch (e) {
+      if (e?.code === 4902) {
+        try {
+          await window.ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: BASE_CHAIN_ID_HEX,
+              chainName: 'Base',
+              rpcUrls: [BASE_RPC],
+              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+              blockExplorerUrls: ['https://basescan.org'],
+            }],
+          })
+          setIsOnBase(true)
+        } catch (err) {
+          console.error(err)
+        }
+      }
+    }
+  }
+
+  // ---- price + ticker ----
   useEffect(() => {
     ;(async () => {
-      setLoading(true)
       try {
-        const contractAddr = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
-        const rpcUrl = process.env.NEXT_PUBLIC_ALCHEMY_URL
-        const alchemy = new ethers.JsonRpcProvider(rpcUrl)
-        const fallback = new ethers.FallbackProvider([
-          alchemy,
-          new ethers.JsonRpcProvider('https://mainnet.base.org'),
-        ])
-        const ct = new ethers.Contract(contractAddr, abi, fallback)
+        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
+        const j = await r.json()
+        setPriceUsd(j?.ethereum?.usd || 3800)
+      } catch {
+        setPriceUsd(3800)
+      }
+    })()
+    tickRef.current = setInterval(() => setStatus((s) => (s ? s : '')), 1000)
+    return () => clearInterval(tickRef.current)
+  }, [])
 
-        const count = await ct.pool2Count()
-        const now = Math.floor(Date.now() / 1000)
-        const priceRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=base&vs_currencies=usd')
-        const basePrice = (await priceRes.json()).base.usd
+  // ---- load Pool2 list + previews ----
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
 
-        const result = []
-        for (let i = 1; i <= count; i++) {
-          const info = await ct.getPool2Info(i)
-          const deadline = Number(info[6])
-          const claimed = info[10]
-          const winner = info[7]
-          const pool = Number(info[4]) / 1e18
-          const usd = (pool * basePrice).toFixed(2)
-          const vP = Number(info[8])
-          const vF = Number(info[9])
-          const userVotedWinner = address?.toLowerCase() === winner?.toLowerCase()
+    ;(async () => {
+      try {
+        const provider = new ethers.JsonRpcProvider(BASE_RPC)
+        const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
 
-          result.push({
-            id: i,
-            deadline,
+        const p2Count = Number(await ct.pool2Count())
+
+        const cards = []
+        for (let id = 1; id <= p2Count; id++) {
+          const info = await ct.getPool2Info(BigInt(id))
+          // getPool2Info returns:
+          // (originalPool1Id, challengerWord, challengerUsername, challenger, votersOriginal, votersChallenger, claimed, challengerWon, poolBalance)
+          const originalPool1Id = Number(info[0])
+          const challengerWordRaw = info[1]
+          const challengerUsername = info[2]
+          const challengerAddr = info[3]
+          const votersOriginal = Number(info[4])
+          const votersChallenger = Number(info[5])
+          const claimed = info[6]
+          const challengerWon = info[7]
+          const poolBalance = info[8]
+
+          // Get the original Pool1's template+creator word to display "Original" preview
+          const p1 = await ct.getPool1Info(BigInt(originalPool1Id))
+          const parts = p1[2]
+          const creatorAddr = p1[5]
+          const p1CreatorSub = await ct.getPool1Submission(BigInt(originalPool1Id), creatorAddr)
+          const originalWordRaw = p1CreatorSub[1]
+
+          const originalPreview = buildPreviewFromStored(parts, originalWordRaw)
+          const challengerPreview = buildPreviewFromStored(parts, challengerWordRaw)
+
+          const poolEth = toEth(poolBalance)
+          const poolUsd = poolEth * priceUsd
+
+          cards.push({
+            id,
+            originalPool1Id,
+            parts,
+            // original side
+            originalPreview,
+            originalWordRaw,
+            // challenger side
+            challengerPreview,
+            challengerWordRaw,
+            challengerUsername,
+            challengerAddr,
+            // meta
+            votersOriginal,
+            votersChallenger,
             claimed,
-            winner,
-            isEnded: now > deadline,
-            base: pool.toFixed(4),
-            usd,
-            vP,
-            vF,
-            totalVotes: vP + vF,
-            close: Math.abs(vP - vF) <= 2,
-            big: pool > 5,
-            userVotedWinner,
+            challengerWon,
+            poolEth,
+            poolUsd,
           })
         }
 
-        setRounds(result)
+        if (cancelled) return
+        setRounds(cards)
       } catch (e) {
         console.error('Error loading vote rounds', e)
-        setRounds([])
+        if (!cancelled) setRounds([])
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     })()
-  }, [address])
 
-  async function vote(id, supportPaid) {
+    return () => { cancelled = true }
+  }, [priceUsd])
+
+  // ---- actions ----
+  async function votePool2(id, voteChallenger) {
     try {
-      if (!address) throw new Error('Connect your wallet first')
-      setStatus('⏳ Submitting vote…')
+      if (!window?.ethereum) throw new Error('Wallet not found')
+      setStatus('Submitting vote…')
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer = await provider.getSigner()
-      const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
-      const tx = await ct.vote2(BigInt(id), supportPaid, {
-        value: ethers.parseEther('0.001'),
-      })
+      const net = await provider.getNetwork()
+      if (net?.chainId !== 8453n) await switchToBase()
+      const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
+      // V3: votePool2(uint256 id, bool voteChallenger) payable
+      const tx = await ct.votePool2(BigInt(id), Boolean(voteChallenger), { value: VOTE_FEE_WEI })
       await tx.wait()
       setStatus('✅ Vote recorded!')
       setSuccess(true)
-      setTimeout(() => setSuccess(false), 3000)
+      // quick reload the card
+      reloadCard(id).catch(() => {})
+      setTimeout(() => setSuccess(false), 1500)
     } catch (e) {
       console.error(e)
-      const msg = e?.message?.split('(')[0] || 'Vote failed'
-      setStatus('❌ ' + msg)
+      setStatus('❌ ' + (e?.shortMessage || e?.message || 'Vote failed'))
+      setSuccess(false)
     }
   }
 
-  async function claim(id) {
+  async function reloadCard(id) {
     try {
-      setStatus('⏳ Claiming prize…')
+      const provider = new ethers.JsonRpcProvider(BASE_RPC)
+      const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
+      const info = await ct.getPool2Info(BigInt(id))
+      const originalPool1Id = Number(info[0])
+      const challengerWordRaw = info[1]
+      const challengerUsername = info[2]
+      const challengerAddr = info[3]
+      const votersOriginal = Number(info[4])
+      const votersChallenger = Number(info[5])
+      const claimed = info[6]
+      const challengerWon = info[7]
+      const poolBalance = info[8]
+
+      const p1 = await ct.getPool1Info(BigInt(originalPool1Id))
+      const parts = p1[2]
+      const creatorAddr = p1[5]
+      const p1CreatorSub = await ct.getPool1Submission(BigInt(originalPool1Id), creatorAddr)
+      const originalWordRaw = p1CreatorSub[1]
+
+      const poolEth = toEth(poolBalance)
+      const poolUsd = poolEth * priceUsd
+
+      setRounds((prev) =>
+        prev.map((r) =>
+          r.id === id
+            ? {
+                ...r,
+                originalPool1Id,
+                parts,
+                originalPreview: buildPreviewFromStored(parts, originalWordRaw),
+                originalWordRaw,
+                challengerPreview: buildPreviewFromStored(parts, challengerWordRaw),
+                challengerWordRaw,
+                challengerUsername,
+                challengerAddr,
+                votersOriginal,
+                votersChallenger,
+                claimed,
+                challengerWon,
+                poolEth,
+                poolUsd,
+              }
+            : r
+        )
+      )
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  async function claimPool2(id) {
+    try {
+      if (!window?.ethereum) throw new Error('Wallet not found')
+      setStatus('Claiming…')
       const provider = new ethers.BrowserProvider(window.ethereum)
       const signer = await provider.getSigner()
-      const ct = new ethers.Contract(process.env.NEXT_PUBLIC_FILLIN_ADDRESS, abi, signer)
+      const net = await provider.getNetwork()
+      if (net?.chainId !== 8453n) await switchToBase()
+      const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
+      // V3: claimPool2(uint256 id)
       const tx = await ct.claimPool2(BigInt(id))
       await tx.wait()
       setClaimedId(id)
-      setStatus('✅ Prize claimed!')
-      setTimeout(() => setClaimedId(null), 3000)
+      setStatus('✅ Claimed!')
+      await reloadCard(id)
+      setTimeout(() => setClaimedId(null), 1500)
     } catch (err) {
       console.error('Claim failed:', err)
-      setStatus('❌ Error claiming prize')
+      setStatus('❌ ' + (err?.shortMessage || err?.message || 'Error claiming prize'))
     }
   }
 
-  const filtered = rounds.filter(r => {
-    if (filter === 'high') return r.totalVotes >= 10
-    if (filter === 'close') return r.close
-    if (filter === 'big') return Number(r.usd) > 5
-    return true
-  })
+  // ---- filters / sorts ----
+  const filtered = useMemo(() => {
+    return rounds.filter((r) => {
+      if (filter === 'big') return r.poolUsd > 25 // tweak threshold
+      if (filter === 'tight') return Math.abs(r.votersOriginal - r.votersChallenger) <= 2
+      if (filter === 'claimed') return r.claimed
+      if (filter === 'active') return !r.claimed // we don't have deadlines; "active" means not claimed yet
+      return true
+    })
+  }, [rounds, filter])
 
-  const sorted = [...filtered].sort((a, b) => {
-    if (sortBy === 'votes') return b.totalVotes - a.totalVotes
-    if (sortBy === 'prize') return b.usd - a.usd
-    return b.id - a.id
-  })
+  const sorted = useMemo(() => {
+    const arr = [...filtered]
+    if (sortBy === 'votes') return arr.sort((a, b) => (b.votersOriginal + b.votersChallenger) - (a.votersOriginal + a.votersChallenger))
+    if (sortBy === 'prize') return arr.sort((a, b) => b.poolUsd - a.poolUsd)
+    // "recent" -> higher id first
+    return arr.sort((a, b) => b.id - a.id)
+  }, [filtered, sortBy])
 
+  // ---- render helpers ----
+  function StatusPill({ claimed, challengerWon }) {
+    if (!claimed) return <span className="px-2 py-1 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 text-xs">Voting</span>
+    return (
+      <span className="px-2 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs">
+        {challengerWon ? 'Challenger Won' : 'Original Won'}
+      </span>
+    )
+  }
+
+  // ---- UI ----
   return (
     <Layout>
-      <Head><title>Community Vote | MadFill</title></Head>
-      {success && <Confetti width={width} height={height} />}
-      {claimedId && <Confetti width={width} height={height} />}
+      <Head><title>Community Vote — MadFill</title></Head>
+      {(success || claimedId) && <Confetti width={width} height={height} />}
 
-      <div className="max-w-4xl mx-auto p-6 text-white">
-        <h1 className="text-3xl font-bold mb-4">🗳️ Community Vote</h1>
-        <p className="mb-4 text-slate-300">
-          Vote between the Original & Challenger cards! Winning side splits the prize pool. Each vote costs 0.001 BASE.
-        </p>
-        <Link href="/challenge" className="inline-block mb-6 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded font-medium">
-          ➕ Submit a Challenger
-        </Link>
-
-        <div className="flex flex-wrap gap-4 mb-6">
-          <select className="bg-slate-800 border p-2 rounded" value={filter} onChange={e => setFilter(e.target.value)}>
-            <option value="all">All</option>
-            <option value="high">🔥 Most Voted</option>
-            <option value="close">⚖️ Close Vote</option>
-            <option value="big">💰 Big Prize</option>
-          </select>
-          <select className="bg-slate-800 border p-2 rounded" value={sortBy} onChange={e => setSortBy(e.target.value)}>
-            <option value="recent">📅 Newest</option>
-            <option value="votes">📊 Top Votes</option>
-            <option value="prize">💰 Largest Pool</option>
-          </select>
+      <main className="max-w-6xl mx-auto p-4 md:p-6 text-white">
+        {/* Hero */}
+        <div className="rounded-2xl bg-slate-900/70 border border-slate-700 p-6 md:p-8 mb-6">
+          <h1 className="text-3xl md:text-4xl font-extrabold bg-gradient-to-r from-amber-300 via-pink-300 to-indigo-300 bg-clip-text text-transparent">
+            🗳️ Community Vote
+          </h1>
+          <p className="mt-2 text-slate-300 max-w-3xl">
+            Pick the punchline! Each challenge pits the <span className="font-semibold">Original</span> card (from the round creator)
+            against a <span className="font-semibold">Challenger</span> card. Pay a tiny fee to vote; when voting ends, the winning side
+            <span className="font-semibold"> splits the prize pool</span>. Feeling spicy?{' '}
+            <Link href="/challenge" className="underline text-purple-300">Submit a Challenger</Link>.
+          </p>
+          <p className="mt-1 text-xs text-slate-400">
+            Note: V3 doesn&apos;t expose vote deadlines on-chain—cards show as “Voting” until someone finalizes. You can always try to claim:
+            if it&apos;s not time yet, the transaction will revert.
+          </p>
         </div>
 
+        {/* Controls */}
+        <div className="mb-5 flex flex-wrap items-center justify-center gap-3">
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-slate-300">Filter</label>
+            <select
+              className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-indigo-400"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+            >
+              <option value="all">All</option>
+              <option value="active">Active</option>
+              <option value="claimed">Completed</option>
+              <option value="tight">Close Vote</option>
+              <option value="big">Big Prize</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-slate-300">Sort</label>
+            <select
+              className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-indigo-400"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+            >
+              <option value="recent">Newest</option>
+              <option value="votes">Top Votes</option>
+              <option value="prize">Largest Pool</option>
+            </select>
+          </div>
+          {!isOnBase && (
+            <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600 text-sm">
+              Switch to Base
+            </Button>
+          )}
+        </div>
+
+        {/* Body */}
         {loading ? (
-          <p>Loading voting rounds…</p>
+          <div className="rounded-xl bg-slate-900/70 p-6 animate-pulse text-slate-300 text-center">Loading voting rounds…</div>
         ) : sorted.length === 0 ? (
-          <p>No active voting rounds right now.</p>
+          <div className="rounded-xl bg-slate-900/70 p-6 text-slate-300 text-center">No voting rounds right now.</div>
         ) : (
-          <div className="grid gap-6">
-            {sorted.map(r => {
-              const emoji = ['🐸', '🦊', '🦄', '🐢', '🐙'][r.id % 5]
-              const baseLink = `https://madfill.vercel.app/round/${r.id}`
-              const shareText = encodeURIComponent(`Vote on MadFill Round #${r.id}! 🧠\n${baseLink}`)
+          <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
+            {sorted.map((r) => {
+              const shareUrl = typeof window !== 'undefined' ? `${window.location.origin}/round/${r.originalPool1Id}` : ''
+              const shareText = `Vote on MadFill Challenge #${r.id} → Round #${r.originalPool1Id}! ${shareUrl}`
               return (
-                <Card key={r.id} className="bg-slate-800 text-white shadow-lg border border-indigo-700 rounded-lg">
-                  <CardHeader className="flex justify-between items-center">
-                    <div>
-                      <h3 className="font-bold text-lg">{emoji} Round #{r.id}</h3>
-                      <p className="text-sm text-slate-300">Votes – 😂: {r.vP} | 😆: {r.vF}</p>
-                      {r.close && <span className="text-yellow-300 text-xs">⚖️ Close Match!</span>}
-                      <p className="text-xs mt-1 text-green-300">💰 Pool: ${r.usd}</p>
+                <Card key={r.id} className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
+                  <CardHeader className="flex items-start justify-between gap-2 bg-slate-800/60 border-b border-slate-700">
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs"><StatusPill claimed={r.claimed} challengerWon={r.challengerWon} /></span>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800/80 border border-slate-700">
+                          Challenge #{r.id}
+                        </span>
+                        <Link href={`/round/${r.originalPool1Id}`} className="text-indigo-300 underline text-xs">
+                          View Round #{r.originalPool1Id}
+                        </Link>
+                      </div>
+                      <div className="text-lg font-bold">Original vs Challenger</div>
                     </div>
-                    <Link href={`/round/${r.id}`} className="text-indigo-400 underline text-sm">🔍 View</Link>
+                    <a
+                      className="text-indigo-300 underline text-sm"
+                      href={explorer(`address/${CONTRACT_ADDRESS}`)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Contract
+                    </a>
                   </CardHeader>
-                  <CardContent className="space-y-4">
-                    <CompareCards roundId={r.id} />
 
-                    {r.isEnded ? (
-                      <>
-                        <p className="text-sm">🏁 Voting ended!</p>
-                        {r.userVotedWinner && !r.claimed && (
-                          <Button onClick={() => claim(r.id)} className="bg-green-600 hover:bg-green-500">
-                            🎉 Claim Prize
-                          </Button>
-                        )}
-                        {r.userVotedWinner && r.claimed && (
-                          <p className="text-green-400 font-medium">✅ Prize Claimed</p>
-                        )}
-                        {!r.userVotedWinner && <p className="text-slate-400">😢 You didn’t win this round</p>}
-                      </>
-                    ) : (
-                      <>
-                        <p className="text-sm">Cast your vote 👇</p>
-                        <div className="flex gap-4">
-                          <Button onClick={() => vote(r.id, true)} className="bg-green-600 hover:bg-green-500">
-                            😂 Original
-                          </Button>
-                          <Button onClick={() => vote(r.id, false)} className="bg-blue-600 hover:bg-blue-500">
-                            😆 Challenger
-                          </Button>
+                  <CardContent className="p-5 space-y-3">
+                    {/* Compare */}
+                    <div className="grid grid-cols-1 gap-3">
+                      <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
+                        <div className="text-slate-300 text-sm">😂 Original</div>
+                        <div className="mt-1 italic leading-relaxed">{r.originalPreview}</div>
+                      </div>
+                      <div id={`ch-${r.id}`} className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
+                        <div className="text-slate-300 text-sm">
+                          😆 Challenger {r.challengerUsername ? <span className="text-slate-400">by @{r.challengerUsername}</span> : null}
                         </div>
-                      </>
-                    )}
+                        <div className="mt-1 italic leading-relaxed">{r.challengerPreview}</div>
+                      </div>
+                    </div>
 
-                    <div className="text-xs text-slate-400 mt-3">
-                      Share this round:
-                      <a href={`https://twitter.com/intent/tweet?text=${shareText}`} target="_blank" className="ml-2 underline text-blue-400">🐦 Twitter</a>
-                      <span className="mx-2">|</span>
-                      <a href={`https://warpcast.com/~/compose?text=${shareText}`} target="_blank" className="underline text-purple-400">🌀 Warpcast</a>
+                    {/* Stats */}
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                      <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
+                        Pool: {fmt(r.poolEth, 6)} ETH (~${fmt(r.poolUsd)})
+                      </span>
+                      <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
+                        Votes — Orig: {r.votersOriginal} • Chall: {r.votersChallenger}
+                      </span>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex flex-wrap items-center gap-3">
+                      {!r.claimed ? (
+                        <>
+                          <Button onClick={() => votePool2(r.id, false)} className="bg-blue-600 hover:bg-blue-500">
+                            Vote Challenger
+                          </Button>
+                          <Button onClick={() => votePool2(r.id, true)} className="bg-green-600 hover:bg-green-500">
+                            Vote Original
+                          </Button>
+                          <a
+                            href={`#ch-${r.id}`}
+                            className="underline text-purple-300 text-sm"
+                            title="Jump to the challenger card in this challenge"
+                          >
+                            View Challenger Card
+                          </a>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-sm text-slate-300">🏁 Voting Ended</span>
+                          <Button onClick={() => claimPool2(r.id)} className="bg-indigo-600 hover:bg-indigo-500">
+                            Claim (if you were on the winning side)
+                          </Button>
+                        </>
+                      )}
+
+                      {/* Social */}
+                      <a
+                        href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline text-blue-400 text-sm"
+                      >
+                        Share
+                      </a>
+                      <a
+                        href={`https://warpcast.com/~/compose?text=${encodeURIComponent(shareText)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline text-purple-300 text-sm"
+                      >
+                        Cast
+                      </a>
+                    </div>
+
+                    {/* Tiny hint about fee source */}
+                    <div className="text-[11px] text-slate-500">
+                      Voting fee is set by the challenge. App is sending {fmt(toEth(VOTE_FEE_WEI), 6)} ETH. If it&apos;s not enough, the tx will revert — set
+                      <code className="mx-1 bg-slate-800 px-1 rounded">NEXT_PUBLIC_POOL2_VOTE_FEE_WEI</code> to match your Pool2 fee.
                     </div>
                   </CardContent>
                 </Card>
@@ -232,8 +543,8 @@ export default function VotePage() {
           </div>
         )}
 
-        {status && <p className="text-sm mt-4 text-white">{status}</p>}
-      </div>
+        {status && <div className="mt-6 text-center text-yellow-300">{status}</div>}
+      </main>
     </Layout>
   )
 }
