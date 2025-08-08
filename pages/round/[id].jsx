@@ -1,3 +1,7 @@
+// pages/round/[id].jsx
+'use client'
+
+import { useRouter } from 'next/router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -161,9 +165,7 @@ export default function RoundDetailPage() {
       try {
         const accts = await window.ethereum.request({ method: 'eth_requestAccounts' })
         if (!cancelled) setAddress(accts?.[0] || null)
-      } catch {
-        /* ignore */
-      }
+      } catch {}
       try {
         const provider = new ethers.BrowserProvider(window.ethereum)
         const net = await provider.getNetwork()
@@ -332,10 +334,10 @@ export default function RoundDetailPage() {
   function sanitizeWord(raw) {
     // allow letters, numbers, hyphen, underscore; single token; max 16 chars
     const token = (raw || '')
-      .replace(/\s+/g, ' ') // collapse spaces
+      .replace(/\s+/g, ' ')
       .trim()
-      .split(' ')[0] // first token only
-      .replace(/[^a-zA-Z0-9\-_]/g, '') // strip other chars
+      .split(' ')[0]
+      .replace(/[^a-zA-Z0-9\-_]/g, '')
       .slice(0, 16)
     return token
   }
@@ -373,12 +375,12 @@ export default function RoundDetailPage() {
       // V3 joinPool1(uint256 id, string word, string username) payable
       const tx = await ct.joinPool1(BigInt(id), encodedWord, usernameInput || '', { value: round.feeBase })
       await tx.wait()
-      setStatus('✅ Entry submitted!')
+      setStatus('Entry submitted!')
       setShowConfetti(true)
       router.replace(router.asPath)
     } catch (e) {
       console.error(e)
-      setStatus('❌ ' + (e?.shortMessage || e?.message || 'Join failed'))
+      setStatus('Join failed')
       setShowConfetti(false)
     }
   }
@@ -398,13 +400,13 @@ export default function RoundDetailPage() {
       // V3 claimPool1(uint256 id) — anyone can call after deadline; pays winner immediately
       const tx = await ct.claimPool1(BigInt(id))
       await tx.wait()
-      setStatus('✅ Payout executed')
+      setStatus('Payout executed')
       setClaimedNow(true)
       setShowConfetti(true)
       setTimeout(() => router.replace(router.asPath), 1500)
     } catch (e) {
       console.error(e)
-      setStatus('❌ ' + (e?.shortMessage || e?.message || 'Finalize failed'))
+      setStatus('Finalize failed')
       setShowConfetti(false)
     }
   }
@@ -431,7 +433,7 @@ export default function RoundDetailPage() {
     for (let i = 0; i < blanks; i++) {
       const left = (p[i] || '').trim().slice(-10)
       const right = (p[i + 1] || '').trim().slice(0, 10)
-      labels.push(`Blank #${i + 1} — “…${left} ____ ${right}…”`)
+      labels.push(`Blank #${i + 1} — "…${left} ____ ${right}…"`)
     }
     return labels
   }, [round?.parts])
@@ -608,7 +610,7 @@ export default function RoundDetailPage() {
                             : 'Join this round'
                         }
                       >
-                        🚀 Join Round
+                        Join Round
                       </Button>
                       {alreadyEntered && !ended && (
                         <span className="text-xs text-amber-300">You already entered this round.</span>
@@ -628,7 +630,7 @@ export default function RoundDetailPage() {
             <div className="mt-6 rounded-xl bg-slate-900/70 border border-slate-700 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="text-sm text-slate-300">
-                  🏁 Status:{' '}
+                  Status:{' '}
                   <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
                     {ended ? (round.claimed || claimedNow ? 'Completed' : 'Ended — Pending Payout') : `Time left: ${timeLeft}`}
                   </span>
@@ -637,12 +639,12 @@ export default function RoundDetailPage() {
                 <div className="flex items-center gap-2">
                   {canFinalize && (
                     <Button onClick={handleFinalizePayout} className="bg-indigo-600 hover:bg-indigo-500" title="Anyone can finalize after the deadline.">
-                      💸 Finalize & Payout
+                      Finalize & Payout
                     </Button>
                   )}
                   {round.claimed && round.winner && (
                     <span className="text-sm text-green-400">
-                      ✅ Winner:{' '}
+                      Winner:{' '}
                       <a
                         className="underline decoration-dotted"
                         href={
@@ -660,7 +662,7 @@ export default function RoundDetailPage() {
                     </span>
                   )}
                   {youWon && (round.claimed || claimedNow) && (
-                    <span className="text-sm font-semibold text-emerald-300">🎉 You won this round!</span>
+                    <span className="text-sm font-semibold text-emerald-300">You won this round!</span>
                   )}
                 </div>
               </div>
@@ -668,7 +670,7 @@ export default function RoundDetailPage() {
 
             {/* Entrants */}
             <div className="mt-6 rounded-xl bg-slate-900/70 border border-slate-700 p-5">
-              <div className="text-slate-200 mb-3">🧑‍🤝‍🧑 Entrants ({submissions.length})</div>
+              <div className="text-slate-200 mb-3">Entrants ({submissions.length})</div>
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {submissions.map((s, i) => {
                   const p = profiles[s.addr.toLowerCase()]
@@ -724,7 +726,7 @@ export default function RoundDetailPage() {
                   rel="noreferrer"
                   className="underline text-blue-400"
                 >
-                  🐦 Twitter/X
+                  Twitter/X
                 </a>
                 <a
                   href={`https://warpcast.com/~/compose?text=${encodeURIComponent(
@@ -734,19 +736,19 @@ export default function RoundDetailPage() {
                   rel="noreferrer"
                   className="underline text-purple-300"
                 >
-                  🌀 Warpcast
+                  Warpcast
                 </a>
                 <button
                   onClick={async () => {
                     try {
                       await navigator.clipboard.writeText(shareUrl)
-                      setStatus('Link copied ✅')
-                      setTimeout(() => setStatus((s) => (s === 'Link copied ✅' ? '' : s)), 1500)
+                      setStatus('Link copied')
+                      setTimeout(() => setStatus((s) => (s === 'Link copied' ? '' : s)), 1500)
                     } catch {}
                   }}
                   className="underline text-slate-200"
                 >
-                  📋 Copy link
+                  Copy link
                 </button>
                 <span className="mx-2 text-slate-500">|</span>
                 <Link href="/active" className="underline text-indigo-300">
@@ -762,5 +764,3 @@ export default function RoundDetailPage() {
     </Layout>
   )
 }
-
-Want me to push the same parser/preview to /active, /vote, and /myrounds so index::word never leaks raw anywhere?
