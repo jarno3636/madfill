@@ -1,0 +1,10 @@
+{
+  "accountAssociation": {
+    "header": "",
+    "payload": "",
+    "signature": ""
+  },
+  "linkedDomains": [
+    { "domain": "madfill.vercel.app" }
+  ]
+}
