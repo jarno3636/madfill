@@ -3,7 +3,6 @@
 
 import { useRouter } from 'next/router'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import Head from 'next/head'
 import { ethers } from 'ethers'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import Layout from '@/components/Layout'
@@ -12,10 +11,12 @@ import { Button } from '@/components/ui/button'
 import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
 import Link from 'next/link'
+import SEO from '@/components/SEO'
+import ShareBar from '@/components/ShareBar'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // env wins
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID_HEX = '0x2105' // 8453
@@ -130,13 +131,12 @@ export default function RoundDetailPage() {
     if (firstOpen !== undefined) setSelectedBlank(firstOpen)
   }, [blanksCount, takenSet])
 
-  // ---------- wallet + chain ----------
+  // ---------- wallet + chain (observe only; connect handled in header) ----------
   useEffect(() => {
     if (!window?.ethereum) return
     let cancelled = false
     ;(async () => {
       try {
-        // Ask passively first (doesn't trigger prompt)
         const accts = await window.ethereum.request({ method: 'eth_accounts' })
         if (!cancelled) setAddress(accts?.[0] || null)
       } catch {}
@@ -158,19 +158,6 @@ export default function RoundDetailPage() {
     })()
     return () => { cancelled = true }
   }, [])
-
-  async function connectWallet() {
-    if (!window?.ethereum) {
-      setStatus('Wallet not found')
-      return
-    }
-    try {
-      const accts = await window.ethereum.request({ method: 'eth_requestAccounts' })
-      setAddress(accts?.[0] || null)
-    } catch (e) {
-      setStatus(e?.message || 'Wallet connection rejected')
-    }
-  }
 
   async function switchToBase() {
     if (!window?.ethereum) return
@@ -246,7 +233,7 @@ export default function RoundDetailPage() {
         const claimed = info.claimed_ ?? info[8]
         const poolBalance = info.poolBalance_ ?? info[9]
 
-        // ---------- Submissions & taken blanks (packed with fallback) ----------
+        // Submissions & taken blanks (packed with fallback)
         let subms = []
         let takenSetLocal = new Set()
         try {
@@ -261,15 +248,12 @@ export default function RoundDetailPage() {
             const idx = Number(blankIdxs[i] ?? 0)
             return { addr, username, word, index: idx, preview: buildPreviewSingle(parts, word, idx) }
           })
-        } catch {
-          // ignore
-        }
+        } catch {}
 
         if (subms.length === 0 && (participants?.length || 0) > 0) {
           subms = await Promise.all(
             participants.map(async (addr) => {
               try {
-                // (username, word, submitter, blankIndex)
                 const s = await ct.getPool1Submission(BigInt(id), addr)
                 const username = s?.[0] || ''
                 const word = s?.[1] || ''
@@ -306,7 +290,6 @@ export default function RoundDetailPage() {
           entrants: participants?.length ?? subms.length,
         })
 
-        // clamp selection
         setSelectedBlank((prev) => Math.min(Math.max(prev, 0), Math.max(0, parts.length - 2)))
       } catch (e) {
         console.error(e)
@@ -321,14 +304,12 @@ export default function RoundDetailPage() {
 
   // ---------- input handling ----------
   function sanitizeWord(raw) {
-    // one word, letters/numbers/_/-, max 16
-    const token = (raw || '')
+    return (raw || '')
       .replace(/\s+/g, ' ')
       .trim()
       .split(' ')[0]
       .replace(/[^a-zA-Z0-9\-_]/g, '')
       .slice(0, 16)
-    return token
   }
 
   function onWordChange(e) {
@@ -351,7 +332,6 @@ export default function RoundDetailPage() {
 
       setBusy(true)
       setStatus('Submitting your entry…')
-      // Force a wallet prompt so the signer is live
       await window.ethereum.request({ method: 'eth_requestAccounts' })
 
       const provider = new ethers.BrowserProvider(window.ethereum)
@@ -365,7 +345,6 @@ export default function RoundDetailPage() {
       const fee = round?.feeBase ?? 0n
       const value = typeof fee === 'bigint' ? fee : BigInt(fee.toString())
 
-      // joinPool1(uint256 id, string word, string username, uint8 blankIndex) payable
       const tx = await ct.joinPool1(
         BigInt(id),
         sanitizeWord(wordInput),
@@ -401,7 +380,6 @@ export default function RoundDetailPage() {
         await switchToBase()
       }
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
-      // claimPool1(uint256 id)
       const tx = await ct.claimPool1(BigInt(id))
       await tx.wait()
       setStatus('Payout executed')
@@ -433,15 +411,17 @@ export default function RoundDetailPage() {
     !busy
   const canFinalize = ended && !round?.claimed && !claimedNow && (round?.entrants || 0) > 0 && !busy
 
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
+  const ogImage = `${origin}/api/og?id=${id || ''}`
+
   return (
     <Layout>
-      <Head>
-        <title>{round?.name ? `${round.name} — MadFill` : id ? `MadFill Round #${id}` : 'MadFill Round'}</title>
-        <meta name="description" content="Join a MadFill round on Base. Fill the blank, compete, and win the pot." />
-        {shareUrl ? <meta property="og:url" content={shareUrl} /> : null}
-        <meta property="og:title" content={round?.name || `MadFill Round #${id}`} />
-        <meta property="og:description" content="Join this MadFill round, add your words, and win the prize pool on Base." />
-      </Head>
+      <SEO
+        title={round?.name ? `${round.name} — MadFill` : id ? `MadFill Round #${id}` : 'MadFill Round'}
+        description="Join a MadFill round on Base. Fill the blank, compete, and win the pot."
+        url={shareUrl || origin}
+        image={ogImage}
+      />
 
       <main className="max-w-5xl mx-auto p-4 md:p-6 text-white">
         {/* Header */}
@@ -458,11 +438,6 @@ export default function RoundDetailPage() {
               View Contract
             </a>
           </div>
-          {!address && (
-            <div className="mt-3">
-              <Button onClick={connectWallet} className="bg-cyan-700 hover:bg-cyan-600">Connect Wallet</Button>
-            </div>
-          )}
         </div>
 
         {/* Status / Errors */}
@@ -616,11 +591,6 @@ export default function RoundDetailPage() {
                       >
                         {busy ? 'Submitting…' : 'Join Round'}
                       </Button>
-                      {!address && (
-                        <Button onClick={connectWallet} className="bg-slate-700 hover:bg-slate-600" disabled={busy}>
-                          Connect Wallet
-                        </Button>
-                      )}
                       <span className="text-xs text-slate-400">
                         USD is informational. Fees handled on-chain.
                       </span>
@@ -706,41 +676,12 @@ export default function RoundDetailPage() {
 
             {/* Social & nav */}
             <div className="mt-6 rounded-xl bg-slate-900/70 border border-slate-700 p-5">
-              <div className="flex flex-wrap items-center gap-3 text-sm">
-                <span className="text-slate-300">Share this round:</span>
-                <a
-                  href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(
-                    `Join my MadFill round: ${round.name} — ${shareUrl}`
-                  )}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline text-blue-400"
-                >
-                  Twitter/X
-                </a>
-                <a
-                  href={`https://warpcast.com/~/compose?text=${encodeURIComponent(
-                    `Join my MadFill round: ${round.name} — ${shareUrl}`
-                  )}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline text-purple-300"
-                >
-                  Warpcast
-                </a>
-                <button
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(shareUrl)
-                      setStatus('Link copied')
-                      setTimeout(() => setStatus((s) => (s === 'Link copied' ? '' : s)), 1500)
-                    } catch {}
-                  }}
-                  className="underline text-slate-200"
-                >
-                  Copy link
-                </button>
-                <span className="mx-2 text-slate-500">|</span>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <ShareBar
+                  url={shareUrl || origin}
+                  text={`Join my MadFill round: ${round.name}`}
+                  embedUrl={shareUrl || origin}
+                />
                 <Link href="/active" className="underline text-indigo-300">
                   ← Back to Active Rounds
                 </Link>
