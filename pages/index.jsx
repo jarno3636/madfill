@@ -59,7 +59,7 @@ export default function Home() {
 
   // featured
   const [featured, setFeatured] = useState([])
-  the [loadingFeatured, setLoadingFeatured] = useState(true)
+  const [loadingFeatured, setLoadingFeatured] = useState(true)
 
   const { width, height } = useWindowSize()
   const selectedCategory = categories[catIdx]
