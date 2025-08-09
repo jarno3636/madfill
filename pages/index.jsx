@@ -404,22 +404,11 @@ export default function Home() {
                 Fill the blank. Make it funny. Win the pot. Create rounds, enter with one word, and let the community decide the best punchline.
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              {!isOnBase && (
-                <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600">
-                  Switch to Base
-                </Button>
-              )}
-              {!address ? (
-                <Button onClick={connectWallet} className="bg-indigo-900/70 hover:bg-indigo-800">
-                  Connect Wallet
-                </Button>
-              ) : (
-                <span className="text-sm opacity-90">{address.slice(0,6)}…{address.slice(-4)}</span>
-              )}
+            <div className="flex items-center gap-3">
               <Link href="/active" className="underline text-white/90 text-sm">
                 View Active Rounds
               </Link>
+            </div>
             </div>
           </div>
         </div>
