@@ -2,7 +2,6 @@
 'use client'
 
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import Head from 'next/head'
 import Link from 'next/link'
 import { ethers } from 'ethers'
 import Confetti from 'react-confetti'
@@ -15,6 +14,8 @@ import Layout from '@/components/Layout'
 import Footer from '@/components/Footer'
 import ShareBar from '@/components/ShareBar'
 import { fetchFarcasterProfile } from '@/lib/neynar'
+import SEO from '@/components/SEO'
+import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
@@ -294,9 +295,8 @@ export default function Home() {
     }
   }
 
-  const origin =
-    typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
-  const roundUrl = roundId ? `${origin}/round/${roundId}` : origin
+  const origin = absoluteUrl('/')
+  const roundUrl = roundId ? absoluteUrl(`/round/${roundId}`) : origin
   const shareText = roundId
     ? `I just created a MadFill round! Join Round #${roundId}.`
     : `Play MadFill on Base.`
@@ -309,19 +309,18 @@ export default function Home() {
         : 'border-slate-400 text-slate-200 bg-slate-700/40'
     ].join(' ')
 
+  const seoTitle = 'MadFill — Create or Join a Round'
+  const seoDesc = 'MadFill on Base. Fill the blank, vote, and win the pool.'
+  const ogImage = buildOgUrl({ screen: 'home', title: 'MadFill' })
+
   return (
     <Layout>
-      <Head>
-        <title>MadFill — Create or Join a Round</title>
-        <meta name="description" content="MadFill on Base. Fill the blank, vote, and win the pool." />
-        <meta property="og:title" content="MadFill — Create or Join a Round" />
-        <meta property="og:description" content="MadFill on Base. Fill the blank, vote, and win the pool." />
-        <meta property="og:url" content={origin} />
-        {/* Make sure /public/og-image.png exists */}
-        <meta property="og:image" content={`${origin}/og-image.png`} />
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:image" content={`${origin}/og-image.png`} />
-      </Head>
+      <SEO
+        title={seoTitle}
+        description={seoDesc}
+        url={origin}
+        image={ogImage}
+      />
 
       {showConfetti && <Confetti width={width} height={height} />}
 
@@ -544,9 +543,7 @@ export default function Home() {
             ) : (
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {featured.map((r) => {
-                  const originUrl =
-                    typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
-                  const rUrl = `${originUrl}/round/${r.id}`
+                  const rUrl = absoluteUrl(`/round/${r.id}`)
                   const shareTxt = `Play MadFill Round #${r.id}!`
                   return (
                     <div key={r.id} className="rounded-xl bg-slate-800/60 border border-slate-700 p-4 flex flex-col gap-3">
