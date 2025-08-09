@@ -2,16 +2,17 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import Head from 'next/head'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useWindowSize } from 'react-use'
 import Confetti from 'react-confetti'
-import { categories } from '../data/templates'
+import { categories } from '@/data/templates'
 import StyledCard from '@/components/StyledCard'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 import ShareBar from '@/components/ShareBar'
+import SEO from '@/components/SEO'
+import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 
 function sanitizeWord(raw) {
   return (raw || '')
@@ -100,13 +101,27 @@ export default function FreeGame() {
     return out.join('')
   }, [template, words])
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
+  const origin =
+    typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
   const permalink = useMemo(() => {
     if (typeof window === 'undefined') return `${origin}/free`
     return window.location.href
   }, [origin, catIdx, tplIdx, words, template.blanks])
 
   const shareText = `I just played the Free MadFill Game!\n\n${filledText}\n\nPlay free:`
+
+  // SEO helpers
+  const pageUrl = absoluteUrl('/free')
+  const ogImage = useMemo(() => {
+    // reflect current selections and words in OG image (safe + short)
+    return buildOgUrl({
+      screen: 'free',
+      c: String(catIdx),
+      t: String(tplIdx),
+      w: buildWordsParam(words, template.blanks),
+      title: 'Free MadFill',
+    })
+  }, [catIdx, tplIdx, words, template.blanks])
 
   function handleWordChange(i, val) {
     setWords((w) => ({ ...w, [i]: sanitizeWord(val) }))
@@ -153,15 +168,19 @@ export default function FreeGame() {
 
   return (
     <Layout>
-      <Head>
-        <title>Free Game — MadFill</title>
-        <meta property="og:title" content="Play the Free MadFill Game!" />
-        <meta property="og:description" content="Create, laugh, and share your own fill-in-the-blank card. No wallet needed!" />
-        <meta property="og:url" content={permalink} />
-        <meta property="og:image" content="https://madfill.vercel.app/api/og?free=1" />
-        <meta name="twitter:card" content="summary_large_image" />
-        {profile?.username && <meta name="fc:creator" content={`@${profile.username}`} />}
-      </Head>
+      <SEO
+        title="Free Game — MadFill"
+        description="Create, laugh, and share your own fill-in-the-blank card. No wallet needed!"
+        url={permalink || pageUrl}
+        image={ogImage}
+      />
+
+      {/* Optional: Farcaster author hint if we know it */}
+      {profile?.username ? (
+        <head>
+          <meta name="fc:creator" content={`@${profile.username}`} />
+        </head>
+      ) : null}
 
       {showConfetti && <Confetti width={width} height={height} />}
 
@@ -240,8 +259,10 @@ export default function FreeGame() {
                     </label>
                     <input
                       type="text"
-                      placeholder={`e.g., neon`}
-                      className={`mt-1 w-full rounded-lg bg-slate-800/70 border px-3 py-2 outline-none focus:ring-2 ${ok ? 'border-slate-700 focus:ring-indigo-400' : 'border-red-600/60 focus:ring-red-500/50'}`}
+                      placeholder="e.g., neon"
+                      className={`mt-1 w-full rounded-lg bg-slate-800/70 border px-3 py-2 outline-none focus:ring-2 ${
+                        ok ? 'border-slate-700 focus:ring-indigo-400' : 'border-red-600/60 focus:ring-red-500/50'
+                      }`}
                       value={val}
                       onChange={(e) => handleWordChange(i, e.target.value)}
                     />
