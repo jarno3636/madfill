@@ -14,6 +14,7 @@ import Link from 'next/link'
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
+import FcMiniAppMeta from '@/components/FcMiniAppMeta'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
