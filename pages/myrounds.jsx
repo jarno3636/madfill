@@ -12,6 +12,8 @@ import { useWindowSize } from 'react-use'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import Link from 'next/link'
 import { fetchFarcasterProfile } from '@/lib/neynar'
+import ShareBar from '@/components/ShareBar'
+import SEO from '@/components/SEO' // ✅ use your SEO component
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
@@ -50,7 +52,6 @@ export default function MyRounds() {
   const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
   const explorer = (path) => `https://basescan.org/${path}`
 
-  // spacing helper
   const needsSpaceBefore = (str) => {
     if (!str) return false
     const ch = str[0]
@@ -81,7 +82,7 @@ export default function MyRounds() {
     return out.join('')
   }
 
-  // wallet + chain
+  // wallet + chain (read address + net; connect is in the nav)
   useEffect(() => {
     if (!window?.ethereum) return
     let cancelled = false
@@ -153,7 +154,7 @@ export default function MyRounds() {
     return () => clearInterval(tickRef.current)
   }, [])
 
-  // profile username for header flair
+  // profile username for header flair / SEO <meta fc:creator>
   useEffect(() => {
     if (!address) return
     ;(async () => {
@@ -194,7 +195,7 @@ export default function MyRounds() {
           const claimed = info[8]
           const poolBalance = info[9]
 
-          // NEW: V3 getPool1Submission returns (username, word, submitter, blankIndex)
+          // V3 getPool1Submission returns (username, word, submitter, blankIndex)
           const yourSub = await ct.getPool1Submission(BigInt(id), address)
           const username = yourSub[0]
           const word = yourSub[1]
@@ -252,7 +253,7 @@ export default function MyRounds() {
           const claimed = p2[6]
           const challengerWon = p2[7]
           const p2Balance = p2[8]
-          const p2FeeBase = p2[9] // not shown, but fetched
+          const p2FeeBase = p2[9]
           const p2Deadline = Number(p2[10])
 
           // Fetch original parts + creator's submission to get the BLANK INDEX for previews
@@ -318,12 +319,10 @@ export default function MyRounds() {
       const net = await provider.getNetwork()
       if (net?.chainId !== 8453n) await switchToBase()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
-      // claimPool1(uint256 id)
       const tx = await ct.claimPool1(BigInt(id))
       await tx.wait()
       setStatus('Finalized')
       setShowConfetti(true)
-      // reflect locally
       setJoined((rs) => rs.map((r) => (r.id === id ? { ...r, claimed: true } : r)))
       setWins((rs) => rs.map((r) => (r.id === id ? { ...r, claimed: true } : r)))
       setUnclaimedWins((rs) => rs.filter((r) => r.id !== id))
@@ -341,7 +340,7 @@ export default function MyRounds() {
     const j = joined.map((c) => ({ ...c, group: 'Joined' }))
     const w = wins.map((c) => ({ ...c, group: 'Won' }))
     const v = voted.map((c) => ({ ...c, group: 'Voted' }))
-    // dedupe by pool1 id where applicable; keep "Started" tag over "Joined"
+    // dedupe by pool1 id; keep "Started" tag over "Joined"
     const map = new Map()
     for (const c of [...j, ...w, ...s]) {
       const key = `pool1-${c.id}`
@@ -381,12 +380,33 @@ export default function MyRounds() {
     )
   }
 
+  // Basic SEO values
+  const origin =
+    typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
+  const pageUrl = `${origin}/myrounds`
+  const ogTitle = profile?.username ? `@${profile.username} on MadFill — My Rounds` : 'My Rounds — MadFill'
+  const ogDesc = 'See rounds you created, joined, voted in, and any wins. Track and share your MadFill activity on Base.'
+  const ogImage = `${origin}/api/og?screen=myrounds&user=${encodeURIComponent(profile?.username || shortAddr(address) || 'anon')}` // adjust if your seo helper exposes a generator
+
   return (
     <Layout>
+      {/* SEO: uses your SEO component so casts/link shares look great */}
+      <SEO
+        title={ogTitle}
+        description={ogDesc}
+        url={pageUrl}
+        image={ogImage}
+        type="profile"
+        // If your SEO component supports Farcaster extras, pass them here:
+        // fcMetadata={{ 'fc:frame': 'vNext', 'fc:frame:image': ogImage }}
+        twitterCard="summary_large_image"
+      />
+
       <Head>
-        <title>My Rounds — MadFill</title>
         {profile?.username && <meta name="fc:creator" content={`@${profile.username}`} />}
+        <title>My Rounds — MadFill</title>
       </Head>
+
       {showConfetti && <Confetti width={width} height={height} />}
 
       <main className="max-w-6xl mx-auto p-4 md:p-6 text-white">
@@ -470,11 +490,11 @@ export default function MyRounds() {
               const shareUrl =
                 typeof window !== 'undefined'
                   ? `${window.location.origin}/round/${r.kind === 'pool1' ? r.id : r.originalPool1Id}`
-                  : ''
+                  : `${origin}/round/${r.kind === 'pool1' ? r.id : r.originalPool1Id}`
               const shareText =
                 r.kind === 'pool1'
-                  ? `I played MadFill Round #${r.id}! ${shareUrl}`
-                  : `I voted in a MadFill challenge #${r.id} → Round #${r.originalPool1Id}! ${shareUrl}`
+                  ? `I played MadFill Round #${r.id}!`
+                  : `I voted in a MadFill challenge #${r.id} → Round #${r.originalPool1Id}!`
 
               return (
                 <Card key={`${r.kind}-${r.id}`} className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
@@ -567,22 +587,14 @@ export default function MyRounds() {
                       {r.kind === 'pool1' && r.youWon && r.claimed && (
                         <span className="text-sm font-semibold text-emerald-300">Prize Claimed</span>
                       )}
-                      <a
-                        href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="underline text-blue-400 text-sm"
-                      >
-                        Share
-                      </a>
-                      <a
-                        href={`https://warpcast.com/~/compose?text=${encodeURIComponent(shareText)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="underline text-purple-300 text-sm"
-                      >
-                        Cast
-                      </a>
+
+                      {/* Polished Share buttons (Warpcast / X / Share) */}
+                      <ShareBar
+                        url={shareUrl}
+                        text={shareText}
+                        small
+                        className="ml-auto"
+                      />
                     </div>
                   </CardContent>
                 </Card>
