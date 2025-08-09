@@ -13,6 +13,8 @@ import { fetchFarcasterProfile } from '@/lib/neynar'
 import ShareBar from '@/components/ShareBar'
 import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
+import FcMiniAppMeta from '@/components/FcMiniAppMeta'
+import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
 function sanitizeWord(raw) {
   return (raw || '')
