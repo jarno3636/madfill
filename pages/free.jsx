@@ -14,7 +14,7 @@ import ShareBar from '@/components/ShareBar'
 import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import FcMiniAppMeta from '@/components/FcMiniAppMeta'
-import { useMiniAppReady } from '@/hooks/useMiniAppReady'
+// import { useMiniAppReady } from '@/hooks/useMiniAppReady' // optional hook if you use it elsewhere
 
 function sanitizeWord(raw) {
   return (raw || '')
@@ -50,6 +50,9 @@ export default function FreeGame() {
 
   const category = categories[catIdx] || { name: 'General', templates: [] }
   const template = category.templates[tplIdx] || { parts: [], blanks: 0, name: 'Untitled' }
+
+  // Optionally signal ready to a Mini App host if you have a hook:
+  // useMiniAppReady?.()
 
   useEffect(() => {
     async function loadProfile() {
@@ -104,7 +107,10 @@ export default function FreeGame() {
   }, [template, words])
 
   const origin =
-    typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
+    typeof window !== 'undefined'
+      ? window.location.origin
+      : (process.env.NEXT_PUBLIC_SITE_URL || 'https://madfill.vercel.app')
+
   const permalink = useMemo(() => {
     if (typeof window === 'undefined') return `${origin}/free`
     return window.location.href
@@ -175,6 +181,16 @@ export default function FreeGame() {
         description="Create, laugh, and share your own fill-in-the-blank card. No wallet needed!"
         url={permalink || pageUrl}
         image={ogImage}
+      />
+
+      {/* Farcaster Mini App meta so Warpcast opens this page inline */}
+      <FcMiniAppMeta
+        imageUrl={ogImage}                 // what shows in the cast preview
+        buttonTitle="Play Free"
+        name="MadFill"
+        url={permalink}                    // where the inline app should launch
+        splashImageUrl="/og/cover.png"     // put a square icon in public/og/cover.png
+        splashBackgroundColor="#1e1b4b"
       />
 
       {/* Optional: Farcaster author hint if we know it */}
