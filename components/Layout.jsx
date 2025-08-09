@@ -2,44 +2,64 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/router'
-import ConnectButton from '@/components/ConnectButton'
+import { useState } from 'react'
+import WalletConnectButton from '@/components/WalletConnectButton'
 
 export default function Layout({ children }) {
-  const router = useRouter()
-  const isActive = (href) => router.pathname === href
-  const navLink = (href, label, extra = '') => (
+  const [open, setOpen] = useState(false)
+
+  const NavLink = ({ href, children }) => (
     <Link
       href={href}
-      className={`hover:text-indigo-300 transition ${isActive(href) ? 'text-indigo-300' : 'text-slate-200'} ${extra}`}
+      className="text-slate-200 hover:text-indigo-300 transition"
+      onClick={() => setOpen(false)}
     >
-      {label}
+      {children}
     </Link>
   )
 
   return (
-    <div className="bg-gradient-to-br from-slate-950 via-indigo-900 to-purple-950 min-h-screen text-white relative">
-      {/* Top bar */}
-      <nav className="flex flex-wrap justify-between items-center p-6 shadow-xl bg-slate-950/90 border-b border-indigo-700 gap-y-2 sticky top-0 z-40 backdrop-blur">
-        <h1 className="text-2xl font-extrabold tracking-tight cursor-pointer hover:text-indigo-300 transition drop-shadow-md">
-          <Link href="/">🧠 MadFill</Link>
-        </h1>
+    <div className="bg-gradient-to-br from-slate-950 via-indigo-900 to-purple-950 min-h-screen text-white">
+      <nav className="sticky top-0 z-40 backdrop-blur bg-slate-950/90 border-b border-indigo-700">
+        <div className="mx-auto max-w-6xl px-4 py-4 flex items-center justify-between gap-3">
+          <Link href="/" className="text-2xl font-extrabold tracking-tight hover:text-indigo-300">
+            🧠 MadFill
+          </Link>
 
-        <div className="flex flex-wrap gap-4 items-center text-sm font-medium">
-          {navLink('/', 'Home')}
-          {navLink('/active', 'Active Rounds')}
-          {navLink('/vote', 'Community Vote')}
-          {navLink('/myrounds', '🏆 My Rounds', 'font-semibold')}
-          {navLink('/myo', '🎨 Make Your Own', 'font-semibold')}
-          {navLink('/free', '🎁 Free Game', 'font-semibold')}
-          <ConnectButton className="ml-2" />
+          <div className="hidden md:flex items-center gap-5 text-sm">
+            <NavLink href="/">Home</NavLink>
+            <NavLink href="/active">Active Rounds</NavLink>
+            <NavLink href="/vote">Community Vote</NavLink>
+            <NavLink href="/myo">🎨 Make Your Own</NavLink>
+            <NavLink href="/free">🎁 Free Game</NavLink>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <WalletConnectButton />
+            <button
+              className="md:hidden px-3 py-1.5 border border-slate-700 rounded-lg"
+              onClick={() => setOpen(v => !v)}
+              aria-label="Toggle menu"
+            >
+              ☰
+            </button>
+          </div>
         </div>
+
+        {open && (
+          <div className="md:hidden border-t border-slate-800 bg-slate-950/95">
+            <div className="mx-auto max-w-6xl px-4 py-3 flex flex-col gap-3 text-sm">
+              <NavLink href="/">Home</NavLink>
+              <NavLink href="/active">Active Rounds</NavLink>
+              <NavLink href="/vote">Community Vote</NavLink>
+              <NavLink href="/myo">🎨 Make Your Own</NavLink>
+              <NavLink href="/free">🎁 Free Game</NavLink>
+            </div>
+          </div>
+        )}
       </nav>
 
-      {/* Main */}
-      <main className="max-w-5xl mx-auto p-6 space-y-8">
-        {children}
-      </main>
+      <main className="max-w-6xl mx-auto p-4 md:p-6">{children}</main>
     </div>
   )
 }
