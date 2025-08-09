@@ -7,7 +7,7 @@
   "miniapp": {
     "version": "1",
     "name": "MadFill",
-    "iconUrl": "https://madfill.vercel.app/icon.png",
+    "iconUrl": "https://madfill.vercel.app/icon.PNG",
     "homeUrl": "https://madfill.vercel.app",
     "imageUrl": "https://madfill.vercel.app/og.PNG",
     "buttonTitle": "Play",
