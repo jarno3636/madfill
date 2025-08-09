@@ -1,15 +1,15 @@
 {
   "accountAssociation": {
-    "header": "YOUR_ACCOUNT_ASSOCIATION_HEADER",
-    "payload": "YOUR_ACCOUNT_ASSOCIATION_PAYLOAD",
-    "signature": "YOUR_ACCOUNT_ASSOCIATION_SIGNATURE"
+    "header": "eyJmaWQiOjExNTQ4OTAsInR5cGUiOiJjdXN0b2R5Iiwia2V5IjoiMHgxZDEzMDA2OTFCQ0NjNEM5YWU5MUU0YTgyMDc2NkIyOEM3YzRCMDEyIn0",
+    "payload": "eyJkb21haW4iOiJtYWRmaWxsLnZlcmNlbC5hcHAifQ",
+    "signature": "MHg4NzMyOWQ5NjI3ZTU5M2I5Y2NiZGUzODMwNzgzZjMzYzA0MjgyODI0ZGQwZWMwMGE0YzAyZTg1NTI2M2UzMWRlNWY2NGY2NWI5MWZiMTc4ZjkzNDljZjA2Nzc3YzljOGM1YmZhMGRlMmM4NTA3MWZkZmQ4YzdhNjdmNjAzY2UzYjFi"
   },
   "miniapp": {
     "version": "1",
     "name": "MadFill",
     "iconUrl": "https://madfill.vercel.app/icon.PNG",
     "homeUrl": "https://madfill.vercel.app",
-    "imageUrl": "https://madfill.vercel.app/og.PNG",
+    "imageUrl": "https://madfill.vercel.app/Capitalize.PNG",
     "buttonTitle": "Play",
     "requiredChains": ["eip155:8453"],
     "requiredCapabilities": []
