@@ -2,7 +2,6 @@
 'use client'
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import Head from 'next/head'
 import { ethers } from 'ethers'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -13,6 +12,9 @@ import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
 import { useRouter } from 'next/router'
 import { fetchFarcasterProfile } from '@/lib/neynar'
+import SEO from '@/components/SEO'
+import ShareBar from '@/components/ShareBar'
+import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 
 // Env-driven (fallbacks kept just in case)
 const CONTRACT_ADDRESS =
@@ -110,13 +112,13 @@ export default function ChallengePage() {
   const originalPreview = useMemo(() => buildPreviewFromStored(parts, originalWordRaw), [parts, originalWordRaw])
   const challengerPreview = useMemo(() => buildPreviewSingle(parts, word, blankIndex), [parts, word, blankIndex])
 
-  // ---------- wallet + chain ----------
+  // ---------- wallet + chain (passive; connect is in header) ----------
   useEffect(() => {
     if (!window?.ethereum) return
     let cancelled = false
     ;(async () => {
       try {
-        const accts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+        const accts = await window.ethereum.request({ method: 'eth_accounts' }) // passive
         if (!cancelled) setAddress(accts?.[0] || null)
       } catch {}
       try {
@@ -137,6 +139,17 @@ export default function ChallengePage() {
     })()
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    // Prefill username from Farcaster (via EVM address)
+    if (!address) return
+    ;(async () => {
+      try {
+        const p = await fetchFarcasterProfile(address)
+        if (p?.username) setUsername((u) => u || p.username)
+      } catch {}
+    })()
+  }, [address])
 
   async function switchToBase() {
     if (!window?.ethereum) return
@@ -173,25 +186,10 @@ export default function ChallengePage() {
     return () => clearInterval(tickRef.current)
   }, [])
 
-  // Farcaster profile via stored FID (NOT EVM address)
-  useEffect(() => {
-    const fid = typeof window !== 'undefined' ? localStorage.getItem('fc_fid') : null
-    if (!fid) return
-    ;(async () => {
-      try {
-        const p = await fetchFarcasterProfile(fid)
-        if (p?.username) setUsername(p.username)
-      } catch {}
-    })()
-  }, [])
-
   // ---------- load target round info ----------
   useEffect(() => {
     if (!roundId || !/^\d+$/.test(String(roundId))) {
-      setParts([])
-      setOriginalWordRaw('')
-      setCreatorAddr('')
-      setRoundName('')
+      setParts([]); setOriginalWordRaw(''); setCreatorAddr(''); setRoundName('')
       return
     }
     let cancelled = false
@@ -202,7 +200,6 @@ export default function ChallengePage() {
       try {
         const provider = new ethers.JsonRpcProvider(BASE_RPC)
         const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
-        // getPool1Info => (name, theme, parts, feeBase, deadline, creator, participants, winner, claimed, poolBalance)
         const info = await ct.getPool1Info(BigInt(roundId))
         const name = info[0]
         const _parts = info[2]
@@ -222,10 +219,7 @@ export default function ChallengePage() {
       } catch (err) {
         console.warn('Failed to load round:', err)
         if (!cancelled) {
-          setParts([])
-          setOriginalWordRaw('')
-          setCreatorAddr('')
-          setRoundName('')
+          setParts([]); setOriginalWordRaw(''); setCreatorAddr(''); setRoundName('')
           setStatus('Could not fetch round. Check the Round ID.')
         }
       } finally {
@@ -293,15 +287,27 @@ export default function ChallengePage() {
   }
 
   // share text after success
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
   const shareText = useMemo(() => {
-    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
     const link = `${origin}/vote`
-    return encodeURIComponent(`I just submitted a challenger for Round #${roundId}! Vote here: ${link}`)
-  }, [roundId])
+    return `I just submitted a challenger for Round #${roundId}! Vote here: ${link}`
+  }, [roundId, origin])
+
+  // ---------- SEO ----------
+  const pageUrl = absoluteUrl('/challenge')
+  const ogImage = buildOgUrl({ screen: 'challenge', title: 'Submit a Challenger' })
 
   return (
     <Layout>
-      <Head><title>Submit a Challenger — MadFill</title></Head>
+      <SEO
+        title="Submit a Challenger — MadFill"
+        description="Think you can out-funny the Original? Drop your one-word zinger and start a head-to-head vote on Base."
+        url={pageUrl}
+        image={ogImage}
+        type="website"
+        twitterCard="summary_large_image"
+      />
+
       {showConfetti && <Confetti width={width} height={height} />}
 
       <main className="max-w-5xl mx-auto p-4 md:p-6 text-white">
@@ -334,7 +340,7 @@ export default function ChallengePage() {
                   value={roundId}
                   onChange={(e) => setRoundId(e.target.value.replace(/[^\d]/g, '').slice(0, 10))}
                   placeholder="e.g., 12"
-                  className="mt-1 w/full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                  className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                 />
               </label>
               <label className="block text-sm text-slate-300">
@@ -343,7 +349,7 @@ export default function ChallengePage() {
                   value={username}
                   onChange={(e) => setUsername(e.target.value.slice(0, 32))}
                   placeholder="e.g., frogtown"
-                  className="mt-1 w/full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                  className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                 />
               </label>
             </div>
@@ -397,7 +403,7 @@ export default function ChallengePage() {
                   </div>
                 </div>
 
-                {/* Word input */}
+                {/* Word + Fee/Duration */}
                 <div className="grid md:grid-cols-2 gap-4">
                   <label className="block text-sm text-slate-300">
                     Your word (single word, max 16 chars)
@@ -406,12 +412,11 @@ export default function ChallengePage() {
                       onChange={(e) => setWord(e.target.value)}
                       onBlur={() => setWord((w) => w.trim())}
                       placeholder="e.g., neon"
-                      className="mt-1 w/full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                      className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                     />
                     {word && wordError && <div className="text-xs text-amber-300 mt-1">{wordError}</div>}
                   </label>
 
-                  {/* Fee + Duration */}
                   <div className="grid grid-cols-2 gap-3">
                     <label className="block text-sm text-slate-300">
                       Voting fee (ETH)
@@ -421,7 +426,7 @@ export default function ChallengePage() {
                         step="0.0001"
                         value={feeEth}
                         onChange={(e) => setFeeEth(Number(e.target.value))}
-                        className="mt-1 w/full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                        className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                       />
                       <div className="text-[11px] text-slate-400 mt-1">
                         This becomes the fee for each vote and must be covered in your tx value.
@@ -430,7 +435,7 @@ export default function ChallengePage() {
                     <label className="block text-sm text-slate-300">
                       Duration
                       <select
-                        className="mt-1 w/full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                        className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                         value={durationSec}
                         onChange={(e) => setDurationSec(Number(e.target.value))}
                       >
@@ -453,14 +458,7 @@ export default function ChallengePage() {
             <div className="flex flex-wrap items-center gap-3">
               <Button
                 onClick={handleSubmit}
-                disabled={
-                  busy ||
-                  !address ||
-                  !parts.length ||
-                  !roundId ||
-                  !word ||
-                  !!wordError
-                }
+                disabled={busy || !address || !parts.length || !roundId || !word || !!wordError}
                 className="bg-blue-600 hover:bg-blue-500"
                 title={!address ? 'Connect your wallet' : 'Submit challenger'}
               >
@@ -477,25 +475,8 @@ export default function ChallengePage() {
             {status && <div className="text-sm text-yellow-300">{status}</div>}
 
             {status.toLowerCase().includes('submitted') && (
-              <div className="text-sm mt-4">
-                Share your card:
-                <a
-                  href={`https://twitter.com/intent/tweet?text=${shareText}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="ml-2 underline text-blue-400"
-                >
-                  Twitter/X
-                </a>
-                <span className="mx-2 text-slate-600">|</span>
-                <a
-                  href={`https://warpcast.com/~/compose?text=${shareText}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline text-purple-300"
-                >
-                  Warpcast
-                </a>
+              <div className="text-sm mt-4 flex items-center justify-between">
+                <ShareBar url={`${origin}/vote`} text={shareText} embedUrl={`${origin}/vote`} small />
               </div>
             )}
           </CardContent>
