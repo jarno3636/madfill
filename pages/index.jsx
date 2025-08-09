@@ -110,13 +110,12 @@ export default function Home() {
     return token
   }
 
-  // -------- wallet boot --------
+  // -------- wallet boot (read-only to set chain state) --------
   useEffect(() => {
     if (!window?.ethereum) return
     let cancelled = false
     ;(async () => {
       try {
-        // don’t prompt at boot; just read chain
         const provider = new ethers.BrowserProvider(window.ethereum)
         const net = await provider.getNetwork()
         if (!cancelled) setIsOnBase(net?.chainId === 8453n)
@@ -138,23 +137,6 @@ export default function Home() {
     })()
     return () => {}
   }, [])
-
-  async function connectWallet() {
-    if (!window?.ethereum) {
-      setStatus('No wallet detected.')
-      return
-    }
-    try {
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      const accounts = await provider.send('eth_requestAccounts', [])
-      setAddress(accounts?.[0] || null)
-      const net = await provider.getNetwork()
-      setIsOnBase(net?.chainId === 8453n)
-      setStatus('Wallet connected')
-    } catch (e) {
-      setStatus(extractError(e))
-    }
-  }
 
   async function switchToBase() {
     if (!window?.ethereum) return
@@ -234,8 +216,6 @@ export default function Home() {
           try {
             const sub = await ct.getPool1Submission(BigInt(id), creator)
             const stored = sub[1] // word (may be plain)
-            // New contract uses separate blankIndex going forward,
-            // but for older rounds, keep simple injection at blank 0:
             creatorPreview = buildPreviewSingle(parts, stored, 0)
           } catch {}
           rows.push({
@@ -289,7 +269,7 @@ export default function Home() {
       setBusy(true)
       setStatus('')
       log('Connecting wallet...')
-      // Always prompt to ensure MM wakes up
+      // Always prompt to ensure wallet wakes up
       const p0 = new ethers.BrowserProvider(window.ethereum)
       await p0.send('eth_requestAccounts', [])
       let net = await p0.getNetwork()
@@ -330,7 +310,7 @@ export default function Home() {
         { value }
       )
 
-      // Send real tx (this should trigger the wallet prompt)
+      // Send real tx
       const tx = await ct.createPool1(
         name,
         theme,
@@ -401,14 +381,15 @@ export default function Home() {
             <div>
               <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">MadFill</h1>
               <p className="text-indigo-100 mt-2 max-w-2xl">
-                Fill the blank. Make it funny. Win the pot. Create rounds, enter with one word, and let the community decide the best punchline.
+                Fill the blank. Make it funny. Win the pot. Create rounds, enter with one word,
+                and let the community decide the best punchline.
               </p>
             </div>
+            {/* Wallet buttons removed: wallet lives in header */}
             <div className="flex items-center gap-3">
               <Link href="/active" className="underline text-white/90 text-sm">
                 View Active Rounds
               </Link>
-            </div>
             </div>
           </div>
         </div>
@@ -543,16 +524,6 @@ export default function Home() {
 
             {/* Submit */}
             <div className="flex flex-wrap items-center gap-3">
-              {!address && (
-                <Button onClick={connectWallet} className="bg-indigo-900/70 hover:bg-indigo-800">
-                  Connect Wallet
-                </Button>
-              )}
-              {!isOnBase && (
-                <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600">
-                  Switch to Base
-                </Button>
-              )}
               <Button
                 onClick={handleCreateRound}
                 disabled={busy || !word}
