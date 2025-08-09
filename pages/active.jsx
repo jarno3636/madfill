@@ -3,7 +3,6 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { ethers } from 'ethers'
-import Head from 'next/head'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -13,6 +12,8 @@ import Link from 'next/link'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 import { motion } from 'framer-motion'
 import ShareBar from '@/components/ShareBar'
+import SEO from '@/components/SEO'
+import { buildOgUrl } from '@/lib/seo'
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_FILLIN_ADDRESS || ''
@@ -69,9 +70,9 @@ export default function ActivePools() {
   const contract = useMemo(() => {
     if (!CONTRACT_ADDRESS) return null
     return new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
-  }, [provider])
+  }, [provider, CONTRACT_ADDRESS])
 
-  // Load BASE price with Coinbase -> CoinGecko -> Alchemy -> $3800 fallback
+  // price chain: Coinbase -> CoinGecko -> Alchemy -> fallback
   const loadPrice = async (signal) => {
     let price = 0
     try {
@@ -87,7 +88,10 @@ export default function ActivePools() {
     } catch {}
 
     try {
-      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=l2-standard-bridged-weth-base&vs_currencies=usd', { signal })
+      const res = await fetch(
+        'https://api.coingecko.com/api/v3/simple/price?ids=l2-standard-bridged-weth-base&vs_currencies=usd',
+        { signal }
+      )
       const json = await res.json()
       price = json['l2-standard-bridged-weth-base']?.usd
       if (price && price > 0.5) {
@@ -151,7 +155,6 @@ export default function ActivePools() {
         const claimed = Boolean(info.claimed_ ?? info[8])
 
         if (!claimed && deadline > now) {
-          // avatars (don’t explode on rate limits)
           const avatars = await Promise.all(
             participants.map(async (addr) => {
               try {
@@ -171,7 +174,6 @@ export default function ActivePools() {
             })
           )
 
-          // submissions (V3: getPool1Submission returns username, word, submitter, blankIndex)
           const submissions = await Promise.all(
             participants.map(async (addr) => {
               try {
@@ -183,7 +185,13 @@ export default function ActivePools() {
                 const preview = buildPreviewSingle(parts, word, blankIndex)
                 return { address: submitter, username, word, blankIndex, preview }
               } catch {
-                return { address: addr, username: '', word: '', blankIndex: 0, preview: buildPreviewSingle(parts, '', 0) }
+                return {
+                  address: addr,
+                  username: '',
+                  word: '',
+                  blankIndex: 0,
+                  preview: buildPreviewSingle(parts, '', 0)
+                }
               }
             })
           )
@@ -202,7 +210,12 @@ export default function ActivePools() {
             usdApprox: fallbackPrice,
             participants: avatars,
             submissions,
-            badge: deadline - now < 3600 ? '🔥 Ends Soon' : estimatedUsd > 5 ? '💰 Top Pool' : null,
+            badge:
+              deadline - now < 3600
+                ? '🔥 Ends Soon'
+                : estimatedUsd > 5
+                ? '💰 Top Pool'
+                : null,
             emoji: ['🐸', '🦊', '🦄', '🐢', '🐙'][i % 5]
           })
         }
@@ -227,7 +240,7 @@ export default function ActivePools() {
       controller.abort()
       clearInterval(interval)
     }
-  }, [contract]) // re-run if contract address/env changes
+  }, [contract])
 
   useEffect(() => {
     setPage(1)
@@ -243,11 +256,11 @@ export default function ActivePools() {
   }
 
   const filtered = useMemo(() => {
-    return rounds.filter(r => {
+    return rounds.filter((r) => {
       const matchesSearch = r.name.toLowerCase().includes(search.toLowerCase())
       const matchesFilter =
         filter === 'all' ||
-        (filter === 'unclaimed') ||
+        filter === 'unclaimed' ||
         (filter === 'high' && parseFloat(r.usd) >= 5)
       return matchesSearch && matchesFilter
     })
@@ -265,13 +278,23 @@ export default function ActivePools() {
   const totalPages = Math.ceil(sorted.length / roundsPerPage)
   const paginated = sorted.slice((page - 1) * roundsPerPage, page * roundsPerPage)
 
-  const originUrl = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
+  const originUrl =
+    typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
+  const pageUrl = `${originUrl}/active`
+  const ogImage = buildOgUrl('active') // your helper builds a dynamic OG; ensure route exists
 
   return (
     <Layout>
-      <Head>
-        <title>MadFill – Active Rounds</title>
-      </Head>
+      <SEO
+        title="MadFill — Active Rounds"
+        description="See all active MadFill rounds on Base. Join a round, fill the blank, and win the pot."
+        url={pageUrl}
+        image={ogImage}
+        // if your SEO component supports these props:
+        twitterCard="summary_large_image"
+        ogType="website"
+      />
+
       <main className="max-w-6xl mx-auto p-6 space-y-6">
         <h1 className="text-4xl font-extrabold text-white drop-shadow">🧠 Active Rounds</h1>
 
@@ -288,15 +311,23 @@ export default function ActivePools() {
             placeholder="🔍 Search by name..."
             className="w-full sm:w-1/3 p-2 bg-slate-900 border border-slate-700 rounded"
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={(e) => setSearch(e.target.value)}
           />
-          <select className="p-2 bg-slate-900 border border-slate-700 rounded" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          <select
+            className="p-2 bg-slate-900 border border-slate-700 rounded"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+          >
             <option value="newest">📅 Newest</option>
             <option value="deadline">⏳ Ending Soon</option>
             <option value="participants">👥 Most Participants</option>
             <option value="prize">💰 Prize Pool</option>
           </select>
-          <select className="p-2 bg-slate-900 border border-slate-700 rounded" value={filter} onChange={e => setFilter(e.target.value)}>
+          <select
+            className="p-2 bg-slate-900 border border-slate-700 rounded"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          >
             <option value="all">🌐 All</option>
             <option value="unclaimed">🪙 Unclaimed Only</option>
             <option value="high">💰 High Pools ($5+)</option>
@@ -307,7 +338,9 @@ export default function ActivePools() {
           <div className="text-white mt-8 text-lg text-center space-y-3">
             <p>No active rounds right now. Be the first to start one! 🚀</p>
             <Link href="/">
-              <Button className="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded-lg">➕ Create New Round</Button>
+              <Button className="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded-lg">
+                ➕ Create New Round
+              </Button>
             </Link>
           </div>
         ) : (
@@ -318,17 +351,24 @@ export default function ActivePools() {
             transition={{ duration: 0.4 }}
             className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6"
           >
-            {paginated.map(r => {
+            {paginated.map((r) => {
               const rUrl = `${originUrl}/round/${r.id}`
               const shareTxt = `Play MadFill Round #${r.id}!`
               return (
-                <Card key={r.id} className="relative bg-gradient-to-br from-slate-800 to-slate-900 text-white border border-slate-700 rounded-xl hover:shadow-xl transition-all duration-300">
+                <Card
+                  key={r.id}
+                  className="relative bg-gradient-to-br from-slate-800 to-slate-900 text-white border border-slate-700 rounded-xl hover:shadow-xl transition-all duration-300"
+                >
                   <CardHeader className="flex justify-between items-start">
                     <div className="flex items-start gap-3">
                       <div className="text-3xl">{r.emoji}</div>
                       <div>
                         <h2 className="text-lg font-bold">#{r.id} — {r.name}</h2>
-                        {r.badge && <span className="text-sm text-yellow-400 animate-pulse font-semibold">{r.badge}</span>}
+                        {r.badge && (
+                          <span className="text-sm text-yellow-400 animate-pulse font-semibold">
+                            {r.badge}
+                          </span>
+                        )}
                         <p className="text-xs text-slate-400 mt-1">Theme: {r.theme}</p>
                       </div>
                     </div>
@@ -341,17 +381,16 @@ export default function ActivePools() {
                     <p><strong>Entry Fee:</strong> {r.feeBase} BASE</p>
                     <p><strong>Participants:</strong> {r.count}</p>
                     <p>
-                      <strong>Total Pool:</strong>{' '}
-                      {r.usdApprox ? '~' : ''}${r.usd}
+                      <strong>Total Pool:</strong> {r.usdApprox ? '~' : ''}${r.usd}
                     </p>
 
-                    {/* Share active round */}
+                    {/* Share (Farcaster-ready; ShareBar uses embedUrl for rich preview) */}
                     <div className="pt-1">
                       <ShareBar url={rUrl} text={shareTxt} embedUrl={rUrl} small />
                     </div>
 
                     <button
-                      onClick={() => setExpanded(prev => ({ ...prev, [r.id]: !prev[r.id] }))}
+                      onClick={() => setExpanded((prev) => ({ ...prev, [r.id]: !prev[r.id] }))}
                       className="text-indigo-400 text-xs underline"
                     >
                       {expanded[r.id] ? 'Hide Entries' : 'Show Entries'}
@@ -360,9 +399,12 @@ export default function ActivePools() {
                     {expanded[r.id] && (
                       <div className="bg-slate-700 p-2 rounded text-xs text-slate-100 max-h-48 overflow-y-auto space-y-2">
                         {r.submissions.map((s, idx) => {
-                          const p = r.participants.find(p => p.address.toLowerCase() === s.address.toLowerCase())
+                          const p = r.participants.find(
+                            (p) => p.address.toLowerCase() === s.address.toLowerCase()
+                          )
                           const likeKey = `${r.id}-${idx}`
-                          const displayName = s.username || p?.fallbackUsername || s.address.slice(2,6).toUpperCase()
+                          const displayName =
+                            s.username || p?.fallbackUsername || s.address.slice(2, 6).toUpperCase()
                           return (
                             <div key={`${s.address}-${idx}`} className="flex items-start gap-2">
                               <img
@@ -371,7 +413,9 @@ export default function ActivePools() {
                                 width={24}
                                 height={24}
                                 className="rounded-full border border-white mt-1"
-                                onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
+                                onError={(e) => {
+                                  e.currentTarget.src = '/Capitalize.PNG'
+                                }}
                               />
                               <div className="flex-1">
                                 <p className="text-slate-300 font-semibold">@{displayName}</p>
@@ -391,7 +435,9 @@ export default function ActivePools() {
                     )}
 
                     <Link href={`/round/${r.id}`}>
-                      <Button className="mt-3 bg-indigo-600 hover:bg-indigo-500 w-full">✏️ Enter Round</Button>
+                      <Button className="mt-3 bg-indigo-600 hover:bg-indigo-500 w-full">
+                        ✏️ Enter Round
+                      </Button>
                     </Link>
                   </CardContent>
                 </Card>
@@ -405,7 +451,9 @@ export default function ActivePools() {
             {Array.from({ length: totalPages }).map((_, i) => (
               <Button
                 key={i}
-                className={`px-4 py-1 rounded-full ${page === i + 1 ? 'bg-indigo-600' : 'bg-slate-700'} text-sm`}
+                className={`px-4 py-1 rounded-full ${
+                  page === i + 1 ? 'bg-indigo-600' : 'bg-slate-700'
+                } text-sm`}
                 onClick={() => setPage(i + 1)}
               >
                 {i + 1}
