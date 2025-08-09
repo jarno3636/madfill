@@ -1,3 +1,4 @@
+// pages/myo.jsx
 'use client'
 
 import Layout from '@/components/Layout'
@@ -6,6 +7,9 @@ import { Button } from '@/components/ui/button'
 import clsx from 'clsx'
 import { ethers } from 'ethers'
 import NFT_ABI from '@/abi/MadFillTemplateNFT_ABI.json'
+import SEO from '@/components/SEO'
+import ShareBar from '@/components/ShareBar'
+import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 
 /** =========================
  *  Visual presets
@@ -65,8 +69,8 @@ export default function MyoPage() {
   const [isOnBase, setIsOnBase] = useState(true)
 
   // on-chain config (fetched)
-  const [mintEth, setMintEth] = useState(null)       // number (ETH)
-  const [royaltyBps, setRoyaltyBps] = useState(null) // number (bps)
+  const [mintEth, setMintEth] = useState(null)
+  const [royaltyBps, setRoyaltyBps] = useState(null)
   const [payoutWallet, setPayoutWallet] = useState('')
 
   // contract limits (fetched)
@@ -202,7 +206,6 @@ export default function MyoPage() {
 
   /** ============== Editing helpers ============== */
   const handlePartChange = (value, i) => {
-    // normalize triple spaces & trim soft
     const safe = value.replace(/\s{3,}/g, '  ')
     const newParts = [...parts]
     newParts[i] = safe
@@ -250,10 +253,7 @@ export default function MyoPage() {
     }
     if (total > _maxTotalBytes) return `Template too large (max ${_maxTotalBytes} bytes total).`
 
-    // at least one "____"
-    const hasBlank = parts.some((p) => p === '____')
-    if (!hasBlank) return 'Add at least one blank "____" for people to fill!'
-
+    if (!parts.some((p) => p === '____')) return 'Add at least one blank "____" for people to fill!'
     return null
   }
 
@@ -278,7 +278,6 @@ export default function MyoPage() {
 
     try {
       setBusy(true)
-      // ensure connected
       if (!address) {
         await connectWallet()
         if (!address) throw new Error('Connect your wallet first.')
@@ -305,7 +304,6 @@ export default function MyoPage() {
       setStatus('⛏️ Minting… waiting for confirmation')
       const r = await tx.wait()
 
-      // Optional: show tokenId from a Minted event
       let tokenIdStr = null
       try {
         for (const log of r.logs || []) {
@@ -329,16 +327,24 @@ export default function MyoPage() {
     }
   }
 
-  /** ============== Share ============== */
-  const shareText = encodeURIComponent(
-    `🧠 I made a custom MadFill!\n\n${parts.join(' ')}\n\nTry it here: https://madfill.vercel.app/myo`
-  )
-  const farcasterShare = `https://warpcast.com/~/compose?text=${shareText}`
-  const twitterShare = `https://twitter.com/intent/tweet?text=${shareText}`
+  /** ============== SEO + Share ============== */
+  const pageUrl = absoluteUrl('/myo')
+  const ogImage = buildOgUrl({ screen: 'myo', title: 'Make Your Own MadFill' })
+  const shareUrl = pageUrl
+  const shareText = `🧠 I made a custom MadFill!\n\n${parts.join(' ')}\n\nTry it here: ${shareUrl}`
 
   /** ============== Render ============== */
   return (
     <Layout>
+      <SEO
+        title="Make Your Own — MadFill"
+        description="Design a custom MadFill template and mint it as an NFT so others can remix it forever."
+        url={pageUrl}
+        image={ogImage}
+        type="website"
+        twitterCard="summary_large_image"
+      />
+
       <div className="rounded-xl shadow-xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-950 text-white p-6">
         {/* Header + connect */}
         <div className="mb-6 grid gap-4 md:grid-cols-2">
@@ -517,25 +523,8 @@ export default function MyoPage() {
             )}
           </div>
 
-          {/* Share */}
-          <div className="flex gap-2">
-            <a
-              href={farcasterShare}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="bg-purple-600 hover:bg-purple-500 px-4 py-2 rounded text-white text-sm"
-            >
-              🌀 Share
-            </a>
-            <a
-              href={twitterShare}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded text-white text-sm"
-            >
-              🐦 Tweet
-            </a>
-          </div>
+          {/* Share (unified) */}
+          <ShareBar url={shareUrl} text={shareText} embedUrl={shareUrl} small />
         </div>
 
         {status && (
