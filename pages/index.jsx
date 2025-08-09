@@ -21,8 +21,6 @@ const CONTRACT_ADDRESS =
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // FillInStoryV3 on Base
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
-const BASE_CHAIN_ID_HEX = '0x2105' // 8453
-
 const FEATURED_TAKE = 9
 
 const extractError = (e) =>
@@ -34,39 +32,41 @@ const extractError = (e) =>
   (typeof e === 'string' ? e : JSON.stringify(e))
 
 export default function Home() {
+  // status + logs
   const [status, setStatus] = useState('')
   const [logs, setLogs] = useState([])
   const loggerRef = useRef(null)
 
+  // passive wallet signal (no UI here—wallet lives in Layout)
   const [address, setAddress] = useState(null)
-  const [isOnBase, setIsOnBase] = useState(false)
 
+  // form state
   const [roundId, setRoundId] = useState('')
   const [roundName, setRoundName] = useState('')
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
   const [blankIndex, setBlankIndex] = useState(0)
-
   const [word, setWord] = useState('')
-  const [duration, setDuration] = useState(durations[0].value)
+  const [duration, setDuration] = useState(durations[0].value) // days
   const [feeEth, setFeeEth] = useState(0.01) // ETH on Base
   const [busy, setBusy] = useState(false)
 
+  // flair + confetti
   const [profile, setProfile] = useState(null)
   const [showConfetti, setShowConfetti] = useState(false)
 
+  // featured
   const [featured, setFeatured] = useState([])
   const [loadingFeatured, setLoadingFeatured] = useState(true)
 
   const { width, height } = useWindowSize()
-
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx] // { name, parts, blanks }
 
   const log = (msg) => {
     setLogs((prev) => [...prev, msg])
     setTimeout(() => {
-      loggerRef.current && (loggerRef.current.scrollTop = loggerRef.current.scrollHeight)
+      if (loggerRef.current) loggerRef.current.scrollTop = loggerRef.current.scrollHeight
     }, 30)
   }
 
@@ -101,75 +101,32 @@ export default function Home() {
   }
 
   function sanitizeWord(raw) {
-    // one token, letters/numbers/_/-, max 16 chars
-    const token = (raw || '')
+    return (raw || '')
       .trim()
       .split(' ')[0]
       .replace(/[^a-zA-Z0-9\-_]/g, '')
       .slice(0, 16)
-    return token
   }
 
-  // -------- wallet boot (read-only to set chain state) --------
+  // passive wallet (no prompting)
   useEffect(() => {
     if (!window?.ethereum) return
     let cancelled = false
     ;(async () => {
       try {
-        const provider = new ethers.BrowserProvider(window.ethereum)
-        const net = await provider.getNetwork()
-        if (!cancelled) setIsOnBase(net?.chainId === 8453n)
+        const accts = await window.ethereum.request?.({ method: 'eth_accounts' })
+        if (!cancelled) setAddress(accts?.[0] || null)
       } catch {}
-      const onChain = async () => {
-        try {
-          const p = new ethers.BrowserProvider(window.ethereum)
-          const net = await p.getNetwork()
-          setIsOnBase(net?.chainId === 8453n)
-        } catch {}
-      }
       const onAcct = (accs) => setAddress(accs?.[0] || null)
-      window.ethereum.on?.('chainChanged', onChain)
       window.ethereum.on?.('accountsChanged', onAcct)
       return () => {
-        window.ethereum.removeListener?.('chainChanged', onChain)
         window.ethereum.removeListener?.('accountsChanged', onAcct)
       }
     })()
-    return () => {}
+    return () => { cancelled = true }
   }, [])
 
-  async function switchToBase() {
-    if (!window?.ethereum) return
-    try {
-      await window.ethereum.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: BASE_CHAIN_ID_HEX }],
-      })
-      setIsOnBase(true)
-    } catch (e) {
-      if (e?.code === 4902) {
-        try {
-          await window.ethereum.request({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: BASE_CHAIN_ID_HEX,
-              chainName: 'Base',
-              rpcUrls: [BASE_RPC],
-              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-              blockExplorerUrls: ['https://basescan.org'],
-            }],
-          })
-          setIsOnBase(true)
-        } catch (err) {
-          setStatus(extractError(err))
-        }
-      } else {
-        setStatus(extractError(e))
-      }
-    }
-  }
-
-  // profile flair (after connect)
+  // fetch farcaster flair once we know the address
   useEffect(() => {
     if (!address) return
     ;(async () => {
@@ -180,7 +137,7 @@ export default function Home() {
     })()
   }, [address])
 
-  // featured (read-only)
+  // featured rounds (read-only)
   useEffect(() => {
     let cancelled = false
     setLoadingFeatured(true)
@@ -194,11 +151,8 @@ export default function Home() {
           return
         }
         const start = Math.max(1, total - FEATURED_TAKE + 1)
-        const ids = []
-        for (let i = total; i >= start; i--) ids.push(i)
-
         const rows = []
-        for (const id of ids) {
+        for (let id = total; id >= start; id--) {
           const info = await ct.getPool1Info(BigInt(id))
           const name = info[0]
           const theme = info[1]
@@ -207,17 +161,15 @@ export default function Home() {
           const deadline = Number(info[4])
           const creator = info[5]
           const participants = info[6] || []
-          const winner = info[7]
-          const claimed = info[8]
           const poolBalance = info[9]
 
-          // creator preview
           let creatorPreview = ''
           try {
             const sub = await ct.getPool1Submission(BigInt(id), creator)
-            const stored = sub[1] // word (may be plain)
+            const stored = sub[1]
             creatorPreview = buildPreviewSingle(parts, stored, 0)
           } catch {}
+
           rows.push({
             id,
             name: name || `Round #${id}`,
@@ -225,11 +177,8 @@ export default function Home() {
             parts,
             preview: creatorPreview || buildPreviewSingle(parts, '', 0),
             entrants: participants.length,
-            feeEth: Number(ethers.formatEther(feeBase || 0n)),
             poolEth: Number(ethers.formatEther(poolBalance || 0n)),
-            deadline,
-            winner,
-            claimed
+            deadline
           })
         }
         if (!cancelled) setFeatured(rows)
@@ -269,20 +218,14 @@ export default function Home() {
       setBusy(true)
       setStatus('')
       log('Connecting wallet...')
-      // Always prompt to ensure wallet wakes up
-      const p0 = new ethers.BrowserProvider(window.ethereum)
-      await p0.send('eth_requestAccounts', [])
-      let net = await p0.getNetwork()
-      if (net?.chainId !== 8453n) {
-        log('Switching to Base...')
-        await switchToBase()
-      }
-      // Rebuild provider & signer AFTER chain switch
       const provider = new ethers.BrowserProvider(window.ethereum)
-      const signer = await provider.getSigner()
-      net = await provider.getNetwork()
-      if (net?.chainId !== 8453n) throw new Error('Please switch to Base')
+      await provider.send('eth_requestAccounts', [])
+      const net = await provider.getNetwork()
+      if (net?.chainId !== 8453n) {
+        throw new Error('Please switch to Base network')
+      }
 
+      const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
       const feeBase = ethers.parseUnits(String(feeEth), 18) // ETH on Base
@@ -297,7 +240,7 @@ export default function Home() {
 
       log(`Creating round "${name}"...`)
 
-      // Preflight to surface revert reasons
+      // Preflight for revert reasons
       await ct.createPool1.staticCall(
         name,
         theme,
@@ -310,7 +253,7 @@ export default function Home() {
         { value }
       )
 
-      // Send real tx
+      // Real tx
       const tx = await ct.createPool1(
         name,
         theme,
@@ -324,7 +267,7 @@ export default function Home() {
       )
       const rc = await tx.wait()
 
-      // Pull id from event if present; fallback to reading counter
+      // Try to grab id from event; fallback to counter
       let newId = ''
       try {
         const evt = rc.logs?.find((l) => l.fragment?.name === 'Pool1Created')
@@ -351,7 +294,8 @@ export default function Home() {
     }
   }
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
+  const origin =
+    typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
   const roundUrl = roundId ? `${origin}/round/${roundId}` : origin
   const shareText = roundId
     ? `I just created a MadFill round! Join Round #${roundId}.`
@@ -360,7 +304,9 @@ export default function Home() {
   const blankPill = (active) =>
     [
       'inline-flex items-center justify-center px-2 h-7 text-center border-b-2 font-bold cursor-pointer mx-1 rounded',
-      active ? 'border-yellow-300 text-yellow-200 bg-yellow-300/10' : 'border-slate-400 text-slate-200 bg-slate-700/40'
+      active
+        ? 'border-yellow-300 text-yellow-200 bg-yellow-300/10'
+        : 'border-slate-400 text-slate-200 bg-slate-700/40'
     ].join(' ')
 
   return (
@@ -371,11 +317,16 @@ export default function Home() {
         <meta property="og:title" content="MadFill — Create or Join a Round" />
         <meta property="og:description" content="MadFill on Base. Fill the blank, vote, and win the pool." />
         <meta property="og:url" content={origin} />
+        {/* Make sure /public/og-image.png exists */}
+        <meta property="og:image" content={`${origin}/og-image.png`} />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:image" content={`${origin}/og-image.png`} />
       </Head>
+
       {showConfetti && <Confetti width={width} height={height} />}
 
       <main className="max-w-6xl mx-auto p-4 md:p-6 space-y-6 text-white">
-        {/* Hero */}
+        {/* Hero (wallet lives in Layout header) */}
         <div className="rounded-2xl bg-gradient-to-br from-indigo-700 via-fuchsia-700 to-cyan-700 p-6 md:p-8 shadow-xl ring-1 ring-white/10">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
@@ -385,7 +336,6 @@ export default function Home() {
                 and let the community decide the best punchline.
               </p>
             </div>
-            {/* Wallet buttons removed: wallet lives in header */}
             <div className="flex items-center gap-3">
               <Link href="/active" className="underline text-white/90 text-sm">
                 View Active Rounds
@@ -405,7 +355,11 @@ export default function Home() {
             </div>
           </CardHeader>
           <CardContent className="p-5 space-y-5">
-            {status && <div className="rounded-lg bg-slate-800/70 border border-slate-700 p-2 text-sm">{status}</div>}
+            {status && (
+              <div className="rounded-lg bg-slate-800/70 border border-slate-700 p-2 text-sm">
+                {status}
+              </div>
+            )}
 
             {/* Name + Category/Template */}
             <div className="grid md:grid-cols-2 gap-4">
@@ -425,10 +379,16 @@ export default function Home() {
                   <select
                     className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                     value={catIdx}
-                    onChange={(e) => { setCatIdx(Number(e.target.value)); setTplIdx(0); setBlankIndex(0) }}
+                    onChange={(e) => {
+                      setCatIdx(Number(e.target.value))
+                      setTplIdx(0)
+                      setBlankIndex(0)
+                    }}
                     disabled={busy}
                   >
-                    {categories.map((c, i) => <option key={i} value={i}>{c.name}</option>)}
+                    {categories.map((c, i) => (
+                      <option key={i} value={i}>{c.name}</option>
+                    ))}
                   </select>
                 </label>
                 <label className="block text-sm text-slate-300">
@@ -436,10 +396,15 @@ export default function Home() {
                   <select
                     className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                     value={tplIdx}
-                    onChange={(e) => { setTplIdx(Number(e.target.value)); setBlankIndex(0) }}
+                    onChange={(e) => {
+                      setTplIdx(Number(e.target.value))
+                      setBlankIndex(0)
+                    }}
                     disabled={busy}
                   >
-                    {selectedCategory.templates.map((t, i) => <option key={i} value={i}>{t.name}</option>)}
+                    {selectedCategory.templates.map((t, i) => (
+                      <option key={i} value={i}>{t.name}</option>
+                    ))}
                   </select>
                 </label>
               </div>
@@ -494,9 +459,13 @@ export default function Home() {
                   onChange={(e) => setDuration(Number(e.target.value))}
                   disabled={busy}
                 >
-                  {durations.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+                  {durations.map((d) => (
+                    <option key={d.value} value={d.value}>{d.label}</option>
+                  ))}
                 </select>
-                <div className="text-[11px] text-slate-400 mt-1">How long entries are open.</div>
+                <div className="text-[11px] text-slate-400 mt-1">
+                  How long entries are open.
+                </div>
               </label>
 
               <label className="block text-sm text-slate-300">
@@ -575,7 +544,8 @@ export default function Home() {
             ) : (
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {featured.map((r) => {
-                  const originUrl = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
+                  const originUrl =
+                    typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
                   const rUrl = `${originUrl}/round/${r.id}`
                   const shareTxt = `Play MadFill Round #${r.id}!`
                   return (
