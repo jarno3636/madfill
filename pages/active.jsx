@@ -2,7 +2,6 @@
 'use client'
 
 import React, { useEffect, useMemo, useState } from 'react'
-import Head from 'next/head'
 import { ethers } from 'ethers'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import Layout from '@/components/Layout'
@@ -267,28 +266,12 @@ export default function ActivePools() {
   const totalPages = Math.ceil(sorted.length / roundsPerPage)
   const paginated = sorted.slice((page - 1) * roundsPerPage, page * roundsPerPage)
 
-  // SSR-safe URLs for SEO + Farcaster Frame
+  // SEO (Frames meta removed — SEO handles OG)
   const pageUrl = absoluteUrl('/active')
   const ogImage = buildOgUrl({ screen: 'active', title: 'Active Rounds' })
 
   return (
     <Layout>
-      {/* Farcaster Frame meta (inline rendering in Warpcast) */}
-      <Head>
-        {/* OG for general link unfurls */}
-        <meta property="og:title" content="MadFill — Active Rounds" />
-        <meta property="og:description" content="Browse live MadFill rounds on Base. Enter with one word, vote, and win the pot." />
-        <meta property="og:image" content={ogImage} />
-        <meta property="og:url" content={pageUrl} />
-
-        {/* Frame vNext basic link-button that opens your page in-app */}
-        <meta name="fc:frame" content="vNext" />
-        <meta name="fc:frame:image" content={ogImage} />
-        <meta name="fc:frame:button:1" content="Play Now" />
-        <meta name="fc:frame:button:1:action" content="link" />
-        <meta name="fc:frame:button:1:target" content={pageUrl} />
-      </Head>
-
       <SEO
         title="MadFill — Active Rounds"
         description="Browse live MadFill rounds on Base. Enter with one word, vote, and win the pot."
