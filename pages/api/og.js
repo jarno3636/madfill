@@ -1,84 +1,71 @@
 // pages/api/og.js
-import fs from 'fs/promises'
-import path from 'path'
-import crypto from 'crypto'
 
-const exts = ['.png', '.webp', '.jpg', '.jpeg']
-
-function sanitizeId(raw) {
-  // allow only digits to prevent path shenanigans; adjust if your IDs can be different
-  return String(raw || '').replace(/[^\d]/g, '')
-}
-
-async function findOgForRound(id) {
-  const baseDir = path.join(process.cwd(), 'public', 'og')
-  for (const ext of exts) {
-    const p = path.join(baseDir, `round-${id}${ext}`)
-    try {
-      await fs.access(p)
-      return p
-    } catch {}
-  }
-  return null
-}
-
-async function readWithMeta(filePath) {
-  const data = await fs.readFile(filePath)
-  const stat = await fs.stat(filePath)
-  const etag = crypto.createHash('sha1').update(data).digest('hex')
-  return { data, mtime: stat.mtime, etag }
-}
-
-function mimeFromExt(filePath) {
-  const ext = path.extname(filePath).toLowerCase()
-  if (ext === '.png') return 'image/png'
-  if (ext === '.webp') return 'image/webp'
-  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
-  return 'application/octet-stream'
-}
-
-export default async function handler(req, res) {
+export default function handler(req, res) {
   try {
-    const id = sanitizeId(req.query.id)
-    const baseDir = path.join(process.cwd(), 'public', 'og')
+    const {
+      title = 'MadFill — Active Rounds',
+      subtitle = 'Fill the blank. Make it funny. Win the pot.',
+      roundId = '',
+      screen = 'active',
+    } = req.query
 
-    let filePath
-    if (id) {
-      filePath = await findOgForRound(id)
-    }
-    if (!filePath) {
-      // global fallback
-      for (const ext of exts) {
-        const p = path.join(baseDir, `cover${ext}`)
-        try {
-          await fs.access(p)
-          filePath = p
-          break
-        } catch {}
-      }
-    }
-    if (!filePath) {
-      res.status(404).send('OG image not found')
-      return
-    }
+    const safe = (s) => String(s || '').slice(0, 140)
+    const t = safe(title)
+    const sub = safe(subtitle)
+    const rid = safe(roundId)
+    const scr = safe(screen)
 
-    const { data, mtime, etag } = await readWithMeta(filePath)
+    const svg = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630">
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#1e1b4b"/>
+            <stop offset="50%" stop-color="#6d28d9"/>
+            <stop offset="100%" stop-color="#0891b2"/>
+          </linearGradient>
+          <filter id="shadow">
+            <feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#000" flood-opacity="0.5"/>
+          </filter>
+        </defs>
+        <rect width="1200" height="630" fill="url(#g)" />
+        <rect x="36" y="36" width="1128" height="558" rx="28" fill="rgba(0,0,0,0.35)" />
+        <text x="80" y="230" fill="#fff" font-size="66" font-weight="800"
+          font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial"
+          filter="url(#shadow)">${escapeXml(t)}</text>
+        <text x="80" y="300" fill="#c7d2fe" font-size="30" font-weight="600"
+          font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial">
+          ${escapeXml(sub)}
+        </text>
+        <text x="80" y="360" fill="#93c5fd" font-size="26" font-weight="700"
+          font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial">
+          ${scr ? `Screen: ${escapeXml(scr)}` : ''}
+        </text>
+        ${rid
+          ? `<text x="80" y="410" fill="#a5b4fc" font-size="28" font-weight="800"
+               font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial">
+               Round #${escapeXml(rid)}
+             </text>`
+          : ''
+        }
+        <text x="80" y="500" fill="#e5e7eb" font-size="22" font-weight="600"
+          font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial">
+          madfill.vercel.app
+        </text>
+      </svg>
+    `.trim()
 
-    // Caching: 1 day browser, CDN can keep longer
-    res.setHeader('Content-Type', mimeFromExt(filePath))
-    res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=604800, immutable')
-    res.setHeader('ETag', etag)
-    res.setHeader('Last-Modified', mtime.toUTCString())
-
-    // ETag check (cheap 304s)
-    if (req.headers['if-none-match'] === etag) {
-      res.status(304).end()
-      return
-    }
-
-    res.status(200).send(data)
-  } catch (err) {
-    console.error('OG image error:', err)
-    res.status(500).send('Error loading OG image')
+    res.setHeader('Content-Type', 'image/svg+xml')
+    res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=1200, stale-while-revalidate=86400')
+    res.status(200).send(svg)
+  } catch (e) {
+    res.status(200).send('<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630"></svg>')
   }
+}
+
+function escapeXml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
 }
