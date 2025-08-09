@@ -2,6 +2,7 @@
 'use client'
 
 import React, { useState, useEffect, useRef, useMemo } from 'react'
+import Head from 'next/head'
 import Link from 'next/link'
 import { ethers } from 'ethers'
 import Confetti from 'react-confetti'
@@ -58,7 +59,7 @@ export default function Home() {
 
   // featured
   const [featured, setFeatured] = useState([])
-  const [loadingFeatured, setLoadingFeatured] = useState(true)
+  the [loadingFeatured, setLoadingFeatured] = useState(true)
 
   const { width, height } = useWindowSize()
   const selectedCategory = categories[catIdx]
@@ -315,6 +316,13 @@ export default function Home() {
 
   return (
     <Layout>
+      {/* Farcaster Mini App hint + canonical/icon for clients */}
+      <Head>
+        <meta name="fc:frame" content="vNext" />
+        <link rel="icon" href={absoluteUrl('/favicon.ico')} />
+        <link rel="canonical" href={origin} />
+      </Head>
+
       <SEO
         title={seoTitle}
         description={seoDesc}
