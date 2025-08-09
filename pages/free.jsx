@@ -189,15 +189,12 @@ export default function FreeGame() {
         buttonTitle="Play Free"
         name="MadFill"
         url={permalink}                    // where the inline app should launch
-        splashImageUrl="/og/cover.png"     // put a square icon in public/og/cover.png
+        splashImageUrl="/og/cover.PNG"     // put a square icon in public/og/cover.png
         splashBackgroundColor="#1e1b4b"
       />
 
       {/* Optional: Farcaster author hint if we know it */}
       {profile?.username ? (
-        <head>
-          <meta name="fc:creator" content={`@${profile.username}`} />
-        </head>
       ) : null}
 
       {showConfetti && <Confetti width={width} height={height} />}
