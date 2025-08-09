@@ -14,7 +14,7 @@ export default function FcMiniAppMeta({
   imageUrl,
   buttonTitle = 'Open MadFill',
   name = 'MadFill',
-  splashImageUrl = '/og/cover.png',
+  splashImageUrl = '/og/cover.PNG',
   splashBackgroundColor = '#3b1a9a',
   url,
 }) {
