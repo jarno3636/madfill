@@ -3,15 +3,43 @@
 
 import { useMemo, useState, useCallback } from 'react'
 
+/**
+ * Optional OG config you can pass:
+ * og = { title, subtitle, screen, roundId, image }  // `image` lets you override with a direct PNG
+ *
+ * If `embedUrl` is omitted and `og` is provided, we’ll build:
+ *   {origin}/api/og?title=...&subtitle=...&screen=...&roundId=...
+ */
+function buildEmbedUrl({ embedUrl, og }) {
+  if (embedUrl) return embedUrl
+  if (!og) return ''
+
+  // Prefer explicit image if provided
+  if (og.image) return og.image
+
+  const origin =
+    typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
+
+  const params = new URLSearchParams()
+  if (og.title) params.set('title', og.title)
+  if (og.subtitle) params.set('subtitle', og.subtitle)
+  if (og.screen) params.set('screen', og.screen)
+  if (og.roundId != null && og.roundId !== '') params.set('roundId', String(og.roundId))
+
+  return `${origin}/api/og?${params.toString()}`
+}
+
 function buildShareUrls({ url, text, embedUrl }) {
   const u = encodeURIComponent(url || '')
   const t = encodeURIComponent(text || '')
+  const hasEmbed = Boolean(embedUrl)
+
   // Warpcast supports embeds[]= for rich previews
-  const warpcast = embedUrl
+  const warpcast = hasEmbed
     ? `https://warpcast.com/~/compose?text=${t}%0A${u}&embeds[]=${encodeURIComponent(embedUrl)}`
     : `https://warpcast.com/~/compose?text=${t}%0A${u}`
 
-  // X/Twitter: include text + URL; (leaving room for clients to auto-link)
+  // X/Twitter
   const twitter = `https://twitter.com/intent/tweet?text=${t}%0A${u}`
 
   return { warpcast, twitter }
@@ -20,12 +48,16 @@ function buildShareUrls({ url, text, embedUrl }) {
 export default function ShareBar({
   url = '',
   text = '',
-  embedUrl = '',     // pass the same URL (or a specific page/image) to guarantee Warpcast unfurl
+  embedUrl = '',        // direct image or page url to embed (Warpcast)
+  og = null,            // optional { title, subtitle, screen, roundId, image }
   small = false,
   className = '',
 }) {
   const [copied, setCopied] = useState(false)
-  const hrefs = useMemo(() => buildShareUrls({ url, text, embedUrl }), [url, text, embedUrl])
+
+  // If no embedUrl is supplied, try to synthesize one from `og`
+  const finalEmbedUrl = useMemo(() => buildEmbedUrl({ embedUrl, og }), [embedUrl, og])
+  const hrefs = useMemo(() => buildShareUrls({ url, text, embedUrl: finalEmbedUrl }), [url, text, finalEmbedUrl])
 
   const pillBase =
     'inline-flex items-center gap-2 rounded-full font-semibold transition ' +
@@ -66,6 +98,7 @@ export default function ShareBar({
         rel="noopener noreferrer"
         className={`${pillBase} ${pillSize} bg-purple-600 hover:bg-purple-500 text-white shadow`}
         aria-label="Share on Warpcast"
+        title={finalEmbedUrl ? 'Opens with image embedded' : 'Opens composer'}
       >
         <span aria-hidden>🌀</span>
         <span>Warpcast</span>
