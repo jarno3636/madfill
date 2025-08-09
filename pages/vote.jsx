@@ -2,7 +2,6 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import Head from 'next/head'
 import { ethers } from 'ethers'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -11,14 +10,18 @@ import abi from '@/abi/FillInStoryV3_ABI.json'
 import { useWindowSize } from 'react-use'
 import Confetti from 'react-confetti'
 import Link from 'next/link'
+import SEO from '@/components/SEO'
+import ShareBar from '@/components/ShareBar'
+import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 
 // ---- Config ----
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // FillInStoryV3 (env wins)
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // env wins
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID_HEX = '0x2105' // Base chainId
+
 // IMPORTANT: V3 does not expose Pool2 feeBase in views. Set it in env.
 // Fallback: 0.0005 ETH
 const DEFAULT_VOTE_FEE_WEI = ethers.parseUnits('0.0005', 18)
@@ -28,7 +31,7 @@ const VOTE_FEE_WEI =
 
 export default function VotePage() {
   // state
-  const [rounds, setRounds] = useState([]) // array of Pool2 "cards" with original/challenger previews
+  const [rounds, setRounds] = useState([]) // Pool2 cards
   const [loading, setLoading] = useState(true)
   const [status, setStatus] = useState('')
   const [address, setAddress] = useState(null)
@@ -92,13 +95,13 @@ export default function VotePage() {
     return buildPreviewSingle(parts, word, index)
   }
 
-  // ---- wallet / chain ----
+  // ---- wallet / chain (observe only; connect handled in header) ----
   useEffect(() => {
     if (!window?.ethereum) return
     let cancelled = false
     ;(async () => {
       try {
-        const accts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+        const accts = await window.ethereum.request({ method: 'eth_accounts' }) // passive
         if (!cancelled) setAddress(accts?.[0] || null)
       } catch {}
       try {
@@ -174,13 +177,10 @@ export default function VotePage() {
         const provider = new ethers.JsonRpcProvider(BASE_RPC)
         const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
 
-        const p2CountRaw = await ct.pool2Count()
-        const p2Count = Number(p2CountRaw)
-
+        const p2Count = Number(await ct.pool2Count())
         const cards = []
         for (let id = 1; id <= p2Count; id++) {
           const info = await ct.getPool2Info(BigInt(id))
-          // (originalPool1Id, challengerWord, challengerUsername, challenger, votersOriginal, votersChallenger, claimed, challengerWon, poolBalance)
           const originalPool1Id = Number(info.originalPool1Id ?? info[0])
           const challengerWordRaw = info.challengerWord ?? info[1]
           const challengerUsername = info.challengerUsername ?? info[2]
@@ -191,7 +191,6 @@ export default function VotePage() {
           const challengerWon = Boolean(info.challengerWon ?? info[7])
           const poolBalance = info.poolBalance ?? info[8]
 
-          // Original card preview
           const p1 = await ct.getPool1Info(BigInt(originalPool1Id))
           const parts = p1.parts_ || p1[2]
           const creatorAddr = p1.creator_ || p1[5]
@@ -208,15 +207,12 @@ export default function VotePage() {
             id,
             originalPool1Id,
             parts,
-            // original side
             originalPreview,
             originalWordRaw,
-            // challenger side
             challengerPreview,
             challengerWordRaw,
             challengerUsername,
             challengerAddr,
-            // meta
             votersOriginal,
             votersChallenger,
             claimed,
@@ -250,7 +246,7 @@ export default function VotePage() {
       if (net?.chainId !== 8453n) await switchToBase()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
-      // Add a small buffer to avoid weird rounding issues.
+      // small buffer
       const value = (VOTE_FEE_WEI * 1005n) / 1000n
 
       // V3: votePool2(uint256 id, bool voteChallenger) payable
@@ -329,7 +325,6 @@ export default function VotePage() {
       const net = await provider.getNetwork()
       if (net?.chainId !== 8453n) await switchToBase()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
-      // V3: claimPool2(uint256 id)
       const tx = await ct.claimPool2(BigInt(id))
       await tx.wait()
       setClaimedId(id)
@@ -345,10 +340,10 @@ export default function VotePage() {
   // ---- filters / sorts ----
   const filtered = useMemo(() => {
     return rounds.filter((r) => {
-      if (filter === 'big') return r.poolUsd > 25 // tweak threshold
+      if (filter === 'big') return r.poolUsd > 25
       if (filter === 'tight') return Math.abs(r.votersOriginal - r.votersChallenger) <= 2
       if (filter === 'claimed') return r.claimed
-      if (filter === 'active') return !r.claimed // no on-chain deadline exposed; treat unclaimed as active
+      if (filter === 'active') return !r.claimed
       return true
     })
   }, [rounds, filter])
@@ -359,6 +354,12 @@ export default function VotePage() {
     if (sortBy === 'prize') return arr.sort((a, b) => b.poolUsd - a.poolUsd)
     return arr.sort((a, b) => b.id - a.id) // recent
   }, [filtered, sortBy])
+
+  // ---- SEO (SSR-safe) ----
+  const pageUrl = absoluteUrl('/vote')
+  const ogTitle = 'Community Vote — MadFill'
+  const ogDesc = 'Pick the punchline. Vote Original vs Challenger and split the pool with the winners on Base.'
+  const ogImage = buildOgUrl({ screen: 'vote', title: 'Community Vote' })
 
   // ---- render helpers ----
   function StatusPill({ claimed, challengerWon }) {
@@ -373,7 +374,14 @@ export default function VotePage() {
   // ---- UI ----
   return (
     <Layout>
-      <Head><title>Community Vote — MadFill</title></Head>
+      <SEO
+        title={ogTitle}
+        description={ogDesc}
+        url={pageUrl}
+        image={ogImage}
+        type="website"
+        twitterCard="summary_large_image"
+      />
       {(success || claimedId) && <Confetti width={width} height={height} />}
 
       <main className="max-w-6xl mx-auto p-4 md:p-6 text-white">
@@ -437,8 +445,8 @@ export default function VotePage() {
         ) : (
           <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
             {sorted.map((r) => {
-              const shareUrl = typeof window !== 'undefined' ? `${window.location.origin}/round/${r.originalPool1Id}` : ''
-              const shareText = `Vote on MadFill Challenge #${r.id} → Round #${r.originalPool1Id}! ${shareUrl}`
+              const shareUrl = absoluteUrl(`/round/${r.originalPool1Id}`)
+              const shareText = `Vote on MadFill Challenge #${r.id} → Round #${r.originalPool1Id}!`
               return (
                 <Card key={r.id} className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
                   <CardHeader className="flex items-start justify-between gap-2 bg-slate-800/60 border-b border-slate-700">
@@ -493,7 +501,7 @@ export default function VotePage() {
                     <div className="flex flex-wrap items-center gap-3">
                       {!r.claimed ? (
                         <>
-                          {/* FIX: true = voteChallenger */}
+                          {/* true = voteChallenger */}
                           <Button onClick={() => votePool2(r.id, true)} className="bg-blue-600 hover:bg-blue-500">
                             Vote Challenger
                           </Button>
@@ -507,18 +515,6 @@ export default function VotePage() {
                           >
                             View Challenger Card
                           </a>
-                          <button
-                            onClick={async () => {
-                              try {
-                                await navigator.clipboard.writeText(shareUrl)
-                                setStatus('Link copied')
-                                setTimeout(() => setStatus(''), 1200)
-                              } catch {}
-                            }}
-                            className="underline text-slate-300 text-sm"
-                          >
-                            Copy link
-                          </button>
                         </>
                       ) : (
                         <>
@@ -530,28 +526,12 @@ export default function VotePage() {
                       )}
 
                       {/* Social */}
-                      <a
-                        href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="underline text-blue-400 text-sm"
-                      >
-                        Share
-                      </a>
-                      <a
-                        href={`https://warpcast.com/~/compose?text=${encodeURIComponent(shareText)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="underline text-purple-300 text-sm"
-                      >
-                        Cast
-                      </a>
+                      <ShareBar url={shareUrl} text={shareText} small className="ml-auto" />
                     </div>
 
-                    {/* Tiny hint about fee source */}
                     <div className="text-[11px] text-slate-500">
-                      Voting fee comes from the challenge. App is sending {fmt(toEth(VOTE_FEE_WEI), 6)} ETH (+ tiny buffer). To override, set{' '}
-                      <code className="mx-1 bg-slate-800 px-1 rounded">NEXT_PUBLIC_POOL2_VOTE_FEE_WEI</code>.
+                      Voting fee comes from the challenge. App sends {fmt(toEth(VOTE_FEE_WEI), 6)} ETH (+ tiny buffer).
+                      To override, set <code className="mx-1 bg-slate-800 px-1 rounded">NEXT_PUBLIC_POOL2_VOTE_FEE_WEI</code>.
                     </div>
                   </CardContent>
                 </Card>
