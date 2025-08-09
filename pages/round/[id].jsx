@@ -13,6 +13,7 @@ import { useWindowSize } from 'react-use'
 import Link from 'next/link'
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
+import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
@@ -201,12 +202,11 @@ export default function RoundDetailPage() {
         setPriceUsd(3800)
       }
     })()
-    if (typeof window !== 'undefined') {
-      setShareUrl(window.location.origin + router.asPath)
-    }
+    // shareUrl with helper (handles SSR safely)
+    setShareUrl(absoluteUrl(router.asPath || `/round/${id || ''}`))
     tickRef.current = setInterval(() => setStatus((s) => (s ? s : '')), 1000)
     return () => clearInterval(tickRef.current)
-  }, [router.asPath])
+  }, [router.asPath, id])
 
   // ---------- load pool1 from V3 ----------
   useEffect(() => {
@@ -233,7 +233,7 @@ export default function RoundDetailPage() {
         const claimed = info.claimed_ ?? info[8]
         const poolBalance = info.poolBalance_ ?? info[9]
 
-        // Submissions & taken blanks (packed with fallback)
+        // Submissions & taken blanks
         let subms = []
         let takenSetLocal = new Set()
         try {
@@ -411,17 +411,15 @@ export default function RoundDetailPage() {
     !busy
   const canFinalize = ended && !round?.claimed && !claimedNow && (round?.entrants || 0) > 0 && !busy
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
-  const ogImage = `${origin}/api/og?id=${id || ''}`
+  // SEO bits
+  const pageTitle = round?.name ? `${round.name} — MadFill` : id ? `MadFill Round #${id}` : 'MadFill Round'
+  const pageDesc = 'Join a MadFill round on Base. Fill the blank, compete, and win the pot.'
+  const pageUrl = shareUrl || absoluteUrl(`/round/${id || ''}`)
+  const ogImage = buildOgUrl({ screen: 'round', id: id || '' })
 
   return (
     <Layout>
-      <SEO
-        title={round?.name ? `${round.name} — MadFill` : id ? `MadFill Round #${id}` : 'MadFill Round'}
-        description="Join a MadFill round on Base. Fill the blank, compete, and win the pot."
-        url={shareUrl || origin}
-        image={ogImage}
-      />
+      <SEO title={pageTitle} description={pageDesc} url={pageUrl} image={ogImage} />
 
       <main className="max-w-5xl mx-auto p-4 md:p-6 text-white">
         {/* Header */}
@@ -678,9 +676,9 @@ export default function RoundDetailPage() {
             <div className="mt-6 rounded-xl bg-slate-900/70 border border-slate-700 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <ShareBar
-                  url={shareUrl || origin}
+                  url={pageUrl}
                   text={`Join my MadFill round: ${round.name}`}
-                  embedUrl={shareUrl || origin}
+                  embedUrl={pageUrl}
                 />
                 <Link href="/active" className="underline text-indigo-300">
                   ← Back to Active Rounds
