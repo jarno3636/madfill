@@ -1,44 +1,59 @@
 // components/ShareBar.jsx
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useMemo, useState, useCallback } from 'react'
 
-function buildShareUrls({ url, text }) {
+function buildShareUrls({ url, text, embedUrl }) {
   const u = encodeURIComponent(url || '')
   const t = encodeURIComponent(text || '')
-  return {
-    twitter: `https://twitter.com/intent/tweet?text=${t}%0A${u}`,
-    warpcast: `https://warpcast.com/~/compose?text=${t}%0A${u}`,
-  }
+  // Warpcast supports embeds[]= for rich previews
+  const warpcast = embedUrl
+    ? `https://warpcast.com/~/compose?text=${t}%0A${u}&embeds[]=${encodeURIComponent(embedUrl)}`
+    : `https://warpcast.com/~/compose?text=${t}%0A${u}`
+
+  // X/Twitter: include text + URL; (leaving room for clients to auto-link)
+  const twitter = `https://twitter.com/intent/tweet?text=${t}%0A${u}`
+
+  return { warpcast, twitter }
 }
 
 export default function ShareBar({
   url = '',
   text = '',
+  embedUrl = '',     // pass the same URL (or a specific page/image) to guarantee Warpcast unfurl
   small = false,
   className = '',
 }) {
   const [copied, setCopied] = useState(false)
-  const hrefs = buildShareUrls({ url, text })
+  const hrefs = useMemo(() => buildShareUrls({ url, text, embedUrl }), [url, text, embedUrl])
 
-  const pill =
-    'inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-semibold transition ' +
-    (small ? 'text-xs px-2 py-1' : '')
+  const pillBase =
+    'inline-flex items-center gap-2 rounded-full font-semibold transition ' +
+    'focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-400 ' +
+    'active:scale-[0.98]'
+
+  const pillSize = small ? 'text-xs px-2.5 py-1.5' : 'text-sm px-3.5 py-2'
 
   const onCopy = useCallback(async () => {
     try {
-      await navigator.clipboard?.writeText(url)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    } catch {}
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(url)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1400)
+      }
+    } catch {
+      // noop
+    }
   }, [url])
 
   const onNativeShare = useCallback(async () => {
-    if (navigator.share) {
+    if (typeof navigator !== 'undefined' && navigator.share) {
       try {
         await navigator.share({ title: text, text, url })
         return
-      } catch {}
+      } catch {
+        // fall through to copy
+      }
     }
     onCopy()
   }, [text, url, onCopy])
@@ -48,28 +63,39 @@ export default function ShareBar({
       <a
         href={hrefs.warpcast}
         target="_blank"
-        rel="noreferrer"
-        className={`${pill} bg-purple-600 hover:bg-purple-500 text-white shadow`}
+        rel="noopener noreferrer"
+        className={`${pillBase} ${pillSize} bg-purple-600 hover:bg-purple-500 text-white shadow`}
         aria-label="Share on Warpcast"
       >
-        🌀 <span>Warpcast</span>
+        <span aria-hidden>🌀</span>
+        <span>Warpcast</span>
       </a>
+
       <a
         href={hrefs.twitter}
         target="_blank"
-        rel="noreferrer"
-        className={`${pill} bg-blue-600 hover:bg-blue-500 text-white shadow`}
-        aria-label="Share on Twitter/X"
+        rel="noopener noreferrer"
+        className={`${pillBase} ${pillSize} bg-blue-600 hover:bg-blue-500 text-white shadow`}
+        aria-label="Share on X (Twitter)"
       >
-        🐦 <span>Tweet</span>
+        <span aria-hidden>🐦</span>
+        <span>Tweet</span>
       </a>
+
       <button
+        type="button"
         onClick={onNativeShare}
-        className={`${pill} bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-600`}
-        aria-label="Share or copy"
+        className={`${pillBase} ${pillSize} bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-600`}
+        aria-label="Share (native) or copy link"
       >
-        {copied ? '✓ Copied' : '🔗 Share / Copy'}
+        <span aria-hidden>🔗</span>
+        <span>{copied ? 'Copied!' : 'Share / Copy'}</span>
       </button>
+
+      {/* a11y live region for copy feedback */}
+      <span className="sr-only" aria-live="polite">
+        {copied ? 'Link copied to clipboard' : ''}
+      </span>
     </div>
   )
 }
