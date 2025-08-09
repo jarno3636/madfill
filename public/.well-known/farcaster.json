@@ -1,0 +1,9 @@
+{
+  "name": "MadFill",
+  "homepage_url": "https://madfill.vercel.app",
+  "icon_url": "https://madfill.vercel.app/og/cover.PNG",
+  "description": "Fill the blank, vote, and win on Base.",
+  "splash_screens": [
+    "https://madfill.vercel.app/og/cover.PNG"
+  ]
+}
