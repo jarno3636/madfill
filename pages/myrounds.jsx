@@ -13,11 +13,12 @@ import abi from '@/abi/FillInStoryV3_ABI.json'
 import Link from 'next/link'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 import ShareBar from '@/components/ShareBar'
-import SEO from '@/components/SEO' // ✅ use your SEO component
+import SEO from '@/components/SEO'
+import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x6975a550130642E5cb67A87BE25c8134542D5a0a' // fallback
+  '0x6975a550130642E5cb67A87BE25c8134542D5a0a'
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID_HEX = '0x2105' // 8453
@@ -82,13 +83,13 @@ export default function MyRounds() {
     return out.join('')
   }
 
-  // wallet + chain (read address + net; connect is in the nav)
+  // wallet + chain (observe only; connect handled in the header)
   useEffect(() => {
     if (!window?.ethereum) return
     let cancelled = false
     ;(async () => {
       try {
-        const accts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+        const accts = await window.ethereum.request({ method: 'eth_accounts' }) // passive, no prompt
         if (!cancelled) setAddress(accts?.[0] || null)
       } catch {}
       try {
@@ -154,7 +155,7 @@ export default function MyRounds() {
     return () => clearInterval(tickRef.current)
   }, [])
 
-  // profile username for header flair / SEO <meta fc:creator>
+  // profile username for header flair / Farcaster creator meta
   useEffect(() => {
     if (!address) return
     ;(async () => {
@@ -242,7 +243,6 @@ export default function MyRounds() {
       // Pool2 votes you cast
       const votedCards = await Promise.all(
         voteIds.map(async (id) => {
-          // Prefer full info to get feeBase/deadline too
           const p2 = await ct.getPool2InfoFull(BigInt(id))
           const originalPool1Id = Number(p2[0])
           const challengerWord = p2[1]
@@ -380,31 +380,26 @@ export default function MyRounds() {
     )
   }
 
-  // Basic SEO values
-  const origin =
-    typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
-  const pageUrl = `${origin}/myrounds`
+  // SEO (SSR-safe)
+  const pageUrl = absoluteUrl('/myrounds')
   const ogTitle = profile?.username ? `@${profile.username} on MadFill — My Rounds` : 'My Rounds — MadFill'
   const ogDesc = 'See rounds you created, joined, voted in, and any wins. Track and share your MadFill activity on Base.'
-  const ogImage = `${origin}/api/og?screen=myrounds&user=${encodeURIComponent(profile?.username || shortAddr(address) || 'anon')}` // adjust if your seo helper exposes a generator
+  const ogImage = buildOgUrl({ screen: 'myrounds', user: profile?.username || shortAddr(address) || 'anon' })
 
   return (
     <Layout>
-      {/* SEO: uses your SEO component so casts/link shares look great */}
       <SEO
         title={ogTitle}
         description={ogDesc}
         url={pageUrl}
         image={ogImage}
         type="profile"
-        // If your SEO component supports Farcaster extras, pass them here:
-        // fcMetadata={{ 'fc:frame': 'vNext', 'fc:frame:image': ogImage }}
         twitterCard="summary_large_image"
       />
 
+      {/* Only Farcaster creator hint here (avoid duplicate <title>) */}
       <Head>
         {profile?.username && <meta name="fc:creator" content={`@${profile.username}`} />}
-        <title>My Rounds — MadFill</title>
       </Head>
 
       {showConfetti && <Confetti width={width} height={height} />}
@@ -487,10 +482,8 @@ export default function MyRounds() {
         ) : (
           <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
             {viewCards.map((r) => {
-              const shareUrl =
-                typeof window !== 'undefined'
-                  ? `${window.location.origin}/round/${r.kind === 'pool1' ? r.id : r.originalPool1Id}`
-                  : `${origin}/round/${r.kind === 'pool1' ? r.id : r.originalPool1Id}`
+              const targetRoundId = r.kind === 'pool1' ? r.id : r.originalPool1Id
+              const shareUrl = absoluteUrl(`/round/${targetRoundId}`)
               const shareText =
                 r.kind === 'pool1'
                   ? `I played MadFill Round #${r.id}!`
