@@ -1,14 +1,8 @@
 // pages/_app.jsx
-import '../styles/globals.css'
-import ErrorBoundary from '@/components/ErrorBoundary'
-import { WagmiProvider } from '@/lib/wagmi'
+'use client'
+
+import '@/styles/globals.css'
 
 export default function App({ Component, pageProps }) {
-  return (
-    <ErrorBoundary>
-      <WagmiProvider>
-        <Component {...pageProps} />
-      </WagmiProvider>
-    </ErrorBoundary>
-  )
+  return <Component {...pageProps} />
 }
