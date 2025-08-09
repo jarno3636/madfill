@@ -1,26 +1,29 @@
-// /pages/.well-known/farcaster.json.js
+// pages/.well-known/farcaster.json.js
 export default function handler(req, res) {
-  // Minimal example – fill in your details
+  // Adjust this if you use a different deployment URL
+  const origin =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    (req.headers['x-forwarded-host']
+      ? `https://${req.headers['x-forwarded-host']}`
+      : `https://${req.headers.host}`)
+
   const manifest = {
     name: "MadFill",
-    icon: "https://madfill.vercel.app/icon.png", // 512x512 PNG is ideal
+    icon: `${origin}/og/cover.PNG`,       // ← your icon in /public/og/cover.PNG
     description: "Fill the blank. Make it funny. Win the pot.",
-    // Where the app should open when users tap “Open” from your app listing
-    homeUrl: "https://madfill.vercel.app/free",
-    // (Optional) webhook for notifications; leave out if not using yet
-    // webhookUrl: "https://madfill.vercel.app/api/farcaster-webhook",
+    homeUrl: `${origin}/free`,
 
-    // REQUIRED: domain verification — do this last (see note below)
-    // Replace these placeholders after you sign the message from your custody wallet.
+    // Fill these AFTER you sign your accountAssociation per Farcaster docs
     accountAssociation: {
       header: "eip191",
-      payload: "<your-signed-payload>",
+      payload: "<paste-signed-payload>",
       signature: "<0x_signature>",
     },
+
+    // Optional (later): "webhookUrl": `${origin}/api/farcaster-webhook`
   }
 
   res.setHeader('Content-Type', 'application/json')
-  // cache a bit so Warpcast/CDNs can fetch it easily
   res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=3600')
   res.status(200).json(manifest)
 }
