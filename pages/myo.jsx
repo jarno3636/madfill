@@ -1,6 +1,7 @@
 // pages/myo.jsx
 'use client'
 
+import Head from 'next/head'
 import Layout from '@/components/Layout'
 import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
@@ -18,31 +19,11 @@ const defaultStickers = ['🐸', '💥', '🌈', '🧠', '🔥', '✨', '🌀', 
 const defaultTheme = 'retro'
 
 const themes = {
-  galaxy: {
-    label: 'Galaxy',
-    bg: 'bg-gradient-to-br from-indigo-900 to-purple-900',
-    text: 'text-white',
-  },
-  tropical: {
-    label: 'Tropical',
-    bg: 'bg-gradient-to-br from-green-400 to-yellow-500',
-    text: 'text-slate-900',
-  },
-  retro: {
-    label: 'Retro',
-    bg: 'bg-gradient-to-br from-pink-500 to-orange-400',
-    text: 'text-slate-900',
-  },
-  parchment: {
-    label: 'Parchment',
-    bg: 'bg-[url("/parchment-texture.PNG")] bg-cover bg-center',
-    text: 'text-slate-900',
-  },
-  clouds: {
-    label: 'Clouds',
-    bg: 'bg-[url("/clouds-texture.PNG")] bg-cover bg-center',
-    text: 'text-slate-800',
-  },
+  galaxy: { label: 'Galaxy', bg: 'bg-gradient-to-br from-indigo-900 to-purple-900', text: 'text-white' },
+  tropical: { label: 'Tropical', bg: 'bg-gradient-to-br from-green-400 to-yellow-500', text: 'text-slate-900' },
+  retro: { label: 'Retro', bg: 'bg-gradient-to-br from-pink-500 to-orange-400', text: 'text-slate-900' },
+  parchment: { label: 'Parchment', bg: 'bg-[url("/parchment-texture.PNG")] bg-cover bg-center', text: 'text-slate-900' },
+  clouds: { label: 'Clouds', bg: 'bg-[url("/clouds-texture.PNG")] bg-cover bg-center', text: 'text-slate-800' },
 }
 
 /** Env + chain */
@@ -336,6 +317,13 @@ export default function MyoPage() {
   /** ============== Render ============== */
   return (
     <Layout>
+      {/* Farcaster Mini App hint */}
+      <Head>
+        <meta name="fc:frame" content="vNext" />
+        <link rel="icon" href={absoluteUrl('/favicon.ico')} />
+        <link rel="canonical" href={pageUrl} />
+      </Head>
+
       <SEO
         title="Make Your Own — MadFill"
         description="Design a custom MadFill template and mint it as an NFT so others can remix it forever."
@@ -498,11 +486,7 @@ export default function MyoPage() {
 
         {/* Action Row */}
         <div className="mt-6 flex flex-col sm:flex-row gap-3 sm:items-center">
-          <Button
-            onClick={mintTemplate}
-            disabled={busy}
-            className="bg-emerald-600 hover:bg-emerald-500"
-          >
+          <Button onClick={mintTemplate} disabled={busy} className="bg-emerald-600 hover:bg-emerald-500">
             {busy ? '⛏️ Minting…' : '🪙 Mint Template'}
           </Button>
 
