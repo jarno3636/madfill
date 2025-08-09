@@ -613,8 +613,8 @@ export default function Home() {
               <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
                 <div className="text-2xl">⚙️</div>
                 <div className="font-semibold mt-1">Protocol fee</div>
-                <div className="text-slate-300 mt-1">
-                  A tiny 0.5% keeps the lights on. No hidden costs. Everything’s on-chain.
+                <div className="text-sm">
+                  A tiny 0.5% keeps the lights on
                 </div>
               </div>
             </div>
