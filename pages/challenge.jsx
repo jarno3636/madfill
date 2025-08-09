@@ -2,7 +2,6 @@
 'use client'
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import Head from 'next/head'
 import { ethers } from 'ethers'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -331,14 +330,6 @@ export default function ChallengePage() {
   return (
     <Layout>
       {/* Mini App + fallback OG/Twitter meta (SEO handles standard tags) */}
-      <Head>
-        {/* This hint lets Warpcast load the page inline as a Mini App */}
-        <meta name="fc:frame" content="vNext" />
-        {/* Absolute icon helps some clients show a tile */}
-        <link rel="icon" href={absoluteUrl('/favicon.ico')} />
-        {/* Canonical to keep the URL clean inside clients */}
-        <link rel="canonical" href={pageUrl} />
-      </Head>
 
       <SEO
         title="Submit a Challenger — MadFill"
