@@ -2,6 +2,7 @@
 'use client'
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import Head from 'next/head'
 import { ethers } from 'ethers'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -56,7 +57,8 @@ export default function ChallengePage() {
   const router = useRouter()
 
   // ---------- utils ----------
-  const needsSpaceBefore = (str) => !(/\s/.test(str?.[0]) || /[.,!?;:)"'\]]/.test(str?.[0]))
+  const needsSpaceBefore = (str) =>
+    !(/\s/.test(str?.[0]) || /[.,!?;:)"'\]]/.test(str?.[0]))
 
   function parseStoredWord(stored) {
     if (!stored) return { index: 0, word: '' }
@@ -100,7 +102,12 @@ export default function ChallengePage() {
   }
 
   const sanitizeWord = (raw) =>
-    (raw || '').replace(/\s+/g, ' ').trim().split(' ')[0].replace(/[^a-zA-Z0-9\-_]/g, '').slice(0, 16)
+    (raw || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .split(' ')[0]
+      .replace(/[^a-zA-Z0-9\-_]/g, '')
+      .slice(0, 16)
 
   const wordError = useMemo(() => {
     if (!word) return 'Enter one word (max 16 chars).'
@@ -109,8 +116,14 @@ export default function ChallengePage() {
     return ''
   }, [word])
 
-  const originalPreview = useMemo(() => buildPreviewFromStored(parts, originalWordRaw), [parts, originalWordRaw])
-  const challengerPreview = useMemo(() => buildPreviewSingle(parts, word, blankIndex), [parts, word, blankIndex])
+  const originalPreview = useMemo(
+    () => buildPreviewFromStored(parts, originalWordRaw),
+    [parts, originalWordRaw]
+  )
+  const challengerPreview = useMemo(
+    () => buildPreviewSingle(parts, word, blankIndex),
+    [parts, word, blankIndex]
+  )
 
   // ---------- wallet + chain (passive; connect is in header) ----------
   useEffect(() => {
@@ -118,7 +131,7 @@ export default function ChallengePage() {
     let cancelled = false
     ;(async () => {
       try {
-        const accts = await window.ethereum.request({ method: 'eth_accounts' }) // passive
+        const accts = await window.ethereum.request({ method: 'eth_accounts' })
         if (!cancelled) setAddress(accts?.[0] || null)
       } catch {}
       try {
@@ -137,11 +150,12 @@ export default function ChallengePage() {
         window.ethereum.removeListener?.('accountsChanged', onAcct)
       }
     })()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
-    // Prefill username from Farcaster (via EVM address)
     if (!address) return
     ;(async () => {
       try {
@@ -156,7 +170,7 @@ export default function ChallengePage() {
     try {
       await window.ethereum.request({
         method: 'wallet_switchEthereumChain',
-        params: [{ chainId: BASE_CHAIN_ID_HEX }],
+        params: [{ chainId: BASE_CHAIN_ID_HEX }]
       })
       setIsOnBase(true)
     } catch (e) {
@@ -164,13 +178,15 @@ export default function ChallengePage() {
         try {
           await window.ethereum.request({
             method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: BASE_CHAIN_ID_HEX,
-              chainName: 'Base',
-              rpcUrls: [BASE_RPC],
-              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-              blockExplorerUrls: ['https://basescan.org'],
-            }],
+            params: [
+              {
+                chainId: BASE_CHAIN_ID_HEX,
+                chainName: 'Base',
+                rpcUrls: [BASE_RPC],
+                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+                blockExplorerUrls: ['https://basescan.org']
+              }
+            ]
           })
           setIsOnBase(true)
         } catch (err) {
@@ -189,7 +205,10 @@ export default function ChallengePage() {
   // ---------- load target round info ----------
   useEffect(() => {
     if (!roundId || !/^\d+$/.test(String(roundId))) {
-      setParts([]); setOriginalWordRaw(''); setCreatorAddr(''); setRoundName('')
+      setParts([])
+      setOriginalWordRaw('')
+      setCreatorAddr('')
+      setRoundName('')
       return
     }
     let cancelled = false
@@ -219,7 +238,10 @@ export default function ChallengePage() {
       } catch (err) {
         console.warn('Failed to load round:', err)
         if (!cancelled) {
-          setParts([]); setOriginalWordRaw(''); setCreatorAddr(''); setRoundName('')
+          setParts([])
+          setOriginalWordRaw('')
+          setCreatorAddr('')
+          setRoundName('')
           setStatus('Could not fetch round. Check the Round ID.')
         }
       } finally {
@@ -227,14 +249,18 @@ export default function ChallengePage() {
       }
     })()
 
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [roundId])
 
   // Clamp blank index whenever parts change
   useEffect(() => {
     if (!parts?.length) return
     const blanks = Math.max(0, parts.length - 1)
-    setBlankIndex((i) => Math.max(0, Math.min(Math.max(0, blanks - 1), Number(i) || 0)))
+    setBlankIndex((i) =>
+      Math.max(0, Math.min(Math.max(0, blanks - 1), Number(i) || 0))
+    )
   }, [parts])
 
   // ---------- submit ----------
@@ -258,8 +284,10 @@ export default function ChallengePage() {
 
       const encodedWord = `${blankIndex}::${cleanWord}`
       const safeFee = Number.isFinite(feeEth) && feeEth >= 0 ? feeEth : DEFAULT_FEE_ETH
-      const feeBase = ethers.parseUnits(String(safeFee), 18) // ETH -> wei
-      const duration = BigInt(Number.isFinite(durationSec) ? durationSec : DEFAULT_DURATION_SECONDS)
+      const feeBase = ethers.parseUnits(String(safeFee), 18)
+      const duration = BigInt(
+        Number.isFinite(durationSec) ? durationSec : DEFAULT_DURATION_SECONDS
+      )
 
       // slight buffer on msg.value to avoid rounding reverts
       const value = (feeBase * 1005n) / 1000n
@@ -287,18 +315,31 @@ export default function ChallengePage() {
   }
 
   // share text after success
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
+  const origin =
+    typeof window !== 'undefined'
+      ? window.location.origin
+      : 'https://madfill.vercel.app'
   const shareText = useMemo(() => {
     const link = `${origin}/vote`
     return `I just submitted a challenger for Round #${roundId}! Vote here: ${link}`
   }, [roundId, origin])
 
-  // ---------- SEO ----------
+  // ---------- SEO / Mini App ----------
   const pageUrl = absoluteUrl('/challenge')
   const ogImage = buildOgUrl({ screen: 'challenge', title: 'Submit a Challenger' })
 
   return (
     <Layout>
+      {/* Mini App + fallback OG/Twitter meta (SEO handles standard tags) */}
+      <Head>
+        {/* This hint lets Warpcast load the page inline as a Mini App */}
+        <meta name="fc:frame" content="vNext" />
+        {/* Absolute icon helps some clients show a tile */}
+        <link rel="icon" href={absoluteUrl('/favicon.ico')} />
+        {/* Canonical to keep the URL clean inside clients */}
+        <link rel="canonical" href={pageUrl} />
+      </Head>
+
       <SEO
         title="Submit a Challenger — MadFill"
         description="Think you can out-funny the Original? Drop your one-word zinger and start a head-to-head vote on Base."
@@ -338,7 +379,9 @@ export default function ChallengePage() {
                 Target Round ID
                 <input
                   value={roundId}
-                  onChange={(e) => setRoundId(e.target.value.replace(/[^\d]/g, '').slice(0, 10))}
+                  onChange={(e) =>
+                    setRoundId(e.target.value.replace(/[^\d]/g, '').slice(0, 10))
+                  }
                   placeholder="e.g., 12"
                   className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                 />
@@ -356,14 +399,20 @@ export default function ChallengePage() {
 
             {/* Template previews */}
             {loadingRound ? (
-              <div className="rounded-xl bg-slate-900/70 p-6 animate-pulse text-slate-300">Loading round…</div>
+              <div className="rounded-xl bg-slate-900/70 p-6 animate-pulse text-slate-300">
+                Loading round…
+              </div>
             ) : parts.length === 0 ? (
-              <div className="text-slate-400 text-sm">Enter a valid Round ID to load the template.</div>
+              <div className="text-slate-400 text-sm">
+                Enter a valid Round ID to load the template.
+              </div>
             ) : (
               <>
                 <div className="grid md:grid-cols-2 gap-4 items-start">
                   <div>
-                    <div className="text-sm text-slate-300 mb-1">Original Card{roundName ? ` — ${roundName}` : ''}</div>
+                    <div className="text-sm text-slate-300 mb-1">
+                      Original Card{roundName ? ` — ${roundName}` : ''}
+                    </div>
                     <div className="p-4 bg-slate-800/60 border border-slate-700 rounded-xl shadow-md text-sm leading-relaxed">
                       {originalPreview}
                     </div>
@@ -414,7 +463,9 @@ export default function ChallengePage() {
                       placeholder="e.g., neon"
                       className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                     />
-                    {word && wordError && <div className="text-xs text-amber-300 mt-1">{wordError}</div>}
+                    {word && wordError && (
+                      <div className="text-xs text-amber-300 mt-1">{wordError}</div>
+                    )}
                   </label>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -435,7 +486,7 @@ export default function ChallengePage() {
                     <label className="block text-sm text-slate-300">
                       Duration
                       <select
-                        className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                        className="mt-1 w/full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                         value={durationSec}
                         onChange={(e) => setDurationSec(Number(e.target.value))}
                       >
@@ -445,9 +496,7 @@ export default function ChallengePage() {
                         <option value={5 * 24 * 60 * 60}>5 days</option>
                         <option value={7 * 24 * 60 * 60}>7 days</option>
                       </select>
-                      <div className="text-[11px] text-slate-400 mt-1">
-                        How long the vote stays open.
-                      </div>
+                      <div className="text-[11px] text-slate-400 mt-1">How long the vote stays open.</div>
                     </label>
                   </div>
                 </div>
@@ -458,7 +507,9 @@ export default function ChallengePage() {
             <div className="flex flex-wrap items-center gap-3">
               <Button
                 onClick={handleSubmit}
-                disabled={busy || !address || !parts.length || !roundId || !word || !!wordError}
+                disabled={
+                  busy || !address || !parts.length || !roundId || !word || !!wordError
+                }
                 className="bg-blue-600 hover:bg-blue-500"
                 title={!address ? 'Connect your wallet' : 'Submit challenger'}
               >
@@ -476,7 +527,12 @@ export default function ChallengePage() {
 
             {status.toLowerCase().includes('submitted') && (
               <div className="text-sm mt-4 flex items-center justify-between">
-                <ShareBar url={`${origin}/vote`} text={shareText} embedUrl={`${origin}/vote`} small />
+                <ShareBar
+                  url={`${origin}/vote`}
+                  text={shareText}
+                  embedUrl={`${origin}/vote`}
+                  small
+                />
               </div>
             )}
           </CardContent>
