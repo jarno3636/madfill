@@ -193,10 +193,6 @@ export default function FreeGame() {
         splashBackgroundColor="#1e1b4b"
       />
 
-      {/* Optional: Farcaster author hint if we know it */}
-      {profile?.username ? (
-      ) : null}
-
       {showConfetti && <Confetti width={width} height={height} />}
 
       <main className="max-w-5xl mx-auto p-4 md:p-6 text-white space-y-6">
