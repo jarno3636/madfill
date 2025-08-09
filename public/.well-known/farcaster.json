@@ -1,10 +1,17 @@
 {
   "accountAssociation": {
-    "header": "",
-    "payload": "",
-    "signature": ""
+    "header": "YOUR_ACCOUNT_ASSOCIATION_HEADER",
+    "payload": "YOUR_ACCOUNT_ASSOCIATION_PAYLOAD",
+    "signature": "YOUR_ACCOUNT_ASSOCIATION_SIGNATURE"
   },
-  "linkedDomains": [
-    { "domain": "madfill.vercel.app" }
-  ]
+  "miniapp": {
+    "version": "1",
+    "name": "MadFill",
+    "iconUrl": "https://madfill.vercel.app/icon.png",
+    "homeUrl": "https://madfill.vercel.app",
+    "imageUrl": "https://madfill.vercel.app/og.PNG",
+    "buttonTitle": "Play",
+    "requiredChains": ["eip155:8453"],
+    "requiredCapabilities": []
+  }
 }
