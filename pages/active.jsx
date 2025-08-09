@@ -3,7 +3,6 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { ethers } from 'ethers'
-import Head from 'next/head'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -71,7 +70,7 @@ export default function ActivePools() {
   const contract = useMemo(() => {
     if (!CONTRACT_ADDRESS) return null
     return new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
-  }, [provider])
+  }, [provider, CONTRACT_ADDRESS])
 
   // Load BASE/ETH price (Coinbase -> CoinGecko -> Alchemy -> hard fallback)
   const loadPrice = async (signal) => {
@@ -259,7 +258,7 @@ export default function ActivePools() {
     return [...filtered].sort((a, b) => {
       if (sortBy === 'deadline') return a.deadline - b.deadline
       if (sortBy === 'participants') return b.count - a.count
-      if (sortBy === 'prize') return b.usd - a.usd
+      if (sortBy === 'prize') return parseFloat(b.usd) - parseFloat(a.usd)
       return b.id - a.id
     })
   }, [filtered, sortBy])
@@ -278,13 +277,7 @@ export default function ActivePools() {
         description="Browse live MadFill rounds on Base. Enter with one word, vote, and win the pot."
         url={pageUrl}
         image={ogImage}
-        type="website"
-        twitterCard="summary_large_image"
       />
-
-      <Head>
-        <title>MadFill – Active Rounds</title>
-      </Head>
 
       <main className="max-w-6xl mx-auto p-6 space-y-6">
         <h1 className="text-4xl font-extrabold text-white drop-shadow">🧠 Active Rounds</h1>
@@ -352,7 +345,7 @@ export default function ActivePools() {
                   </CardHeader>
 
                   <CardContent className="space-y-2 text-sm font-medium">
-                    <p><strong>Entry Fee:</strong> {r.feeBase} BASE</p>
+                    <p><strong>Entry Fee:</strong> {r.feeBase} ETH</p>
                     <p><strong>Participants:</strong> {r.count}</p>
                     <p>
                       <strong>Total Pool:</strong>{' '}
