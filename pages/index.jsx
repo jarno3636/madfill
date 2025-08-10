@@ -320,9 +320,11 @@ export default function Home() {
     <Layout>
       {/* Farcaster Mini App hint + canonical/icon for clients */}
       <Head>
-        <meta name="fc:frame" content="vNext" />
-        <link rel="icon" href={absoluteUrl('/favicon.ico')} />
-        <link rel="canonical" href={origin} />
+        <meta property="fc:frame" content="vNext" />
+        <meta property="fc:frame:image" content={ogImage} />
+        <meta property="fc:frame:button:1" content="Open MadFill" />
+        <meta property="fc:frame:button:1:action" content="link" />
+        <meta property="fc:frame:button:1:target" content={origin} />
       </Head>
 
       <SEO
