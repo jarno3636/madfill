@@ -6,7 +6,8 @@
       "@/styles/*": ["styles/*"],
       "@/abi/*": ["abi/*"],
       "@/data/*": ["data/*"],
-      "@/lib/*": ["lib/*"]       // ✅ Add this line
+      "@/lib/*": ["lib/*"],
+      "@/hooks/*": ["hooks/*"]   // ✅ Added hooks path
     },
     "jsx": "react-jsx"
   }
