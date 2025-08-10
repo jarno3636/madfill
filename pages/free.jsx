@@ -182,7 +182,6 @@ export default function FreeGame() {
         url={permalink || pageUrl}
         image={ogImage}
       />
-
       {/* Farcaster Mini App meta so Warpcast opens this page inline */}
       <FcMiniAppMeta
         imageUrl={ogImage}                 // what shows in the cast preview
