@@ -47,13 +47,6 @@ export default function SEO({
       <meta name="twitter:title" content={title} />
       <meta name="twitter:description" content={description} />
       <meta name="twitter:image" content={ogImage} />
-
-      {/* Farcaster (benign elsewhere) */}
-      <meta name="fc:frame" content="vNext" />
-      <meta name="fc:frame:image" content={ogImage} />
-      {/* post_url MUST be absolute */}
-      <meta name="fc:frame:post_url" content={absoluteUrl('/api/frame')} />
-      <meta name="fc:frame:button:1" content="Open MadFill" />
     </Head>
   )
 }
