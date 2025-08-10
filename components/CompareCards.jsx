@@ -4,6 +4,7 @@ import React, { useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { ethers } from 'ethers'
 import ShareBar from '@/components/ShareBar'
+import { absoluteUrl } from '@/lib/seo' // ✅ for absolute URLs in mini apps/casts
 
 // --- helpers ---
 function tryDecode(word) {
@@ -61,6 +62,12 @@ function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v))
 }
 
+function toAbsolute(src) {
+  if (!src) return absoluteUrl('/Capitalize.PNG')
+  if (/^https?:\/\//i.test(src)) return src
+  return absoluteUrl(src.startsWith('/') ? src : `/${src}`)
+}
+
 // --- component ---
 export default function CompareCards({
   originalWord,
@@ -100,14 +107,22 @@ export default function CompareCards({
   const isOriginalWinner = winner === 'original'
   const isChallengerWinner = winner === 'challenger'
 
-  const baseUrl = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
-  const roundUrl = roundId ? `${baseUrl}/round/${roundId}` : baseUrl
+  const roundUrl = roundId ? absoluteUrl(`/round/${roundId}`) : absoluteUrl('/')
 
   function CardSide({ label, preview, isWinnerSide, avatar, username }) {
+    const safeSrc = toAbsolute(avatar || '/Capitalize.PNG')
     return (
       <div className="flex flex-col items-center p-4 bg-slate-900/80 rounded-xl border border-slate-700 shadow-lg">
         <p className="text-sm font-semibold">{label}</p>
-        {avatar && <img src={avatar} alt={`${label} avatar`} className="w-9 h-9 rounded-full border border-white my-2" />}
+        {safeSrc && (
+          <img
+            src={safeSrc}
+            alt={`${label} avatar`}
+            className="w-9 h-9 rounded-full border border-white my-2"
+            loading="lazy"
+            onError={(e) => { e.currentTarget.src = absoluteUrl('/Capitalize.PNG') }}
+          />
+        )}
         {username && <p className="text-xs text-slate-400">@{username}</p>}
         <div className="text-sm md:text-base italic leading-relaxed text-center whitespace-pre-wrap mt-2">{preview}</div>
         {isWinnerSide && (
@@ -140,21 +155,18 @@ export default function CompareCards({
 
       {/* Combined animated progress bar */}
       <div className="relative h-7 rounded-full overflow-hidden bg-slate-800 border border-slate-700">
-        {/* Left (Original) grows from 0 → pctO */}
         <motion.div
           className="absolute left-0 top-0 h-full bg-green-500"
           initial={{ width: '0%' }}
           animate={{ width: `${pctO}%` }}
           transition={{ type: 'spring', stiffness: 140, damping: 22 }}
         />
-        {/* Right (Challenger) grows from 0 → pctC */}
         <motion.div
           className="absolute right-0 top-0 h-full bg-blue-500"
           initial={{ width: '0%' }}
           animate={{ width: `${pctC}%` }}
           transition={{ type: 'spring', stiffness: 140, damping: 22, delay: 0.05 }}
         />
-        {/* Labels fade/slide in */}
         <motion.div
           className="absolute inset-0 flex justify-between items-center text-xs font-bold text-white px-2"
           initial={{ opacity: 0, y: 6 }}
@@ -168,7 +180,11 @@ export default function CompareCards({
 
       {/* Share bar */}
       <div className="flex justify-center">
-        <ShareBar url={roundUrl} text={`Vote on this MadFill Round #${roundId || ''}`} embedUrl={roundUrl} />
+        <ShareBar
+          url={roundUrl}
+          text={`Vote on this MadFill Round #${roundId || ''}`}
+          embedUrl={roundUrl}
+        />
       </div>
     </div>
   )
