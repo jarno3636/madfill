@@ -15,7 +15,7 @@ import { fetchFarcasterProfile } from '@/lib/neynar'
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
-import sdk from '@farcaster/frame-sdk'
+import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
 // Env-driven (fallbacks kept just in case)
 const CONTRACT_ADDRESS =
@@ -29,6 +29,7 @@ const DEFAULT_DURATION_SECONDS = 3 * 24 * 60 * 60
 const DEFAULT_FEE_ETH = 0.002
 
 export default function ChallengePage() {
+  useMiniAppReady()
   // wallet / chain
   const [address, setAddress] = useState(null)
   const [isOnBase, setIsOnBase] = useState(true)
