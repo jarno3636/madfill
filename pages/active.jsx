@@ -276,11 +276,12 @@ export default function ActivePools() {
   return (
     <Layout>
       <Head>
-        <meta property="fc:frame" content="vNext" />
-        <meta property="fc:frame:image" content={ogImage} />
-        <meta property="fc:frame:button:1" content="View Rounds" />
-        <meta property="fc:frame:button:1:action" content="link" />
-        <meta property="fc:frame:button:1:target" content={pageUrl} />
+        {/* Farcaster Mini App / Frame meta */}
+        <meta name="fc:frame" content="vNext" />
+        <meta name="fc:frame:image" content={ogImage} />
+        <meta name="fc:frame:button:1" content="View Rounds" />
+        <meta name="fc:frame:button:1:action" content="link" />
+        <meta name="fc:frame:button:1:target" content={pageUrl} />
       </Head>
       <SEO
         title="MadFill — Active Rounds"
