@@ -14,7 +14,7 @@ import { motion } from 'framer-motion'
 import ShareBar from '@/components/ShareBar'
 import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
-import sdk from '@farcaster/frame-sdk'
+import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_FILLIN_ADDRESS || ''
@@ -51,6 +51,7 @@ const buildPreviewSingle = (parts, word, idx) => {
 }
 
 export default function ActivePools() {
+  useMiniAppReady()
   const [rounds, setRounds] = useState([])
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState('newest')
