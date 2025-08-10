@@ -7,9 +7,9 @@
   "miniapp": {
     "version": "1",
     "name": "MadFill",
-    "iconUrl": "https://madfill.vercel.app/icon.png",
+    "iconUrl": "https://madfill.vercel.app/icon.PNG",
     "homeUrl": "https://madfill.vercel.app",
-    "imageUrl": "https://madfill.vercel.app/Capitalize.png",
+    "imageUrl": "https://madfill.vercel.app/Capitalize.PNG",
     "buttonTitle": "Play",
     "requiredChains": ["eip155:8453"],
     "requiredCapabilities": []
