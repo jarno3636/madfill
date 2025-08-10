@@ -1,7 +1,6 @@
 // pages/myo.jsx
 'use client'
 
-import Head from 'next/head'
 import Layout from '@/components/Layout'
 import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
@@ -318,11 +317,6 @@ export default function MyoPage() {
   return (
     <Layout>
       {/* Farcaster Mini App hint */}
-      <Head>
-        <meta name="fc:frame" content="vNext" />
-        <link rel="icon" href={absoluteUrl('/favicon.ico')} />
-        <link rel="canonical" href={pageUrl} />
-      </Head>
 
       <SEO
         title="Make Your Own — MadFill"
