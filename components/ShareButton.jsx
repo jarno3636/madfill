@@ -3,21 +3,31 @@
 
 import { useCallback, useMemo, useState } from 'react'
 
-// --- tiny helpers (no external deps) ---
+const FC_LIMIT = 320
+
+// --- helpers ---
 function getOrigin() {
   if (typeof window !== 'undefined' && window.location?.origin) return window.location.origin
   return process.env.NEXT_PUBLIC_SITE_URL || 'https://madfill.vercel.app'
 }
 
+function absolutize(u) {
+  if (!u) return ''
+  try {
+    return new URL(u, getOrigin()).toString()
+  } catch {
+    return ''
+  }
+}
+
 function buildOgUrl(og) {
   if (!og) return ''
-  const base = getOrigin()
   const qp = new URLSearchParams()
   if (og.title) qp.set('title', og.title)
   if (og.subtitle) qp.set('subtitle', og.subtitle)
   if (og.screen) qp.set('screen', og.screen)
   if (og.roundId) qp.set('roundId', String(og.roundId))
-  return `${base}/api/og?${qp.toString()}`
+  return `${getOrigin()}/api/og?${qp.toString()}`
 }
 
 function warpcastComposeUrl({ text, url, embed }) {
@@ -29,72 +39,73 @@ function warpcastComposeUrl({ text, url, embed }) {
   return `https://warpcast.com/~/compose?text=${t}%0A${u}`
 }
 
+function truncateForFC(text) {
+  if (!text) return ''
+  if (text.length <= FC_LIMIT) return text
+  const cutoff = FC_LIMIT - 1
+  const slice = text.slice(0, cutoff)
+  const lastSpace = slice.lastIndexOf(' ')
+  return (lastSpace > 40 ? slice.slice(0, lastSpace) : slice).trimEnd() + '…'
+}
+
 export default function ShareButton({
   sentence,
-  word,
+  word, // kept for API compatibility
   variant = 'farcaster',
   url = 'https://madfill.vercel.app',
   labelOverride,
-  // Optional: pass an embed image directly or describe one to auto-generate via /api/og
   embedUrl,
   og, // { title, subtitle, screen, roundId }
-  // Optional hashtags string, e.g. "#MadFill #Base"
   hashtags = '',
 }) {
   const [busy, setBusy] = useState(false)
 
-  const embed = useMemo(() => embedUrl || buildOgUrl(og), [embedUrl, og])
+  const embed = useMemo(() => absolutize(embedUrl || buildOgUrl(og)), [embedUrl, og])
+  const safeUrl = useMemo(() => absolutize(url), [url])
 
   const baseText = useMemo(() => {
-    const parts = [sentence || '', url || '']
+    const parts = [sentence || '', safeUrl || '']
     if (hashtags) parts.push(hashtags)
-    return parts.filter(Boolean).join('\n')
-  }, [sentence, url, hashtags])
+    return truncateForFC(parts.filter(Boolean).join('\n'))
+  }, [sentence, safeUrl, hashtags])
 
   const doShareFarcaster = useCallback(async () => {
     setBusy(true)
     try {
-      // Detect Warpcast Mini App (very light)
-      const inWarpcast =
-        typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+      const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
 
       if (inWarpcast) {
-        // Try the Frame SDK first (mini app native share)
         try {
           const mod = await import('@farcaster/frame-sdk')
           const { sdk } = mod
-          // Prefer native share if available
           if (sdk?.actions?.share) {
-            await sdk.actions.share({
-              text: baseText,
-              embeds: embed ? [embed] : [],
-            })
-            setBusy(false)
+            await sdk.actions.share({ text: baseText, embeds: embed ? [embed] : [] })
             return
           }
-          // Fallback: open Warpcast composer inside app
           if (sdk?.actions?.openUrl) {
-            await sdk.actions.openUrl(
-              warpcastComposeUrl({ text: baseText, url, embed })
-            )
-            setBusy(false)
+            await sdk.actions.openUrl(warpcastComposeUrl({ text: baseText, url: safeUrl, embed }))
             return
           }
         } catch {
-          // fall through to browser compose
+          // fall through
         }
       }
 
-      // Browser fallback: open web composer
-      window.open(
-        warpcastComposeUrl({ text: baseText, url, embed }),
+      const win = window.open(
+        warpcastComposeUrl({ text: baseText, url: safeUrl, embed }),
         '_blank',
         'noopener,noreferrer'
       )
+      if (!win && navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(
+          warpcastComposeUrl({ text: baseText, url: safeUrl, embed })
+        )
+        alert('Composer link copied to clipboard ✅')
+      }
     } finally {
       setBusy(false)
     }
-  }, [baseText, url, embed])
+  }, [baseText, safeUrl, embed])
 
   const doShareTwitter = useCallback(() => {
     const t = encodeURIComponent(baseText)
