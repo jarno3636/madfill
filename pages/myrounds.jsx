@@ -15,6 +15,7 @@ import ShareBar from '@/components/ShareBar'
 import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
+import Head from 'next/head'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
@@ -389,6 +390,13 @@ export default function MyRounds() {
 
   return (
     <Layout>
+      <Head>
+        <meta property="fc:frame" content="vNext" />
+        <meta property="fc:frame:image" content={ogImage} />
+        <meta property="fc:frame:button:1" content="My Rounds" />
+        <meta property="fc:frame:button:1:action" content="link" />
+        <meta property="fc:frame:button:1:target" content={pageUrl} />
+      </Head>
       <SEO
         title={ogTitle}
         description={ogDesc}
