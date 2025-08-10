@@ -16,6 +16,7 @@ import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
+import Head from 'next/head'
 
 // Env-driven (fallbacks kept just in case)
 const CONTRACT_ADDRESS =
@@ -331,7 +332,13 @@ export default function ChallengePage() {
 
   return (
     <Layout>
-      {/* Mini App + fallback OG/Twitter meta (SEO handles standard tags) */}
+      <Head>
+        <meta property="fc:frame" content="vNext" />
+        <meta property="fc:frame:image" content={ogImage} />
+        <meta property="fc:frame:button:1" content="Open Challenge" />
+        <meta property="fc:frame:button:1:action" content="link" />
+       <meta property="fc:frame:button:1:target" content={pageUrl} />
+      </Head>
 
       <SEO
         title="Submit a Challenger — MadFill"
