@@ -10,6 +10,7 @@ import NFT_ABI from '@/abi/MadFillTemplateNFT_ABI.json'
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
+import Head from 'next/head'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'   // ✅ Farcaster hook
 
 /** =========================
@@ -341,6 +342,13 @@ export default function MyoPage() {
   /** ============== Render ============== */
   return (
     <Layout>
+      <Head>
+        <meta property="fc:frame" content="vNext" />
+        <meta property="fc:frame:image" content={ogImage} />
+        <meta property="fc:frame:button:1" content="Make Your Own" />
+        <meta property="fc:frame:button:1:action" content="link" />
+        <meta property="fc:frame:button:1:target" content={pageUrl} />
+      </Head>
       <SEO
         title="Make Your Own — MadFill"
         description="Design a custom MadFill template and mint it as an NFT so others can remix it forever."
