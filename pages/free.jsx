@@ -14,6 +14,7 @@ import ShareBar from '@/components/ShareBar'
 import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
+import Head from 'next/head'
 
 function sanitizeWord(raw) {
   return (raw || '')
@@ -173,6 +174,13 @@ export default function FreeGame() {
 
   return (
     <Layout>
+      <Head>
+         <meta property="fc:frame" content="vNext" />
+         <meta property="fc:frame:image" content={ogImage} />
+         <meta property="fc:frame:button:1" content="Play Free" />
+         <meta property="fc:frame:button:1:action" content="link" />
+         <meta property="fc:frame:button:1:target" content={permalink || pageUrl} />
+      </Head>
       <SEO
         title="Free Game — MadFill"
         description="Create, laugh, and share your own fill-in-the-blank card. No wallet needed!"
