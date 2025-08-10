@@ -14,6 +14,7 @@ import { fetchFarcasterProfile } from '@/lib/neynar'
 import ShareBar from '@/components/ShareBar'
 import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
+import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
@@ -23,6 +24,7 @@ const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID_HEX = '0x2105' // 8453
 
 export default function MyRounds() {
+  useMiniAppReady()
   const [address, setAddress] = useState(null)
   const [isOnBase, setIsOnBase] = useState(true)
   const [loading, setLoading] = useState(true)
