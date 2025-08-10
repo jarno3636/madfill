@@ -15,9 +15,6 @@ import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady' // optional hook if you use it elsewhere
-export default function RoundDetailPage() {
-  // ✅ Let Farcaster know we're ready
-  useMiniAppReady()
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
@@ -27,6 +24,7 @@ const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID_HEX = '0x2105' // 8453
 
 export default function RoundDetailPage() {
+  useMiniAppReady()
   const router = useRouter()
   const idParam = router?.query?.id
   const id = useMemo(() => (Array.isArray(idParam) ? idParam[0] : idParam), [idParam])
