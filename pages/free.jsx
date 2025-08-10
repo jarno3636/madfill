@@ -13,7 +13,7 @@ import { fetchFarcasterProfile } from '@/lib/neynar'
 import ShareBar from '@/components/ShareBar'
 import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
-import { useMiniAppReady } from '@/hooks/useMiniAppReady' // optional hook if you use it elsewhere
+import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
 function sanitizeWord(raw) {
   return (raw || '')
@@ -38,7 +38,8 @@ function buildWordsParam(words, blanks) {
 }
 
 export default function FreeGame() {
-  useMiniAppReady()
+  useMiniAppReady() // ✅ Let Farcaster know this mini app is ready
+
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
   const [words, setWords] = useState({})
@@ -50,9 +51,6 @@ export default function FreeGame() {
 
   const category = categories[catIdx] || { name: 'General', templates: [] }
   const template = category.templates[tplIdx] || { parts: [], blanks: 0, name: 'Untitled' }
-
-  // Optionally signal ready to a Mini App host if you have a hook:
-  // useMiniAppReady?.()
 
   useEffect(() => {
     async function loadProfile() {
@@ -121,7 +119,6 @@ export default function FreeGame() {
   // SEO helpers
   const pageUrl = absoluteUrl('/free')
   const ogImage = useMemo(() => {
-    // reflect current selections and words in OG image (safe + short)
     return buildOgUrl({
       screen: 'free',
       c: String(catIdx),
@@ -182,20 +179,10 @@ export default function FreeGame() {
         url={permalink || pageUrl}
         image={ogImage}
       />
-      {/* Farcaster Mini App meta so Warpcast opens this page inline */}
-      <FcMiniAppMeta
-        imageUrl={ogImage}                 // what shows in the cast preview
-        buttonTitle="Play Free"
-        name="MadFill"
-        url={permalink}                    // where the inline app should launch
-        splashImageUrl="/og/cover.PNG"     // put a square icon in public/og/cover.png
-        splashBackgroundColor="#1e1b4b"
-      />
 
       {showConfetti && <Confetti width={width} height={height} />}
 
       <main className="max-w-5xl mx-auto p-4 md:p-6 text-white space-y-6">
-        {/* Hero */}
         <div className="rounded-2xl bg-gradient-to-br from-pink-700 via-indigo-700 to-cyan-700 p-6 md:p-8 shadow-xl ring-1 ring-white/10">
           <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">🎁 Free MadFill</h1>
           <p className="text-indigo-100 mt-2 max-w-2xl">
@@ -287,7 +274,6 @@ export default function FreeGame() {
               <div className="text-slate-300 text-sm">Live preview</div>
               <StyledCard parts={template.parts} blanks={template.blanks} words={words} />
 
-              {/* Copy text button */}
               {allWordsFilled && (
                 <div>
                   <Button
@@ -301,7 +287,6 @@ export default function FreeGame() {
               )}
             </div>
 
-            {/* Actions */}
             {!submitted ? (
               <Button
                 onClick={handleSubmit}
