@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
 import Link from 'next/link'
+import Head from 'next/head'
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
@@ -421,6 +422,13 @@ export default function RoundDetailPage() {
 
   return (
     <Layout>
+      <Head>
+        <meta property="fc:frame" content="vNext" />
+        <meta property="fc:frame:image" content={ogImage} />
+        <meta property="fc:frame:button:1" content="Open Round" />
+        <meta property="fc:frame:button:1:action" content="link" />
+        <meta property="fc:frame:button:1:target" content={pageUrl} />
+      </Head>
       <SEO title={pageTitle} description={pageDesc} url={pageUrl} image={ogImage} />
 
       <main className="max-w-5xl mx-auto p-4 md:p-6 text-white">
