@@ -15,6 +15,7 @@ import { fetchFarcasterProfile } from '@/lib/neynar'
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
+import sdk from '@farcaster/frame-sdk'
 
 // Env-driven (fallbacks kept just in case)
 const CONTRACT_ADDRESS =
