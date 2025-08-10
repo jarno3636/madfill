@@ -19,6 +19,17 @@ export default function WalletConnectButton() {
     switchToBase,
   } = useWallet()
 
+  // If we're inside Warpcast AND there's no injected wallet,
+  // hide this button (the MiniConnectButton handles Warpcast).
+  const isWarpcast =
+    typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+  const hasInjected =
+    typeof window !== 'undefined' && typeof window.ethereum !== 'undefined'
+
+  if (isWarpcast && !hasInjected) {
+    return null
+  }
+
   return (
     <div className="flex items-center gap-2">
       {!address ? (
@@ -26,6 +37,8 @@ export default function WalletConnectButton() {
           onClick={connect}
           className="bg-indigo-600 hover:bg-indigo-500"
           disabled={connecting}
+          aria-busy={connecting ? 'true' : 'false'}
+          title="Connect an injected wallet (e.g., MetaMask)"
         >
           {connecting ? 'Connecting…' : 'Connect Wallet'}
         </Button>
@@ -35,12 +48,12 @@ export default function WalletConnectButton() {
             <Button
               onClick={switchToBase}
               className="bg-cyan-700 hover:bg-cyan-600"
-              title="Switch to Base"
+              title="Switch to Base network"
             >
               Switch to Base
             </Button>
           )}
-          <span className="px-2 py-1 rounded bg-slate-800/80 border border-slate-700 text-xs">
+          <span className="px-2 py-1 rounded bg-slate-800/80 border border-slate-700 text-xs" title={address}>
             {shortAddr(address)}
           </span>
           <Button
