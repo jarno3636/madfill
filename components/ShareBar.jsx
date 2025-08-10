@@ -1,42 +1,51 @@
-// components/ShareBar.jsx
 'use client'
 
 import { useMemo, useState, useCallback } from 'react'
 
-/** Get our origin safely on the client with a sane SSR fallback */
-function getOrigin() {
-  if (typeof window !== 'undefined' && window.location?.origin) return window.location.origin
-  // Fallback for builds / previews if you set it; else use prod URL
-  return process.env.NEXT_PUBLIC_SITE_URL || 'https://madfill.vercel.app'
+/** Safe absolute URL helper (needed for Warpcast embeds) */
+function ensureAbsolute(url) {
+  if (!url) return ''
+  try {
+    // If already absolute, URL() won’t throw
+    return new URL(url).toString()
+  } catch {
+    const origin =
+      (typeof window !== 'undefined' && window.location?.origin) ||
+      process.env.NEXT_PUBLIC_SITE_URL ||
+      'https://madfill.vercel.app'
+    return new URL(url, origin).toString()
+  }
 }
 
 /** Build a /api/og PNG URL from props */
 function buildOgUrl(og) {
   if (!og) return ''
-  const origin = getOrigin()
   const qp = new URLSearchParams()
   if (og.title) qp.set('title', og.title)
   if (og.subtitle) qp.set('subtitle', og.subtitle)
   if (og.screen) qp.set('screen', og.screen)
   if (og.roundId) qp.set('roundId', String(og.roundId))
-  // You can add more supported params here as you extend /api/og
-  return `${origin}/api/og?${qp.toString()}`
+  return ensureAbsolute(`/api/og?${qp.toString()}`)
 }
 
 /** Build share URLs for Warpcast & Twitter/X */
-function buildShareUrls({ url, text, embedUrl, og }) {
-  const u = encodeURIComponent(url || '')
-  const t = encodeURIComponent(text || '')
-  const autoOg = buildOgUrl(og)
-  const embed = embedUrl || autoOg
+function buildShareUrls({ url, text, embedUrl, og, hashtags }) {
+  const absoluteUrl = ensureAbsolute(url || '')
+  const t = text ? encodeURIComponent(text) : ''
+  const tags = Array.isArray(hashtags) && hashtags.length
+    ? `&hashtags=${encodeURIComponent(hashtags.join(','))}`
+    : ''
 
-  // Warpcast supports embeds[]= for rich previews (images)
+  const autoOg = buildOgUrl(og)
+  const embed = embedUrl ? ensureAbsolute(embedUrl) : autoOg
+
+  // Warpcast allows multiple embeds[] — keep single by default (stable preview)
   const warpcast = embed
-    ? `https://warpcast.com/~/compose?text=${t}%0A${u}&embeds[]=${encodeURIComponent(embed)}`
-    : `https://warpcast.com/~/compose?text=${t}%0A${u}`
+    ? `https://warpcast.com/~/compose?text=${t}%0A${encodeURIComponent(absoluteUrl)}&embeds[]=${encodeURIComponent(embed)}`
+    : `https://warpcast.com/~/compose?text=${t}%0A${encodeURIComponent(absoluteUrl)}`
 
   // X/Twitter
-  const twitter = `https://twitter.com/intent/tweet?text=${t}%0A${u}`
+  const twitter = `https://twitter.com/intent/tweet?text=${t}%0A${encodeURIComponent(absoluteUrl)}${tags}`
 
   return { warpcast, twitter, embedUsed: embed }
 }
@@ -44,28 +53,28 @@ function buildShareUrls({ url, text, embedUrl, og }) {
 export default function ShareBar({
   url = '',
   text = '',
-  embedUrl = '', // manual override (kept for backward-compat)
-  og = null,     // { title, subtitle, screen, roundId } -> auto OG PNG via /api/og
+  embedUrl = '',      // manual image embed (kept for backward-compat)
+  og = null,          // { title, subtitle, screen, roundId } -> auto OG via /api/og
+  hashtags = [],      // NEW: array of strings for X/Twitter
   small = false,
   className = '',
 }) {
   const [copied, setCopied] = useState(false)
   const { warpcast, twitter, embedUsed } = useMemo(
-    () => buildShareUrls({ url, text, embedUrl, og }),
-    [url, text, embedUrl, og]
+    () => buildShareUrls({ url, text, embedUrl, og, hashtags }),
+    [url, text, embedUrl, og, hashtags]
   )
 
   const pillBase =
     'inline-flex items-center gap-2 rounded-full font-semibold transition ' +
     'focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-400 ' +
     'active:scale-[0.98]'
-
   const pillSize = small ? 'text-xs px-2.5 py-1.5' : 'text-sm px-3.5 py-2'
 
   const onCopy = useCallback(async () => {
     try {
       if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        await navigator.clipboard.writeText(url)
+        await navigator.clipboard.writeText(ensureAbsolute(url))
         setCopied(true)
         setTimeout(() => setCopied(false), 1400)
       }
@@ -75,7 +84,7 @@ export default function ShareBar({
   const onNativeShare = useCallback(async () => {
     if (typeof navigator !== 'undefined' && navigator.share) {
       try {
-        await navigator.share({ title: text, text, url })
+        await navigator.share({ title: text, text, url: ensureAbsolute(url) })
         return
       } catch { /* fall through */ }
     }
