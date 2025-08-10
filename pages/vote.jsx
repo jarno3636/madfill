@@ -13,6 +13,7 @@ import Link from 'next/link'
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
+import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
 // ---- Config ----
 const CONTRACT_ADDRESS =
@@ -30,6 +31,7 @@ const VOTE_FEE_WEI =
   DEFAULT_VOTE_FEE_WEI
 
 export default function VotePage() {
+  useMiniAppReady()
   // state
   const [rounds, setRounds] = useState([]) // Pool2 cards
   const [loading, setLoading] = useState(true)
