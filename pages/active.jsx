@@ -15,6 +15,7 @@ import ShareBar from '@/components/ShareBar'
 import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
+import Head from 'next/head'
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_FILLIN_ADDRESS || ''
@@ -274,6 +275,13 @@ export default function ActivePools() {
 
   return (
     <Layout>
+      <Head>
+        <meta property="fc:frame" content="vNext" />
+        <meta property="fc:frame:image" content={ogImage} />
+        <meta property="fc:frame:button:1" content="View Rounds" />
+        <meta property="fc:frame:button:1:action" content="link" />
+        <meta property="fc:frame:button:1:target" content={pageUrl} />
+      </Head>
       <SEO
         title="MadFill — Active Rounds"
         description="Browse live MadFill rounds on Base. Enter with one word, vote, and win the pot."
