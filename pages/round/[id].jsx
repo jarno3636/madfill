@@ -14,7 +14,7 @@ import Link from 'next/link'
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
-
+import { useMiniAppReady } from '@/hooks/useMiniAppReady' // optional hook if you use it elsewhere
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
