@@ -14,9 +14,6 @@ import ShareBar from '@/components/ShareBar'
 import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady' // optional hook if you use it elsewhere
-export default function FreePage() {
-  // ✅ Let Farcaster know we're ready
-  useMiniAppReady(
 
 function sanitizeWord(raw) {
   return (raw || '')
@@ -41,6 +38,7 @@ function buildWordsParam(words, blanks) {
 }
 
 export default function FreeGame() {
+  useMiniAppReady()
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
   const [words, setWords] = useState({})
