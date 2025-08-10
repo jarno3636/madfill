@@ -10,6 +10,7 @@ import NFT_ABI from '@/abi/MadFillTemplateNFT_ABI.json'
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
+import { useMiniAppReady } from '@/hooks/useMiniAppReady'   // ✅ Farcaster hook
 
 /** =========================
  *  Visual presets
@@ -18,11 +19,11 @@ const defaultStickers = ['🐸', '💥', '🌈', '🧠', '🔥', '✨', '🌀', 
 const defaultTheme = 'retro'
 
 const themes = {
-  galaxy: { label: 'Galaxy', bg: 'bg-gradient-to-br from-indigo-900 to-purple-900', text: 'text-white' },
-  tropical: { label: 'Tropical', bg: 'bg-gradient-to-br from-green-400 to-yellow-500', text: 'text-slate-900' },
-  retro: { label: 'Retro', bg: 'bg-gradient-to-br from-pink-500 to-orange-400', text: 'text-slate-900' },
-  parchment: { label: 'Parchment', bg: 'bg-[url("/parchment-texture.PNG")] bg-cover bg-center', text: 'text-slate-900' },
-  clouds: { label: 'Clouds', bg: 'bg-[url("/clouds-texture.PNG")] bg-cover bg-center', text: 'text-slate-800' },
+  galaxy:   { label: 'Galaxy',   bg: 'bg-gradient-to-br from-indigo-900 to-purple-900', text: 'text-white' },
+  tropical: { label: 'Tropical', bg: 'bg-gradient-to-br from-green-400 to-yellow-500',  text: 'text-slate-900' },
+  retro:    { label: 'Retro',    bg: 'bg-gradient-to-br from-pink-500 to-orange-400',   text: 'text-slate-900' },
+  parchment:{ label: 'Parchment',bg: 'bg-[url("/parchment-texture.PNG")] bg-cover bg-center', text: 'text-slate-900' },
+  clouds:   { label: 'Clouds',   bg: 'bg-[url("/clouds-texture.PNG")] bg-cover bg-center',    text: 'text-slate-800' },
 }
 
 /** Env + chain */
@@ -35,6 +36,9 @@ function getNftAddress() {
 }
 
 export default function MyoPage() {
+  // ✅ Tell Farcaster Mini App host we’re ready (harmless on web)
+  useMiniAppReady()
+
   // editor
   const [title, setTitle] = useState('My Epic MadFill')
   const [description, setDescription] = useState('A wild, weird, and fun round I created myself.')
@@ -146,7 +150,7 @@ export default function MyoPage() {
             }],
           })
           setIsOnBase(true)
-        } catch (err) {
+        } catch {
           setStatus('❌ Could not add Base network')
         }
       }
@@ -237,53 +241,68 @@ export default function MyoPage() {
     return null
   }
 
-  /** ============== Mint ============== */
+  /** ============== Mint (fixed for wallet prompt/Base switch) ============== */
   async function mintTemplate() {
     setStatus('')
+
+    // 0) Validate UI first
     const error = validateTemplate()
     if (error) {
       setStatus('❌ ' + error)
       return
     }
 
+    // 1) Ensure contract address is set
     const addr = getNftAddress()
     if (!addr) {
-      setStatus('❌ NFT contract address not configured.')
+      setStatus('❌ NFT contract address not configured (set NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS).')
       return
     }
-    if (!window.ethereum) {
+
+    // 2) Ensure wallet exists
+    if (!window?.ethereum) {
       setStatus('❌ No wallet detected.')
       return
     }
 
     try {
       setBusy(true)
-      if (!address) {
-        await connectWallet()
-        if (!address) throw new Error('Connect your wallet first.')
-      }
+      setStatus('🔌 Connecting wallet…')
 
-      const browserProvider = new ethers.BrowserProvider(window.ethereum)
-      const net = await browserProvider.getNetwork()
+      // 3) Fresh provider/signer (don’t trust stale state)
+      const provider = new ethers.BrowserProvider(window.ethereum)
+      await provider.send('eth_requestAccounts', [])
+      let signer = await provider.getSigner()
+
+      // 4) Ensure Base chain before instantiating contract
+      const net = await provider.getNetwork()
       if (net?.chainId !== BASE_CHAIN_ID) {
+        setStatus('🌉 Switching to Base…')
         await switchToBase()
+        const p2 = new ethers.BrowserProvider(window.ethereum)
+        signer = await p2.getSigner()
       }
 
-      const signer = await browserProvider.getSigner()
+      // 5) Contract + price
       const ct = new ethers.Contract(addr, NFT_ABI, signer)
-
       setStatus('⏳ Fetching mint price…')
-      const priceWei = await ct.getMintPriceWei()
-      const buffer = (priceWei * 1005n) / 1000n // +0.5% buffer
+      const priceWei = await ct.getMintPriceWei()      // bigint
+      const buffer   = (priceWei * 1005n) / 1000n      // +0.5% buffer
 
+      // 6) Send tx (wallet prompt appears here)
       setStatus('🧪 Sending mint…')
-      const tx = await ct.mintTemplate(title.trim(), description.trim(), theme, parts, {
-        value: buffer,
-      })
+      const tx = await ct.mintTemplate(
+        title.trim(),
+        description.trim(),
+        theme,
+        parts,
+        { value: buffer }
+      )
 
       setStatus('⛏️ Minting… waiting for confirmation')
       const r = await tx.wait()
 
+      // 7) Try to pull tokenId from logs
       let tokenIdStr = null
       try {
         for (const log of r.logs || []) {
@@ -297,10 +316,16 @@ export default function MyoPage() {
         }
       } catch {}
 
-      setStatus(`✅ Minted! ${tokenIdStr ? `Token #${tokenIdStr}` : ''} View in your wallet.`)
+      setStatus(`✅ Minted! ${tokenIdStr ? `Token #${tokenIdStr}` : ''}`)
     } catch (err) {
       console.error(err)
-      const msg = err?.shortMessage || err?.reason || err?.message || 'Mint failed'
+      const msg =
+        err?.shortMessage ||
+        err?.reason ||
+        err?.error?.message ||
+        err?.data?.message ||
+        err?.message ||
+        'Mint failed'
       setStatus('❌ ' + msg.split('\n')[0])
     } finally {
       setBusy(false)
@@ -316,8 +341,6 @@ export default function MyoPage() {
   /** ============== Render ============== */
   return (
     <Layout>
-      {/* Farcaster Mini App hint */}
-
       <SEO
         title="Make Your Own — MadFill"
         description="Design a custom MadFill template and mint it as an NFT so others can remix it forever."
@@ -351,6 +374,13 @@ export default function MyoPage() {
                 </Button>
               )}
             </div>
+
+            {/* 🔔 Env var warning */}
+            {!getNftAddress() && (
+              <div className="mt-2 text-xs rounded bg-rose-500/10 border border-rose-500/40 text-rose-200 px-3 py-2">
+                ⚠️ Missing <code>NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS</code>. Set it in your Vercel env vars.
+              </div>
+            )}
           </div>
 
           {/* Info / Fees / How it works */}
@@ -431,12 +461,9 @@ export default function MyoPage() {
                 {s}
               </button>
             ))}
-            <button
-              onClick={addStickerToEnd}
-              className="text-sm px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white"
-            >
+            <Button onClick={addStickerToEnd} className="text-sm px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white">
               + Add to End
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -501,8 +528,8 @@ export default function MyoPage() {
             )}
           </div>
 
-          {/* Share (unified) */}
-          <ShareBar url={shareUrl} text={shareText} embedUrl={shareUrl} small />
+          {/* Share */}
+          <ShareBar url={pageUrl} text={`🧠 I made a custom MadFill!\n\n${parts.join(' ')}`} embedUrl={pageUrl} small />
         </div>
 
         {status && (
@@ -510,7 +537,8 @@ export default function MyoPage() {
             className={clsx(
               'mt-4 rounded border px-3 py-2 text-sm',
               status.startsWith('✅') ? 'border-emerald-500 bg-emerald-500/10 text-emerald-200' :
-              status.startsWith('⏳') || status.startsWith('🧪') || status.startsWith('⛏️') ? 'border-indigo-500 bg-indigo-500/10 text-indigo-200' :
+              status.startsWith('⏳') || status.startsWith('🧪') || status.startsWith('⛏️') || status.startsWith('🌉') || status.startsWith('🔌')
+                ? 'border-indigo-500 bg-indigo-500/10 text-indigo-200' :
               'border-rose-500 bg-rose-500/10 text-rose-200'
             )}
           >
