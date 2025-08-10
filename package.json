@@ -8,7 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
-    "@farcaster/miniapp-sdk": "^0.4.0",
+    "@farcaster/miniapp-sdk": "^0.1.8",
     "@vercel/og": "0.4.0",
     "@walletconnect/web3-provider": "^1.8.0",
     "autoprefixer": "^10.4.14",
