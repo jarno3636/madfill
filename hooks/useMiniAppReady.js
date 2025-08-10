@@ -1,19 +1,28 @@
+// hooks/useMiniAppReady.js
 'use client'
 import { useEffect } from 'react'
 
 export function useMiniAppReady() {
   useEffect(() => {
     let mounted = true
+
     ;(async () => {
       try {
-        // Lazy-load so SSR/build never touches the module
-        const mod = await import('@farcaster/frame-sdk')
+        // Only run inside Warpcast Mini App (cheap check)
+        const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+        if (!/Warpcast/i.test(ua)) return
+
+        // Lazy-load so Node/SSR never touches the module
+        const { sdk } = await import('@farcaster/miniapp-sdk')
+
         if (!mounted) return
-        await mod.sdk.actions.ready()
+        // Fire-and-forget is fine; no need to await
+        sdk.actions.ready?.()
       } catch {
-        // ignore – works only inside Warpcast Mini Apps
+        // ignore: will fail outside Warpcast or if SDK unavailable
       }
     })()
+
     return () => { mounted = false }
   }, [])
 }
