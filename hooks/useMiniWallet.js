@@ -1,60 +1,46 @@
 // hooks/useMiniWallet.js
-import { useEffect, useMemo, useRef, useState } from 'react'
-const BASE_CHAIN_ID = 8453
-const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+'use client'
 
-export function useMiniWallet() {
-  const [sdk, setSdk] = useState(null)
-  const [ready, setReady] = useState(false)
-  const [address, setAddress] = useState(null)
-  const [connecting, setConnecting] = useState(false)
-  const unsubRef = useRef(null)
+import { useEffect, useState } from 'react'
 
-  const isWarpcast = useMemo(() => {
-    if (typeof navigator === 'undefined') return false
-    return /Warpcast/i.test(navigator.userAgent)
-  }, [])
+export function useMiniAppEthereum() {
+  const [provider, setProvider] = useState<any>(null)
+  const [isMiniApp, setIsMiniApp] = useState(false)
 
   useEffect(() => {
-    let cancelled = false
+    let mounted = true
     ;(async () => {
-      if (!isWarpcast) return
       try {
-        const mod = await import('@farcaster/miniapp-sdk')
-        const s = mod?.sdk
-        if (!s) return
-        await s.ready()
-        if (cancelled) return
-        setSdk(s); setReady(true)
-        const sess = await s.wallet.getSession()
-        if (sess?.address) setAddress(sess.address)
-        unsubRef.current = s.wallet.subscribe((evt) => {
-          if (evt?.address !== undefined) setAddress(evt.address || null)
-        })
-      } catch {}
+        // lightweight detection (UA + SDK context)
+        const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+        const looksLikeWarpcast = /Warpcast/i.test(ua)
+
+        if (looksLikeWarpcast) {
+          const { sdk } = await import('@farcaster/miniapp-sdk')
+          setIsMiniApp(true)
+
+          // signal ready (optional but recommended)
+          try { sdk.actions.ready?.() } catch {}
+
+          // request the Mini App Ethereum provider
+          const miniProv = await sdk.wallet.getEthereumProvider() // returns EIP-1193 provider
+          if (mounted) setProvider(miniProv)
+          return
+        }
+
+        // Fallback: injected wallet in browser
+        if (typeof window !== 'undefined' && (window as any).ethereum) {
+          setProvider((window as any).ethereum)
+        } else {
+          setProvider(null)
+        }
+      } catch {
+        setProvider(null)
+      }
     })()
-    return () => {
-      cancelled = true
-      if (unsubRef.current) try { unsubRef.current() } catch {}
-    }
-  }, [isWarpcast])
 
-  const connect = async () => {
-    if (!sdk || connecting) return null
-    setConnecting(true)
-    try {
-      const sess = await sdk.wallet.connect({ chainId: BASE_CHAIN_ID, rpcUrl: BASE_RPC })
-      if (sess?.address) setAddress(sess.address)
-      return sess
-    } finally {
-      setConnecting(false)
-    }
-  }
+    return () => { mounted = false }
+  }, [])
 
-  const disconnect = async () => {
-    if (!sdk) return
-    try { await sdk.wallet.disconnect() } finally { setAddress(null) }
-  }
-
-  return { isWarpcast, ready, address, connect, disconnect, connecting }
+  return { provider, isMiniApp }
 }
