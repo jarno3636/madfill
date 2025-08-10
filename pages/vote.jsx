@@ -14,6 +14,7 @@ import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
+import Head from 'next/head'
 
 // ---- Config ----
 const CONTRACT_ADDRESS =
@@ -385,7 +386,14 @@ export default function VotePage() {
         twitterCard="summary_large_image"
       />
 
-      {/* Farcaster frame meta (link buttons) */}
+      <Head>
+        {/* Farcaster Mini App / Frame meta */}
+        <meta property="fc:frame" content="vNext" />
+        <meta property="fc:frame:image" content={ogImage} />
+        <meta property="fc:frame:button:1" content="Open Vote" />
+        <meta property="fc:frame:button:1:action" content="link" />
+        <meta property="fc:frame:button:1:target" content={pageUrl} />
+     </Head>
       
       {(success || claimedId) && <Confetti width={width} height={height} />}
 
