@@ -17,7 +17,7 @@ import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady' // optional hook if you use it elsewhere
 export default function RoundDetailPage() {
   // ✅ Let Farcaster know we're ready
-  useMiniAppReady(
+  useMiniAppReady()
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
