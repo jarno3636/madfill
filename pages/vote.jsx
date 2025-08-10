@@ -2,7 +2,6 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import Head from 'next/head'
 import { ethers } from 'ethers'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -385,21 +384,7 @@ export default function VotePage() {
       />
 
       {/* Farcaster frame meta (link buttons) */}
-      <Head>
-        <meta name="fc:frame" content="vNext" />
-        <meta name="fc:frame:image" content={ogImage} />
-        <meta name="fc:frame:image:aspect_ratio" content="1.91:1" />
-        <meta name="fc:frame:button:1" content="🗳️ Open Vote" />
-        <meta name="fc:frame:button:1:action" content="link" />
-        <meta name="fc:frame:button:1:target" content={pageUrl} />
-        <meta name="fc:frame:button:2" content="😆 Submit Challenger" />
-        <meta name="fc:frame:button:2:action" content="link" />
-        <meta name="fc:frame:button:2:target" content={absoluteUrl('/challenge')} />
-        <meta name="fc:frame:button:3" content="🔥 Active Rounds" />
-        <meta name="fc:frame:button:3:action" content="link" />
-        <meta name="fc:frame:button:3:target" content={absoluteUrl('/active')} />
-      </Head>
-
+      
       {(success || claimedId) && <Confetti width={width} height={height} />}
 
       <main className="max-w-6xl mx-auto p-4 md:p-6 text-white">
