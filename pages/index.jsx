@@ -17,6 +17,7 @@ import ShareBar from '@/components/ShareBar'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
+import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
@@ -34,6 +35,7 @@ const extractError = (e) =>
   (typeof e === 'string' ? e : JSON.stringify(e))
 
 export default function Home() {
+  useMiniAppReady()
   // status + logs
   const [status, setStatus] = useState('')
   const [logs, setLogs] = useState([])
