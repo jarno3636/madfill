@@ -5,15 +5,31 @@ import { useEffect, useRef, useState } from 'react'
 import { ethers } from 'ethers'
 import { Button } from '@/components/ui/button'
 import NFT_ABI from '@/abi/MadFillTemplateNFT_ABI.json'
+import { absoluteUrl } from '@/lib/seo'
 
-const BASE_RPC = 'https://mainnet.base.org'
+const ENV_BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASESCAN = 'https://basescan.org'
 
 function shortAddr(a) {
   return a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '—'
 }
 
-export default function InfoMintCard({ contractAddress, rpcUrl = BASE_RPC }) {
+/** Mini-app aware openURL */
+async function openUrl(url) {
+  try {
+    // lazy import so SSR/build never touches the module
+    const mod = await import('@farcaster/miniapp-sdk')
+    if (mod?.sdk?.actions?.openURL) {
+      await mod.sdk.actions.openURL(url)
+      return
+    }
+  } catch {
+    // ignore; fall through to window.open
+  }
+  if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+export default function InfoMintCard({ contractAddress, rpcUrl = ENV_BASE_RPC }) {
   const [ethWei, setEthWei] = useState(null)       // bigint | null
   const [usdE6, setUsdE6] = useState(null)         // number | null
   const [royaltyBps, setRoyaltyBps] = useState(null)
@@ -43,7 +59,7 @@ export default function InfoMintCard({ contractAddress, rpcUrl = BASE_RPC }) {
         const provider = new ethers.JsonRpcProvider(rpcUrl)
         const ct = new ethers.Contract(contractAddress, NFT_ABI, provider)
 
-        // Some contracts might not have mintPriceUsdE6; probe carefully.
+        // Not every contract exposes mintPriceUsdE6 — probe safely.
         const maybeUsd = async () => {
           try {
             const v = await ct.mintPriceUsdE6?.()
@@ -66,10 +82,7 @@ export default function InfoMintCard({ contractAddress, rpcUrl = BASE_RPC }) {
         setRoyaltyBps(Number(bps))
         setPayout(wallet)
       } catch (e) {
-        if (attempt === 0) {
-          // tiny retry for transient RPC flakes
-          return load(1)
-        }
+        if (attempt === 0) return load(1) // tiny retry
         if (!mounted.current) return
         console.warn('InfoMintCard error:', e)
         setErr('Could not fetch live mint info.')
@@ -83,6 +96,11 @@ export default function InfoMintCard({ contractAddress, rpcUrl = BASE_RPC }) {
 
   const priceEthStr = ethWei != null ? Number(ethers.formatEther(ethWei)).toFixed(5) : null
   const priceUsdStr = usdE6 != null ? (usdE6 / 1_000_000).toFixed(2) : null
+
+  const siteUrl = absoluteUrl('/myo')
+  const prefill = encodeURIComponent(
+    `I’m minting a custom MadFill template on Base.\n\nBuild yours in a minute: ${siteUrl}`
+  )
 
   return (
     <div className="bg-gradient-to-br from-indigo-900/60 to-purple-900/60 border border-indigo-700/60 rounded-xl p-5">
@@ -156,13 +174,19 @@ export default function InfoMintCard({ contractAddress, rpcUrl = BASE_RPC }) {
 
         <div className="flex flex-wrap gap-2 mt-3">
           <Button
-            onClick={() => window.open('https://basescan.org', '_blank')}
+            onClick={() =>
+              openUrl(
+                contractAddress
+                  ? `${BASESCAN}/address/${contractAddress}`
+                  : 'https://basescan.org'
+              )
+            }
             className="bg-slate-700 hover:bg-slate-600 text-xs"
           >
-            🔎 Explore Base
+            🔎 View Contract on BaseScan
           </Button>
           <Button
-            onClick={() => window.open('https://warpcast.com/~/compose', '_blank')}
+            onClick={() => openUrl(`https://warpcast.com/~/compose?text=${prefill}`)}
             className="bg-purple-600 hover:bg-purple-500 text-xs"
           >
             🌀 Tell friends on Farcaster
