@@ -725,8 +725,9 @@ export default function RoundDetailPage() {
                 <ShareBar
                   url={pageUrl}
                   text={`Join my MadFill round: ${round?.name || ''}`}
-                  og={{ screen: 'round', roundId: String(id) }} {/* 🔧 ensures an image embed */}
+                  og={{ screen: 'round', roundId: String(id) }}
                 />
+                {/* ensures an image embed */}
                 <Link href="/active" className="underline text-indigo-300">
                   ← Back to Active Rounds
                 </Link>
