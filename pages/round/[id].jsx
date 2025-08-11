@@ -2,7 +2,7 @@
 'use client'
 
 import { useRouter } from 'next/router'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { ethers } from 'ethers'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import Layout from '@/components/Layout'
@@ -15,7 +15,7 @@ import Head from 'next/head'
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
-import { useMiniAppReady } from '@/hooks/useMiniAppReady' // optional hook if you use it elsewhere
+import { useMiniAppReady } from '@/hooks/useMiniAppReady' // good to keep
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
@@ -54,6 +54,9 @@ export default function RoundDetailPage() {
 
   const { width, height } = useWindowSize()
   const tickRef = useRef(null)
+
+  // in-app EIP-1193 provider stash (Warpcast Mini wallet)
+  const miniProvRef = useRef(null)
 
   // ---------- utils ----------
   const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
@@ -135,38 +138,73 @@ export default function RoundDetailPage() {
     if (firstOpen !== undefined) setSelectedBlank(firstOpen)
   }, [blanksCount, takenSet])
 
-  // ---------- wallet + chain (observe only; connect handled in header) ----------
+  // ---------- prefer Mini App provider if present ----------
+  const getEip1193 = useCallback(async () => {
+    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
+    if (miniProvRef.current) return miniProvRef.current
+    // very light UA check before lazy-importing SDK
+    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+    if (!inWarpcast) return null
+    try {
+      const mod = await import('@farcaster/miniapp-sdk')
+      const prov = await mod.sdk.wallet.getEthereumProvider()
+      miniProvRef.current = prov
+      return prov
+    } catch {
+      return null
+    }
+  }, [])
+
+  // ---------- wallet + chain (observe only) ----------
   useEffect(() => {
-    if (!window?.ethereum) return
     let cancelled = false
     ;(async () => {
-      try {
-        const accts = await window.ethereum.request({ method: 'eth_accounts' })
-        if (!cancelled) setAddress(accts?.[0] || null)
-      } catch {}
-      try {
-        const provider = new ethers.BrowserProvider(window.ethereum)
-        const net = await provider.getNetwork()
-        if (!cancelled) setIsOnBase(net?.chainId === 8453n)
-      } catch {
-        if (!cancelled) setIsOnBase(true)
+      // try injected first
+      if (window?.ethereum) {
+        try {
+          const accts = await window.ethereum.request({ method: 'eth_accounts' })
+          if (!cancelled) setAddress(accts?.[0] || null)
+        } catch {}
+        try {
+          const provider = new ethers.BrowserProvider(window.ethereum)
+          const net = await provider.getNetwork()
+          if (!cancelled) setIsOnBase(net?.chainId === 8453n)
+        } catch {
+          if (!cancelled) setIsOnBase(true)
+        }
+        const onChain = () => location.reload()
+        const onAcct = (accs) => setAddress(accs?.[0] || null)
+        window.ethereum.on?.('chainChanged', onChain)
+        window.ethereum.on?.('accountsChanged', onAcct)
+        return () => {
+          window.ethereum.removeListener?.('chainChanged', onChain)
+          window.ethereum.removeListener?.('accountsChanged', onAcct)
+        }
       }
-      const onChain = () => location.reload()
-      const onAcct = (accs) => setAddress(accs?.[0] || null)
-      window.ethereum.on?.('chainChanged', onChain)
-      window.ethereum.on?.('accountsChanged', onAcct)
-      return () => {
-        window.ethereum.removeListener?.('chainChanged', onChain)
-        window.ethereum.removeListener?.('accountsChanged', onAcct)
+
+      // otherwise try mini app provider (no listeners; Warpcast handles account)
+      const mini = await getEip1193()
+      if (mini && !cancelled) {
+        try {
+          const p = new ethers.BrowserProvider(mini)
+          const signer = await p.getSigner().catch(() => null)
+          const addr = await signer?.getAddress().catch(() => null)
+          if (!cancelled) setAddress(addr || null)
+          const net = await p.getNetwork()
+          if (!cancelled) setIsOnBase(net?.chainId === 8453n)
+        } catch {
+          // let UI drive connection via header button
+        }
       }
     })()
     return () => { cancelled = true }
-  }, [])
+  }, [getEip1193])
 
   async function switchToBase() {
-    if (!window?.ethereum) return
+    const eip = await getEip1193()
+    if (!eip) return
     try {
-      await window.ethereum.request({
+      await eip.request({
         method: 'wallet_switchEthereumChain',
         params: [{ chainId: BASE_CHAIN_ID_HEX }],
       })
@@ -174,17 +212,15 @@ export default function RoundDetailPage() {
     } catch (e) {
       if (e?.code === 4902) {
         try {
-          await window.ethereum.request({
+          await eip.request({
             method: 'wallet_addEthereumChain',
-            params: [
-              {
-                chainId: BASE_CHAIN_ID_HEX,
-                chainName: 'Base',
-                rpcUrls: [BASE_RPC],
-                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-                blockExplorerUrls: ['https://basescan.org'],
-              },
-            ],
+            params: [{
+              chainId: BASE_CHAIN_ID_HEX,
+              chainName: 'Base',
+              rpcUrls: [BASE_RPC],
+              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+              blockExplorerUrls: ['https://basescan.org'],
+            }],
           })
           setIsOnBase(true)
         } catch (err) {
@@ -205,7 +241,6 @@ export default function RoundDetailPage() {
         setPriceUsd(3800)
       }
     })()
-    // shareUrl with helper (handles SSR safely)
     setShareUrl(absoluteUrl(router.asPath || `/round/${id || ''}`))
     tickRef.current = setInterval(() => setStatus((s) => (s ? s : '')), 1000)
     return () => clearInterval(tickRef.current)
@@ -223,7 +258,6 @@ export default function RoundDetailPage() {
         const provider = new ethers.JsonRpcProvider(BASE_RPC)
         const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
 
-        // getPool1Info => (name, theme, parts, feeBase, deadline, creator, participants, winner, claimed, poolBalance)
         const info = await ct.getPool1Info(BigInt(id))
         const name = info.name_ ?? info[0]
         const theme = info.theme_ ?? info[1]
@@ -236,7 +270,6 @@ export default function RoundDetailPage() {
         const claimed = info.claimed_ ?? info[8]
         const poolBalance = info.poolBalance_ ?? info[9]
 
-        // Submissions & taken blanks
         let subms = []
         let takenSetLocal = new Set()
         try {
@@ -325,7 +358,8 @@ export default function RoundDetailPage() {
   // ---------- actions (V3) ----------
   async function handleJoin() {
     try {
-      if (!window?.ethereum) throw new Error('Wallet not found')
+      const eip = await getEip1193()
+      if (!eip) throw new Error('Wallet not found')
       if (!round) throw new Error('Round not ready')
       if (ended) throw new Error('Round ended')
       if (!wordInput.trim()) throw new Error('Please enter one word')
@@ -335,15 +369,17 @@ export default function RoundDetailPage() {
 
       setBusy(true)
       setStatus('Submitting your entry…')
-      await window.ethereum.request({ method: 'eth_requestAccounts' })
 
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      const signer = await provider.getSigner()
+      // Request accounts via whichever provider we obtained
+      await eip.request?.({ method: 'eth_requestAccounts' })
+
+      const provider = new ethers.BrowserProvider(eip)
       const net = await provider.getNetwork()
       if (net?.chainId !== 8453n) {
         await switchToBase()
       }
 
+      const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
       const fee = round?.feeBase ?? 0n
       const value = typeof fee === 'bigint' ? fee : BigInt(fee.toString())
@@ -371,17 +407,19 @@ export default function RoundDetailPage() {
 
   async function handleFinalizePayout() {
     try {
-      if (!window?.ethereum) throw new Error('Wallet not found')
+      const eip = await getEip1193()
+      if (!eip) throw new Error('Wallet not found')
       if (!round) throw new Error('Round not ready')
       setBusy(true)
       setStatus('Finalizing and paying out…')
-      await window.ethereum.request({ method: 'eth_requestAccounts' })
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      const signer = await provider.getSigner()
+
+      await eip.request?.({ method: 'eth_requestAccounts' })
+      const provider = new ethers.BrowserProvider(eip)
       const net = await provider.getNetwork()
       if (net?.chainId !== 8453n) {
         await switchToBase()
       }
+      const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
       const tx = await ct.claimPool1(BigInt(id))
       await tx.wait()
@@ -414,15 +452,16 @@ export default function RoundDetailPage() {
     !busy
   const canFinalize = ended && !round?.claimed && !claimedNow && (round?.entrants || 0) > 0 && !busy
 
-  // SEO bits
+  // SEO bits (use roundId for OG so the /api/og endpoint knows what to draw)
   const pageTitle = round?.name ? `${round.name} — MadFill` : id ? `MadFill Round #${id}` : 'MadFill Round'
   const pageDesc = 'Join a MadFill round on Base. Fill the blank, compete, and win the pot.'
   const pageUrl = shareUrl || absoluteUrl(`/round/${id || ''}`)
-  const ogImage = buildOgUrl({ screen: 'round', id: id || '' })
+  const ogImage = buildOgUrl({ screen: 'round', roundId: id || '' })
 
   return (
     <Layout>
       <Head>
+        {/* Farcaster Mini App frame meta */}
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
         <meta property="fc:frame:button:1" content="Open Round" />
@@ -688,7 +727,7 @@ export default function RoundDetailPage() {
                 <ShareBar
                   url={pageUrl}
                   text={`Join my MadFill round: ${round.name}`}
-                  embedUrl={pageUrl}
+                  og={{ screen: 'round', roundId: id }}  {/* ensures an image embed */}
                 />
                 <Link href="/active" className="underline text-indigo-300">
                   ← Back to Active Rounds
