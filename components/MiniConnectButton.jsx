@@ -1,84 +1,35 @@
-// hooks/useMiniWallet.js
+// components/MiniConnectButton.jsx
 'use client'
+import { useEffect, useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { useMiniWallet } from '@/hooks/useMiniWallet'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+export default function MiniConnectButton() {
+  // Avoid rendering until after mount to dodge hydration edge cases
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
 
-export function useMiniWallet() {
-  const [isWarpcast, setIsWarpcast] = useState(false)
-  const [ready, setReady] = useState(false)          // mini-app SDK ready
-  const [connecting, setConnecting] = useState(false)
-  const [address, setAddress] = useState('')
-  const providerRef = useRef(null)
-  const listenersBoundRef = useRef(false)
+  const { isWarpcast, ready, address, connect, disconnect, connecting, error } = useMiniWallet()
 
-  // Detect Warpcast (client-only) and mark ready() when SDK loads
-  useEffect(() => {
-    let mounted = true
-    ;(async () => {
-      try {
-        if (typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)) {
-          setIsWarpcast(true)
-          // lazy-load to avoid SSR build touching the module
-          const mod = await import('@farcaster/miniapp-sdk')
-          if (!mounted) return
-          // tell Warpcast we’re ready (safe if called multiple times)
-          try { await mod.sdk.actions.ready?.() } catch {}
-          if (mounted) setReady(true)
-        } else {
-          setIsWarpcast(false)
-          setReady(false)
-        }
-      } catch {
-        if (mounted) {
-          setIsWarpcast(false)
-          setReady(false)
-        }
-      }
-    })()
-    return () => { mounted = false }
-  }, [])
+  if (!mounted || !isWarpcast) return null
 
-  // Connect using the Mini App EIP-1193 provider
-  const connect = useCallback(async () => {
-    if (!isWarpcast) return
-    setConnecting(true)
-    try {
-      const { sdk } = await import('@farcaster/miniapp-sdk')
-      // ensure ready (no-op if already)
-      try { await sdk.actions.ready?.() } catch {}
-
-      const provider = await sdk.wallet.getEthereumProvider() // EIP-1193
-      providerRef.current = provider
-
-      const accounts = await provider.request({ method: 'eth_requestAccounts' })
-      setAddress(accounts?.[0] || '')
-
-      // Bind listeners once
-      if (!listenersBoundRef.current && provider.on) {
-        const onAccountsChanged = (accs) => setAddress(accs?.[0] || '')
-        const onDisconnect = () => setAddress('')
-        provider.on('accountsChanged', onAccountsChanged)
-        provider.on('disconnect', onDisconnect)
-        listenersBoundRef.current = true
-      }
-    } finally {
-      setConnecting(false)
-    }
-  }, [isWarpcast])
-
-  // “Disconnect” is just clearing local state (mini provider doesn’t truly disconnect)
-  const disconnect = useCallback(() => {
-    setAddress('')
-  }, [])
-
-  return {
-    isWarpcast,
-    ready,
-    address,
-    connect,
-    disconnect,
-    connecting,
-    // optionally expose the raw provider for tx calls on pages:
-    provider: providerRef.current,
+  if (address) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="px-2 py-1 rounded bg-slate-800/70 border border-slate-700 text-xs">
+          👛 {address.slice(0,6)}…{address.slice(-4)}
+        </span>
+        <Button onClick={disconnect} className="bg-slate-700 hover:bg-slate-600">Disconnect</Button>
+      </div>
+    )
   }
+
+  return (
+    <div className="flex items-center gap-2">
+      <Button onClick={connect} disabled={!ready || connecting} className="bg-purple-600 hover:bg-purple-500">
+        {connecting ? 'Connecting…' : 'Connect (Warpcast)'}
+      </Button>
+      {error ? <span className="text-xs text-amber-300">{error}</span> : null}
+    </div>
+  )
 }
