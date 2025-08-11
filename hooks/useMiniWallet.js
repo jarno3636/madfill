@@ -1,106 +1,92 @@
-// hooks/useMiniWallet.js
-'use client'
-
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useState, useEffect, useCallback } from 'react';
+import { miniApp } from '@farcaster/miniapp-sdk';
 
 export function useMiniWallet() {
-  const mounted = useRef(false)
-  const [isWarpcast, setIsWarpcast] = useState(false)
-  const [ready, setReady] = useState(false)
-  const [connecting, setConnecting] = useState(false)
-  const [address, setAddress] = useState(null)
-  const [provider, setProvider] = useState(null)
-  const [error, setError] = useState('')
+  const [address, setAddress] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
 
+  // Check if wallet is already connected on mount
   useEffect(() => {
-    mounted.current = true
-    ;(async () => {
-      try {
-        // Never touch the SDK at module scope; detect client/UA first
-        const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
-        const inWarpcast = /Warpcast/i.test(ua)
-        if (!mounted.current) return
-        setIsWarpcast(inWarpcast)
+    checkConnection();
+  }, []);
 
-        if (!inWarpcast) {
-          // Not in Warpcast → do nothing; this hook becomes a no-op
-          setReady(false)
-          return
+  const checkConnection = useCallback(async () => {
+    try {
+      if (typeof window !== 'undefined' && window.parent !== window) {
+        // We're in Farcaster environment
+        const connected = await miniApp.wallet.isConnected();
+        if (connected) {
+          const walletAddress = await miniApp.wallet.getAddress();
+          setAddress(walletAddress);
+          setIsConnected(true);
         }
-
-        // Lazy import only inside Warpcast
-        let sdk
-        try {
-          const mod = await import('@farcaster/frame-sdk')
-          sdk = mod?.sdk
-        } catch {
-          // Older examples used miniapp-sdk; try it as a fallback
-          try {
-            const mod = await import('@farcaster/miniapp-sdk')
-            sdk = mod?.sdk || mod?.default?.sdk || mod
-          } catch {}
-        }
-
-        if (!mounted.current) return
-        if (!sdk) {
-          setError('Farcaster SDK unavailable')
-          setReady(false)
-          return
-        }
-
-        // Signal ready (best-effort)
-        try { await sdk.actions?.ready?.() } catch {}
-
-        setReady(true)
-      } catch {
-        if (mounted.current) {
-          setReady(false)
-          setError('Init failed')
+      } else {
+        // Development mode - simulate wallet connection
+        const mockAddress = localStorage.getItem('mock_wallet_address');
+        if (mockAddress) {
+          setAddress(mockAddress);
+          setIsConnected(true);
         }
       }
-    })()
-    return () => { mounted.current = false }
-  }, [])
+    } catch (err) {
+      console.error('Error checking wallet connection:', err);
+      setError(err);
+    }
+  }, []);
 
   const connect = useCallback(async () => {
-    if (!isWarpcast) return
-    setError('')
-    setConnecting(true)
+    setIsLoading(true);
+    setError(null);
+
     try {
-      // Prefer miniapp provider via frame-sdk
-      let sdk
-      try {
-        const mod = await import('@farcaster/frame-sdk')
-        sdk = mod?.sdk
-      } catch {
-        const mod = await import('@farcaster/miniapp-sdk')
-        sdk = mod?.sdk || mod?.default?.sdk || mod
+      if (typeof window !== 'undefined' && window.parent !== window) {
+        // We're in Farcaster environment
+        const walletAddress = await miniApp.wallet.connect();
+        setAddress(walletAddress);
+        setIsConnected(true);
+      } else {
+        // Development mode - simulate wallet connection
+        const mockAddress = '0x1234567890123456789012345678901234567890';
+        localStorage.setItem('mock_wallet_address', mockAddress);
+        setAddress(mockAddress);
+        setIsConnected(true);
+        console.log('Mock wallet connected:', mockAddress);
       }
-      if (!sdk) throw new Error('SDK not available')
-
-      const eip1193 = await sdk.wallet.getEthereumProvider()
-      // Some clients need enable/requestAccounts
-      try { await eip1193.request?.({ method: 'eth_requestAccounts' }) } catch {}
-
-      const accounts = await eip1193.request?.({ method: 'eth_accounts' })
-      const addr = Array.isArray(accounts) ? accounts[0] : null
-      if (!mounted.current) return
-      setProvider(eip1193)
-      setAddress(addr)
-    } catch (e) {
-      if (!mounted.current) return
-      setError(e?.message || 'Connect failed')
+    } catch (err) {
+      console.error('Failed to connect wallet:', err);
+      setError(err);
     } finally {
-      if (mounted.current) setConnecting(false)
+      setIsLoading(false);
     }
-  }, [isWarpcast])
+  }, []);
 
-  const disconnect = useCallback(() => {
-    // There’s no programmatic disconnect for the mini provider;
-    // clear local state so UI reflects "disconnected".
-    setAddress(null)
-    setProvider(null)
-  }, [])
+  const disconnect = useCallback(async () => {
+    try {
+      if (typeof window !== 'undefined' && window.parent !== window) {
+        // We're in Farcaster environment
+        await miniApp.wallet.disconnect();
+      } else {
+        // Development mode
+        localStorage.removeItem('mock_wallet_address');
+        console.log('Mock wallet disconnected');
+      }
+      setAddress(null);
+      setIsConnected(false);
+    } catch (err) {
+      console.error('Failed to disconnect wallet:', err);
+      setError(err);
+    }
+  }, []);
 
-  return { isWarpcast, ready, connecting, address, provider, connect, disconnect, error }
+  return {
+    address,
+    isConnected,
+    isLoading,
+    error,
+    connect,
+    disconnect,
+    checkConnection
+  };
 }

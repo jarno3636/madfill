@@ -1,28 +1,33 @@
-// hooks/useMiniAppReady.js
-'use client'
-import { useEffect } from 'react'
+import { useState, useEffect } from 'react';
+import { miniApp } from '@farcaster/miniapp-sdk';
 
 export function useMiniAppReady() {
+  const [isReady, setIsReady] = useState(false);
+  const [error, setError] = useState(null);
+
   useEffect(() => {
-    let mounted = true
-
-    ;(async () => {
+    async function initializeMiniApp() {
       try {
-        // Only run inside Warpcast Mini App (cheap check)
-        const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
-        if (!/Warpcast/i.test(ua)) return
-
-        // Lazy-load so Node/SSR never touches the module
-        const { sdk } = await import('@farcaster/miniapp-sdk')
-
-        if (!mounted) return
-        // Fire-and-forget is fine; no need to await
-        sdk.actions.ready?.()
-      } catch {
-        // ignore: will fail outside Warpcast or if SDK unavailable
+        // Check if we're in Farcaster environment
+        if (typeof window !== 'undefined' && window.parent !== window) {
+          // We're in an iframe, likely in Farcaster
+          await miniApp.ready();
+          setIsReady(true);
+        } else {
+          // Development mode - simulate ready state
+          console.log('Development mode: MiniApp SDK not available');
+          setIsReady(true);
+        }
+      } catch (err) {
+        console.error('Failed to initialize Mini App:', err);
+        setError(err);
+        // Still set ready to true for development
+        setIsReady(true);
       }
-    })()
+    }
 
-    return () => { mounted = false }
-  }, [])
+    initializeMiniApp();
+  }, []);
+
+  return { isReady, error };
 }
