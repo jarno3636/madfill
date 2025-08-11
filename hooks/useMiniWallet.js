@@ -1,115 +1,106 @@
 // hooks/useMiniWallet.js
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
-export function useMiniAppEthereum() {
-  const [provider, setProvider] = useState(null)
-  const [isMiniApp, setIsMiniApp] = useState(false)
-  const [address, setAddress] = useState(null)
-  const [chainId, setChainId] = useState(null)
+export function useMiniWallet() {
+  const mounted = useRef(false)
+  const [isWarpcast, setIsWarpcast] = useState(false)
   const [ready, setReady] = useState(false)
+  const [connecting, setConnecting] = useState(false)
+  const [address, setAddress] = useState(null)
+  const [provider, setProvider] = useState(null)
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    let unsub = () => {}
-
+    mounted.current = true
     ;(async () => {
-      const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
-      const inWarpcast = /Warpcast/i.test(ua)
+      try {
+        // Never touch the SDK at module scope; detect client/UA first
+        const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+        const inWarpcast = /Warpcast/i.test(ua)
+        if (!mounted.current) return
+        setIsWarpcast(inWarpcast)
 
-      if (inWarpcast) {
-        // ⚡ Mini App path (Warpcast)
-        const { sdk } = await import('@farcaster/miniapp-sdk')
-        setIsMiniApp(true)
-
-        try { await sdk.actions.ready() } catch {}
-        setReady(true)
-
-        try {
-          const prov = await sdk.wallet.getEthereumProvider() // EIP-1193 provider
-          setProvider(prov)
-
-          // Try silent account hydration (if already approved)
-          try {
-            const res = await sdk.wallet.requestEthereumAccounts({ silent: true })
-            if (res?.addresses?.length) setAddress(res.addresses[0])
-          } catch {}
-
-          // Chain (Base is 0x2105)
-          try {
-            const cid = await prov.request?.({ method: 'eth_chainId' })
-            if (cid) setChainId(cid)
-          } catch {}
-
-          const onAcct = (accs) => setAddress((accs && accs[0]) || null)
-          const onChain = (cid) => setChainId(typeof cid === 'string' ? cid : String(cid))
-
-          prov.on?.('accountsChanged', onAcct)
-          prov.on?.('chainChanged', onChain)
-
-          unsub = () => {
-            prov.removeListener?.('accountsChanged', onAcct)
-            prov.removeListener?.('chainChanged', onChain)
-          }
-        } catch {
-          setProvider(null)
+        if (!inWarpcast) {
+          // Not in Warpcast → do nothing; this hook becomes a no-op
+          setReady(false)
+          return
         }
-        return
-      }
 
-      // 🌐 Browser fallback (injected)
-      const injected = typeof window !== 'undefined' ? window.ethereum : null
-      setProvider(injected || null)
-
-      if (injected) {
+        // Lazy import only inside Warpcast
+        let sdk
         try {
-          const accs = await injected.request({ method: 'eth_accounts' })
-          setAddress((accs && accs[0]) || null)
-        } catch {}
-        try {
-          const cid = await injected.request({ method: 'eth_chainId' })
-          setChainId(cid || null)
-        } catch {}
+          const mod = await import('@farcaster/frame-sdk')
+          sdk = mod?.sdk
+        } catch {
+          // Older examples used miniapp-sdk; try it as a fallback
+          try {
+            const mod = await import('@farcaster/miniapp-sdk')
+            sdk = mod?.sdk || mod?.default?.sdk || mod
+          } catch {}
+        }
 
-        const onAcct = (accs) => setAddress((accs && accs[0]) || null)
-        const onChain = (cid) => setChainId(cid)
+        if (!mounted.current) return
+        if (!sdk) {
+          setError('Farcaster SDK unavailable')
+          setReady(false)
+          return
+        }
 
-        injected.on?.('accountsChanged', onAcct)
-        injected.on?.('chainChanged', onChain)
-        unsub = () => {
-          injected.removeListener?.('accountsChanged', onAcct)
-          injected.removeListener?.('chainChanged', onChain)
+        // Signal ready (best-effort)
+        try { await sdk.actions?.ready?.() } catch {}
+
+        setReady(true)
+      } catch {
+        if (mounted.current) {
+          setReady(false)
+          setError('Init failed')
         }
       }
     })()
-
-    return () => unsub()
+    return () => { mounted.current = false }
   }, [])
 
-  // Call this from a button
-  const connect = async () => {
-    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
-    const inWarpcast = /Warpcast/i.test(ua)
-
-    if (inWarpcast) {
-      const { sdk } = await import('@farcaster/miniapp-sdk')
-      try { await sdk.actions.ready() } catch {}
-      const res = await sdk.wallet.requestEthereumAccounts() // shows Warpcast permission sheet
-      if (res?.addresses?.length) {
-        setAddress(res.addresses[0])
-        if (!provider) {
-          const prov = await sdk.wallet.getEthereumProvider()
-          setProvider(prov)
-        }
+  const connect = useCallback(async () => {
+    if (!isWarpcast) return
+    setError('')
+    setConnecting(true)
+    try {
+      // Prefer miniapp provider via frame-sdk
+      let sdk
+      try {
+        const mod = await import('@farcaster/frame-sdk')
+        sdk = mod?.sdk
+      } catch {
+        const mod = await import('@farcaster/miniapp-sdk')
+        sdk = mod?.sdk || mod?.default?.sdk || mod
       }
-      return
-    }
+      if (!sdk) throw new Error('SDK not available')
 
-    if (provider?.request) {
-      const accs = await provider.request({ method: 'eth_requestAccounts' })
-      setAddress((accs && accs[0]) || null)
-    }
-  }
+      const eip1193 = await sdk.wallet.getEthereumProvider()
+      // Some clients need enable/requestAccounts
+      try { await eip1193.request?.({ method: 'eth_requestAccounts' }) } catch {}
 
-  return { provider, isMiniApp, address, chainId, ready, connect }
+      const accounts = await eip1193.request?.({ method: 'eth_accounts' })
+      const addr = Array.isArray(accounts) ? accounts[0] : null
+      if (!mounted.current) return
+      setProvider(eip1193)
+      setAddress(addr)
+    } catch (e) {
+      if (!mounted.current) return
+      setError(e?.message || 'Connect failed')
+    } finally {
+      if (mounted.current) setConnecting(false)
+    }
+  }, [isWarpcast])
+
+  const disconnect = useCallback(() => {
+    // There’s no programmatic disconnect for the mini provider;
+    // clear local state so UI reflects "disconnected".
+    setAddress(null)
+    setProvider(null)
+  }, [])
+
+  return { isWarpcast, ready, connecting, address, provider, connect, disconnect, error }
 }
