@@ -1,7 +1,7 @@
 // pages/challenge.jsx
 'use client'
 
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { ethers } from 'ethers'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -18,19 +18,20 @@ import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import Head from 'next/head'
 
-// Env-driven (fallbacks kept just in case)
+// Env
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // FillInStoryV3
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID_HEX = '0x2105'
 
-// Reasonable defaults
+// Defaults
 const DEFAULT_DURATION_SECONDS = 3 * 24 * 60 * 60
 const DEFAULT_FEE_ETH = 0.002
 
 export default function ChallengePage() {
   useMiniAppReady()
+
   // wallet / chain
   const [address, setAddress] = useState(null)
   const [isOnBase, setIsOnBase] = useState(true)
@@ -57,6 +58,9 @@ export default function ChallengePage() {
   const { width, height } = useWindowSize()
   const tickRef = useRef(null)
   const router = useRouter()
+
+  // keep a reference to mini-app provider (if any)
+  const miniProvRef = useRef(null)
 
   // ---------- utils ----------
   const needsSpaceBefore = (str) =>
@@ -127,35 +131,64 @@ export default function ChallengePage() {
     [parts, word, blankIndex]
   )
 
-  // ---------- wallet + chain (passive; connect is in header) ----------
-  useEffect(() => {
-    if (!window?.ethereum) return
-    let cancelled = false
-    ;(async () => {
-      try {
-        const accts = await window.ethereum.request({ method: 'eth_accounts' })
-        if (!cancelled) setAddress(accts?.[0] || null)
-      } catch {}
-      try {
-        const provider = new ethers.BrowserProvider(window.ethereum)
-        const net = await provider.getNetwork()
-        if (!cancelled) setIsOnBase(net?.chainId === 8453n)
-      } catch {
-        if (!cancelled) setIsOnBase(true)
-      }
-      const onChain = () => location.reload()
-      const onAcct = (accs) => setAddress(accs?.[0] || null)
-      window.ethereum.on?.('chainChanged', onChain)
-      window.ethereum.on?.('accountsChanged', onAcct)
-      return () => {
-        window.ethereum.removeListener?.('chainChanged', onChain)
-        window.ethereum.removeListener?.('accountsChanged', onAcct)
-      }
-    })()
-    return () => {
-      cancelled = true
+  // ---------- prefer Mini App provider if present ----------
+  const getEip1193 = useCallback(async () => {
+    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
+    if (miniProvRef.current) return miniProvRef.current
+    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+    if (!inWarpcast) return null
+    try {
+      const mod = await import('@farcaster/miniapp-sdk')
+      const prov = await mod.sdk.wallet.getEthereumProvider()
+      miniProvRef.current = prov
+      return prov
+    } catch {
+      return null
     }
   }, [])
+
+  // ---------- wallet + chain (passive observe) ----------
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      // injected first
+      if (window?.ethereum) {
+        try {
+          const accts = await window.ethereum.request({ method: 'eth_accounts' })
+          if (!cancelled) setAddress(accts?.[0] || null)
+        } catch {}
+        try {
+          const p = new ethers.BrowserProvider(window.ethereum)
+          const net = await p.getNetwork()
+          if (!cancelled) setIsOnBase(net?.chainId === 8453n)
+        } catch {
+          if (!cancelled) setIsOnBase(true)
+        }
+        const onChain = () => location.reload()
+        const onAcct = (accs) => setAddress(accs?.[0] || null)
+        window.ethereum.on?.('chainChanged', onChain)
+        window.ethereum.on?.('accountsChanged', onAcct)
+        return () => {
+          window.ethereum.removeListener?.('chainChanged', onChain)
+          window.ethereum.removeListener?.('accountsChanged', onAcct)
+        }
+      }
+
+      // else try mini app provider
+      const mini = await getEip1193()
+      if (mini && !cancelled) {
+        try {
+          const p = new ethers.BrowserProvider(mini)
+          const signer = await p.getSigner().catch(() => null)
+          const addr = await signer?.getAddress().catch(() => null)
+          if (!cancelled) setAddress(addr || null)
+          const net = await p.getNetwork()
+          if (!cancelled) setIsOnBase(net?.chainId === 8453n)
+        } catch {}
+      }
+    })()
+    return () => { cancelled = true }
+  }, [getEip1193])
 
   useEffect(() => {
     if (!address) return
@@ -168,9 +201,10 @@ export default function ChallengePage() {
   }, [address])
 
   async function switchToBase() {
-    if (!window?.ethereum) return
+    const eip = await getEip1193()
+    if (!eip) return
     try {
-      await window.ethereum.request({
+      await eip.request({
         method: 'wallet_switchEthereumChain',
         params: [{ chainId: BASE_CHAIN_ID_HEX }]
       })
@@ -178,7 +212,7 @@ export default function ChallengePage() {
     } catch (e) {
       if (e?.code === 4902) {
         try {
-          await window.ethereum.request({
+          await eip.request({
             method: 'wallet_addEthereumChain',
             params: [
               {
@@ -251,9 +285,7 @@ export default function ChallengePage() {
       }
     })()
 
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [roundId])
 
   // Clamp blank index whenever parts change
@@ -268,7 +300,8 @@ export default function ChallengePage() {
   // ---------- submit ----------
   async function handleSubmit() {
     try {
-      if (!window?.ethereum) throw new Error('No wallet detected')
+      const eip = await getEip1193()
+      if (!eip) throw new Error('No wallet detected')
       if (!roundId || !/^\d+$/.test(String(roundId))) throw new Error('Invalid Round ID')
       if (!parts.length) throw new Error('Round has no template loaded yet')
       const cleanWord = sanitizeWord(word)
@@ -277,11 +310,13 @@ export default function ChallengePage() {
       setBusy(true)
       setStatus('Submitting your challenger…')
 
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      const signer = await provider.getSigner()
+      await eip.request?.({ method: 'eth_requestAccounts' })
+
+      const provider = new ethers.BrowserProvider(eip)
       const net = await provider.getNetwork()
       if (net?.chainId !== 8453n) await switchToBase()
 
+      const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
       const encodedWord = `${blankIndex}::${cleanWord}`
@@ -310,7 +345,7 @@ export default function ChallengePage() {
       setTimeout(() => router.push('/vote'), 1400)
     } catch (err) {
       console.error(err)
-      setStatus('' + (err?.shortMessage || err?.message || 'Submission failed'))
+      setStatus(String(err?.shortMessage || err?.message || 'Submission failed'))
     } finally {
       setBusy(false)
     }
@@ -333,11 +368,12 @@ export default function ChallengePage() {
   return (
     <Layout>
       <Head>
+        {/* Farcaster Mini App */}
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
         <meta property="fc:frame:button:1" content="Open Challenge" />
         <meta property="fc:frame:button:1:action" content="link" />
-       <meta property="fc:frame:button:1:target" content={pageUrl} />
+        <meta property="fc:frame:button:1:target" content={pageUrl} />
       </Head>
 
       <SEO
@@ -486,7 +522,7 @@ export default function ChallengePage() {
                     <label className="block text-sm text-slate-300">
                       Duration
                       <select
-                        className="mt-1 w/full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                        className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                         value={durationSec}
                         onChange={(e) => setDurationSec(Number(e.target.value))}
                       >
