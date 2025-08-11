@@ -11,7 +11,6 @@ import abi from '@/abi/FillInStoryV3_ABI.json'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { categories, durations } from '@/data/templates'
-import Layout from '@/components/Layout'
 import Footer from '@/components/Footer'
 import ShareBar from '@/components/ShareBar'
 import { fetchFarcasterProfile } from '@/lib/neynar'
@@ -307,7 +306,7 @@ export default function Home() {
   const ogImage = buildOgUrl({ screen: 'home', title: 'MadFill' })
 
   return (
-    <Layout>
+    <>
       <Head>
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
@@ -620,6 +619,6 @@ export default function Home() {
 
         <Footer />
       </main>
-    </Layout>
+    </>
   )
 }
