@@ -2,50 +2,77 @@
 
 import { useMemo, useState, useCallback } from 'react'
 
-/** Safe absolute URL helper (needed for Warpcast embeds) */
-function ensureAbsolute(url) {
-  if (!url) return ''
+/** Detect Warpcast / Farcaster host */
+function isFarcasterUA() {
+  if (typeof navigator === 'undefined') return false
+  return /Warpcast|Farcaster|FarcasterMini/i.test(navigator.userAgent)
+}
+
+/** Farcaster-aware base (set NEXT_PUBLIC_FC_MINIAPP_URL once in Vercel) */
+function getMiniAppBase() {
+  const env = (process.env.NEXT_PUBLIC_FC_MINIAPP_URL || '').replace(/\/+$/, '')
+  return env || 'https://farcaster.xyz/miniapps/k_MpThP1sYRl/madfill'
+}
+
+/** Web site base (SSR-safe) */
+function getSiteBase() {
+  const env = (process.env.NEXT_PUBLIC_SITE_URL || 'https://madfill.vercel.app').replace(/\/+$/, '')
+  return env
+}
+
+/** Make absolute against a specific base (SSR/browser safe) */
+function toAbsolute(pathOrUrl, base) {
+  if (!pathOrUrl) return base
   try {
-    // If already absolute, URL() won’t throw
-    return new URL(url).toString()
+    return new URL(pathOrUrl).toString() // already absolute
   } catch {
-    const origin =
-      (typeof window !== 'undefined' && window.location?.origin) ||
-      process.env.NEXT_PUBLIC_SITE_URL ||
-      'https://madfill.vercel.app'
-    return new URL(url, origin).toString()
+    return new URL(pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`, base).toString()
   }
 }
 
-/** Build a /api/og PNG URL from props */
+/** Safe absolute URL helper (defaults to web base) */
+function ensureAbsolute(url) {
+  return toAbsolute(url || '/', getSiteBase())
+}
+
+/** Farcaster-aware target for the *link you place in the cast* */
+function fcTarget(urlOrPath) {
+  const base = isFarcasterUA() ? getMiniAppBase() : getSiteBase()
+  return toAbsolute(urlOrPath || '/', base)
+}
+
+/** Build a /api/og PNG URL from props (absolute to web base) */
 function buildOgUrl(og) {
   if (!og) return ''
   const qp = new URLSearchParams()
   if (og.title) qp.set('title', og.title)
   if (og.subtitle) qp.set('subtitle', og.subtitle)
   if (og.screen) qp.set('screen', og.screen)
-  if (og.roundId) qp.set('roundId', String(og.roundId))
-  return ensureAbsolute(`/api/og?${qp.toString()}`)
+  if (og.roundId !== undefined && og.roundId !== null) qp.set('roundId', String(og.roundId))
+  return toAbsolute(`/api/og?${qp.toString()}`, getSiteBase())
 }
 
 /** Build share URLs for Warpcast & Twitter/X */
 function buildShareUrls({ url, text, embedUrl, og, hashtags }) {
-  const absoluteUrl = ensureAbsolute(url || '')
-  const t = text ? encodeURIComponent(text) : ''
-  const tags = Array.isArray(hashtags) && hashtags.length
-    ? `&hashtags=${encodeURIComponent(hashtags.join(','))}`
-    : ''
+  // URL **in the cast text**: Farcaster-aware (mini app base inside Warpcast)
+  const castUrl = fcTarget(url || '/')
 
+  // Embed image: absolute web URL for stability
   const autoOg = buildOgUrl(og)
   const embed = embedUrl ? ensureAbsolute(embedUrl) : autoOg
 
-  // Warpcast allows multiple embeds[] — keep single by default (stable preview)
-  const warpcast = embed
-    ? `https://warpcast.com/~/compose?text=${t}%0A${encodeURIComponent(absoluteUrl)}&embeds[]=${encodeURIComponent(embed)}`
-    : `https://warpcast.com/~/compose?text=${t}%0A${encodeURIComponent(absoluteUrl)}`
+  const t = text ? encodeURIComponent(text) : ''
+  const hash = Array.isArray(hashtags) && hashtags.length
+    ? `&hashtags=${encodeURIComponent(hashtags.join(','))}`
+    : ''
 
-  // X/Twitter
-  const twitter = `https://twitter.com/intent/tweet?text=${t}%0A${encodeURIComponent(absoluteUrl)}${tags}`
+  // Warpcast compose — keep one embed to ensure stable preview
+  const warpcast = embed
+    ? `https://warpcast.com/~/compose?text=${t}%0A${encodeURIComponent(castUrl)}&embeds[]=${encodeURIComponent(embed)}`
+    : `https://warpcast.com/~/compose?text=${t}%0A${encodeURIComponent(castUrl)}`
+
+  // X/Twitter (use web URL)
+  const twitter = `https://twitter.com/intent/tweet?text=${t}%0A${encodeURIComponent(ensureAbsolute(url || '/'))}${hash}`
 
   return { warpcast, twitter, embedUsed: embed }
 }
@@ -53,13 +80,14 @@ function buildShareUrls({ url, text, embedUrl, og, hashtags }) {
 export default function ShareBar({
   url = '',
   text = '',
-  embedUrl = '',      // manual image embed (kept for backward-compat)
+  embedUrl = '',      // manual image embed (kept)
   og = null,          // { title, subtitle, screen, roundId } -> auto OG via /api/og
-  hashtags = [],      // NEW: array of strings for X/Twitter
+  hashtags = [],
   small = false,
   className = '',
 }) {
   const [copied, setCopied] = useState(false)
+
   const { warpcast, twitter, embedUsed } = useMemo(
     () => buildShareUrls({ url, text, embedUrl, og, hashtags }),
     [url, text, embedUrl, og, hashtags]
@@ -73,8 +101,9 @@ export default function ShareBar({
 
   const onCopy = useCallback(async () => {
     try {
+      const target = fcTarget(url || '/')
       if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        await navigator.clipboard.writeText(ensureAbsolute(url))
+        await navigator.clipboard.writeText(target)
         setCopied(true)
         setTimeout(() => setCopied(false), 1400)
       }
@@ -82,9 +111,10 @@ export default function ShareBar({
   }, [url])
 
   const onNativeShare = useCallback(async () => {
+    const target = fcTarget(url || '/')
     if (typeof navigator !== 'undefined' && navigator.share) {
       try {
-        await navigator.share({ title: text, text, url: ensureAbsolute(url) })
+        await navigator.share({ title: text, text, url: target })
         return
       } catch { /* fall through */ }
     }
