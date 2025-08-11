@@ -2,20 +2,20 @@
 'use client'
 
 import React, { useEffect, useMemo, useState } from 'react'
+import Head from 'next/head'
+import Link from 'next/link'
+import { motion } from 'framer-motion'
 import { ethers } from 'ethers'
+
 import abi from '@/abi/FillInStoryV3_ABI.json'
-import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Countdown } from '@/components/Countdown'
-import Link from 'next/link'
-import { fetchFarcasterProfile } from '@/lib/neynar'
-import { motion } from 'framer-motion'
 import ShareBar from '@/components/ShareBar'
 import SEO from '@/components/SEO'
+import { fetchFarcasterProfile } from '@/lib/neynar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
-import Head from 'next/head'
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_FILLIN_ADDRESS || ''
@@ -53,6 +53,7 @@ const buildPreviewSingle = (parts, word, idx) => {
 
 export default function ActivePools() {
   useMiniAppReady()
+
   const [rounds, setRounds] = useState([])
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState('newest')
@@ -73,7 +74,7 @@ export default function ActivePools() {
   const contract = useMemo(() => {
     if (!CONTRACT_ADDRESS) return null
     return new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
-  }, [provider, CONTRACT_ADDRESS])
+  }, [provider])
 
   // Load BASE/ETH price (Coinbase -> CoinGecko -> Alchemy -> hard fallback)
   const loadPrice = async (signal) => {
@@ -91,7 +92,10 @@ export default function ActivePools() {
     } catch {}
 
     try {
-      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=l2-standard-bridged-weth-base&vs_currencies=usd', { signal })
+      const res = await fetch(
+        'https://api.coingecko.com/api/v3/simple/price?ids=l2-standard-bridged-weth-base&vs_currencies=usd',
+        { signal }
+      )
       const json = await res.json()
       price = json['l2-standard-bridged-weth-base']?.usd
       if (price && price > 0.5) {
@@ -112,9 +116,9 @@ export default function ActivePools() {
             id: 1,
             jsonrpc: '2.0',
             method: 'alchemy_getTokenMetadata',
-            params: ['0x4200000000000000000000000000000000000006']
+            params: ['0x4200000000000000000000000000000000000006'],
           }),
-          signal
+          signal,
         }
       )
       const data = await alchemyRes.json()
@@ -163,13 +167,13 @@ export default function ActivePools() {
                 return {
                   address: addr,
                   avatar: res?.pfp_url || '/Capitalize.PNG',
-                  fallbackUsername: res?.username || addr.slice(2, 6).toUpperCase()
+                  fallbackUsername: res?.username || addr.slice(2, 6).toUpperCase(),
                 }
               } catch {
                 return {
                   address: addr,
                   avatar: '/Capitalize.PNG',
-                  fallbackUsername: addr.slice(2, 6).toUpperCase()
+                  fallbackUsername: addr.slice(2, 6).toUpperCase(),
                 }
               }
             })
@@ -207,7 +211,7 @@ export default function ActivePools() {
             participants: avatars,
             submissions,
             badge: deadline - now < 3600 ? '🔥 Ends Soon' : estimatedUsd > 5 ? '💰 Top Pool' : null,
-            emoji: ['🐸', '🦊', '🦄', '🐢', '🐙'][i % 5]
+            emoji: ['🐸', '🦊', '🦄', '🐢', '🐙'][i % 5],
           })
         }
       } catch (e) {
@@ -247,11 +251,11 @@ export default function ActivePools() {
   }
 
   const filtered = useMemo(() => {
-    return rounds.filter(r => {
+    return rounds.filter((r) => {
       const matchesSearch = r.name.toLowerCase().includes(search.toLowerCase())
       const matchesFilter =
         filter === 'all' ||
-        (filter === 'unclaimed') ||
+        filter === 'unclaimed' ||
         (filter === 'high' && parseFloat(r.usd) >= 5)
       return matchesSearch && matchesFilter
     })
@@ -269,29 +273,31 @@ export default function ActivePools() {
   const totalPages = Math.ceil(sorted.length / roundsPerPage)
   const paginated = sorted.slice((page - 1) * roundsPerPage, page * roundsPerPage)
 
-  // SEO (Frames meta removed — SEO handles OG)
+  // SEO + Frame
   const pageUrl = absoluteUrl('/active')
   const ogImage = buildOgUrl({ screen: 'active', title: 'Active Rounds' })
 
   return (
-    <Layout>
+    <>
+      {/* Farcaster Mini App / Frame meta */}
       <Head>
-        {/* Farcaster Mini App / Frame meta */}
         <meta name="fc:frame" content="vNext" />
         <meta name="fc:frame:image" content={ogImage} />
         <meta name="fc:frame:button:1" content="View Rounds" />
         <meta name="fc:frame:button:1:action" content="link" />
         <meta name="fc:frame:button:1:target" content={pageUrl} />
       </Head>
+
+      {/* Standard SEO (OG/Twitter) */}
       <SEO
-        title="MadFill — Active Rounds"
+        title="🧠 Active Rounds — MadFill"
         description="Browse live MadFill rounds on Base. Enter with one word, vote, and win the pot."
         url={pageUrl}
         image={ogImage}
       />
 
-      <main className="max-w-6xl mx-auto p-6 space-y-6">
-        <h1 className="text-4xl font-extrabold text-white drop-shadow">🧠 Active Rounds</h1>
+      <main className="max-w-6xl mx-auto p-6 space-y-6 text-white">
+        <h1 className="text-4xl font-extrabold drop-shadow">🧠 Active Rounds</h1>
 
         {!CONTRACT_ADDRESS && (
           <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 p-3">
@@ -300,21 +306,29 @@ export default function ActivePools() {
         )}
 
         {/* controls */}
-        <div className="flex flex-wrap justify-between gap-4 text-white">
+        <div className="flex flex-wrap justify-between gap-4">
           <input
             type="text"
             placeholder="🔍 Search by name..."
             className="w-full sm:w-1/3 p-2 bg-slate-900 border border-slate-700 rounded"
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={(e) => setSearch(e.target.value)}
           />
-          <select className="p-2 bg-slate-900 border border-slate-700 rounded" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          <select
+            className="p-2 bg-slate-900 border border-slate-700 rounded"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+          >
             <option value="newest">📅 Newest</option>
             <option value="deadline">⏳ Ending Soon</option>
             <option value="participants">👥 Most Participants</option>
             <option value="prize">💰 Prize Pool</option>
           </select>
-          <select className="p-2 bg-slate-900 border border-slate-700 rounded" value={filter} onChange={e => setFilter(e.target.value)}>
+          <select
+            className="p-2 bg-slate-900 border border-slate-700 rounded"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          >
             <option value="all">🌐 All</option>
             <option value="unclaimed">🪙 Unclaimed Only</option>
             <option value="high">💰 High Pools ($5+)</option>
@@ -322,10 +336,12 @@ export default function ActivePools() {
         </div>
 
         {paginated.length === 0 ? (
-          <div className="text-white mt-8 text-lg text-center space-y-3">
+          <div className="mt-8 text-lg text-center space-y-3">
             <p>No active rounds right now. Be the first to start one! 🚀</p>
             <Link href="/">
-              <Button className="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded-lg">➕ Create New Round</Button>
+              <Button className="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded-lg">
+                ➕ Create New Round
+              </Button>
             </Link>
           </div>
         ) : (
@@ -336,17 +352,26 @@ export default function ActivePools() {
             transition={{ duration: 0.4 }}
             className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6"
           >
-            {paginated.map(r => {
+            {paginated.map((r) => {
               const rUrl = absoluteUrl(`/round/${r.id}`)
               const shareTxt = `Play MadFill Round #${r.id}!`
               return (
-                <Card key={r.id} className="relative bg-gradient-to-br from-slate-800 to-slate-900 text-white border border-slate-700 rounded-xl hover:shadow-xl transition-all duration-300">
+                <Card
+                  key={r.id}
+                  className="relative bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-xl hover:shadow-xl transition-all duration-300"
+                >
                   <CardHeader className="flex justify-between items-start">
                     <div className="flex items-start gap-3">
                       <div className="text-3xl">{r.emoji}</div>
                       <div>
-                        <h2 className="text-lg font-bold">#{r.id} — {r.name}</h2>
-                        {r.badge && <span className="text-sm text-yellow-400 animate-pulse font-semibold">{r.badge}</span>}
+                        <h2 className="text-lg font-bold">
+                          #{r.id} — {r.name}
+                        </h2>
+                        {r.badge && (
+                          <span className="text-sm text-yellow-400 animate-pulse font-semibold">
+                            {r.badge}
+                          </span>
+                        )}
                         <p className="text-xs text-slate-400 mt-1">Theme: {r.theme}</p>
                       </div>
                     </div>
@@ -356,20 +381,30 @@ export default function ActivePools() {
                   </CardHeader>
 
                   <CardContent className="space-y-2 text-sm font-medium">
-                    <p><strong>Entry Fee:</strong> {r.feeBase} ETH</p>
-                    <p><strong>Participants:</strong> {r.count}</p>
                     <p>
-                      <strong>Total Pool:</strong>{' '}
-                      {r.usdApprox ? '~' : ''}${r.usd}
+                      <strong>Entry Fee:</strong> {r.feeBase} ETH
+                    </p>
+                    <p>
+                      <strong>Participants:</strong> {r.count}
+                    </p>
+                    <p>
+                      <strong>Total Pool:</strong> {r.usdApprox ? '~' : ''}${r.usd}
                     </p>
 
-                    {/* Share active round */}
+                    {/* Share active round — use OG image so Warpcast shows an embed */}
                     <div className="pt-1">
-                      <ShareBar url={rUrl} text={shareTxt} embedUrl={rUrl} small />
+                      <ShareBar
+                        url={rUrl}
+                        text={shareTxt}
+                        og={{ screen: 'round', roundId: r.id }}
+                        small
+                      />
                     </div>
 
                     <button
-                      onClick={() => setExpanded(prev => ({ ...prev, [r.id]: !prev[r.id] }))}
+                      onClick={() =>
+                        setExpanded((prev) => ({ ...prev, [r.id]: !prev[r.id] }))
+                      }
                       className="text-indigo-400 text-xs underline"
                     >
                       {expanded[r.id] ? 'Hide Entries' : 'Show Entries'}
@@ -378,9 +413,12 @@ export default function ActivePools() {
                     {expanded[r.id] && (
                       <div className="bg-slate-700 p-2 rounded text-xs text-slate-100 max-h-48 overflow-y-auto space-y-2">
                         {r.submissions.map((s, idx) => {
-                          const p = r.participants.find(p => p.address.toLowerCase() === s.address.toLowerCase())
+                          const p = r.participants.find(
+                            (p) => p.address.toLowerCase() === s.address.toLowerCase()
+                          )
                           const likeKey = `${r.id}-${idx}`
-                          const displayName = s.username || p?.fallbackUsername || s.address.slice(2,6).toUpperCase()
+                          const displayName =
+                            s.username || p?.fallbackUsername || s.address.slice(2, 6).toUpperCase()
                           return (
                             <div key={`${s.address}-${idx}`} className="flex items-start gap-2">
                               <img
@@ -389,7 +427,9 @@ export default function ActivePools() {
                                 width={24}
                                 height={24}
                                 className="rounded-full border border-white mt-1"
-                                onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
+                                onError={(e) => {
+                                  e.currentTarget.src = '/Capitalize.PNG'
+                                }}
                               />
                               <div className="flex-1">
                                 <p className="text-slate-300 font-semibold">@{displayName}</p>
@@ -409,7 +449,9 @@ export default function ActivePools() {
                     )}
 
                     <Link href={`/round/${r.id}`}>
-                      <Button className="mt-3 bg-indigo-600 hover:bg-indigo-500 w-full">✏️ Enter Round</Button>
+                      <Button className="mt-3 bg-indigo-600 hover:bg-indigo-500 w-full">
+                        ✏️ Enter Round
+                      </Button>
                     </Link>
                   </CardContent>
                 </Card>
@@ -423,7 +465,9 @@ export default function ActivePools() {
             {Array.from({ length: totalPages }).map((_, i) => (
               <Button
                 key={i}
-                className={`px-4 py-1 rounded-full ${page === i + 1 ? 'bg-indigo-600' : 'bg-slate-700'} text-sm`}
+                className={`px-4 py-1 rounded-full ${
+                  page === i + 1 ? 'bg-indigo-600' : 'bg-slate-700'
+                } text-sm`}
                 onClick={() => setPage(i + 1)}
               >
                 {i + 1}
@@ -432,6 +476,10 @@ export default function ActivePools() {
           </div>
         )}
       </main>
-    </Layout>
+    </>
   )
 }
+
+// Tell _app.jsx we already render SEO here and want to use the global Layout only once
+ActivePools.usesOwnSEO = true     // avoid duplicate <Head> from _app if you used that pattern
+ActivePools.disableLayout = false // keep Layout from _app; set true if this file wraps its own Layout
