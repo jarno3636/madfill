@@ -4,7 +4,7 @@ import abi from '@/abi/FillInStoryV3_ABI.json'
 
 export const config = {
   api: {
-    bodyParser: true, // Farcaster sends application/json
+    bodyParser: { sizeLimit: '1mb' }, // Farcaster sends application/json
   },
 }
 
@@ -21,15 +21,33 @@ const VOTE_FEE_WEI =
   DEFAULT_VOTE_FEE_WEI
 const VOTE_FEE_WITH_BUFFER = (VOTE_FEE_WEI * 1005n) / 1000n
 
+function noCache(res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  res.setHeader('Pragma', 'no-cache')
+  res.setHeader('Expires', '0')
+}
+
 function json(res, code, data) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
-  // Frames should not be cached; responses depend on on-chain state
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  noCache(res)
   return res.status(code).end(JSON.stringify(data))
 }
 
+function siteUrl() {
+  return (process.env.NEXT_PUBLIC_SITE_URL || 'https://madfill.vercel.app').replace(/\/+$/, '')
+}
+
+function ogUrl(params = {}) {
+  const u = new URL('/api/og', siteUrl())
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') u.searchParams.set(k, String(v))
+  }
+  return u.toString()
+}
+
 export default async function handler(req, res) {
-  // Basic CORS & preflight (harmless in Vercel)
+  // Basic CORS & preflight (safe on Vercel)
+  res.setHeader('Access-Control-Allow-Origin', '*')
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'content-type')
@@ -39,57 +57,55 @@ export default async function handler(req, res) {
     return json(res, 405, { error: 'Method not allowed' })
   }
 
-  const siteUrl =
-    (process.env.NEXT_PUBLIC_SITE_URL || 'https://madfill.vercel.app').replace(/\/+$/, '')
+  const SITE = siteUrl()
 
   try {
-    // Farcaster Frames send { untrustedData, trustedData, ... }
+    // Farcaster vNext POST body
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {})
-    const { untrustedData } = body
+    const untrusted = body.untrustedData || {}
 
-    // Also allow query fallback (useful for direct POST testing)
+    // Allow manual testing via querystring
     const { id: qId, kind: qKind, vote: qVote } = req.query || {}
 
-    // Button mapping: 1=Original, 2=Challenger
-    const buttonIndex = Number(untrustedData?.buttonIndex || 0)
+    // Buttons: 1 = Original, 2 = Challenger
+    const buttonIndex = Number(untrusted.buttonIndex || 0)
     const fromButtons = buttonIndex === 1 || buttonIndex === 2
     const voteChallenger = fromButtons
       ? buttonIndex === 2
       : String(qVote || '').toLowerCase() === 'challenger'
 
-    // Identify target
-    let kind = (untrustedData?.inputTextKind || qKind || 'pool2').toLowerCase()
-    let rawId = (untrustedData?.inputText || qId || '').toString().trim()
+    // Target parsing: “123”, “p2:123”, “round:123”
+    let kind = String(untrusted.inputTextKind || qKind || 'pool2').toLowerCase()
+    let rawId = String(untrusted.inputText || qId || '').trim()
+    const mP2 = rawId.match(/p2:(\d+)/i)
+    const mRound = rawId.match(/round:(\d+)/i)
+    if (mP2) { kind = 'pool2'; rawId = mP2[1] }
+    if (mRound) { kind = 'round'; rawId = mRound[1] }
 
-    // Allow "123", "p2:123", "round:123"
-    const matchP2 = rawId.match(/p2:(\d+)/i)
-    const matchRound = rawId.match(/round:(\d+)/i)
-    if (matchP2) { kind = 'pool2'; rawId = matchP2[1] }
-    if (matchRound) { kind = 'round'; rawId = matchRound[1] }
-
-    if (!rawId || isNaN(rawId)) {
+    if (!rawId || isNaN(Number(rawId))) {
       return json(res, 400, {
-        title: '❌ Invalid Input',
-        description: 'Provide a valid id (e.g. p2:123 or round:45).',
-        image: `${siteUrl}/og/error.PNG`,
-        imageAspectRatio: '1.91:1',
+        // vNext JSON keys:
+        image: ogUrl({ screen: 'error', title: 'Invalid Input', subtitle: 'Try p2:123 or round:45' }),
+        image_aspect_ratio: '1.91:1',
+        post_url: `${SITE}/api/frame`,
         buttons: [
           { label: '🔁 Try Again', action: 'post' },
-          { label: '🏠 MadFill', action: 'link', target: siteUrl },
+          { label: '🏠 MadFill', action: 'link', target: SITE },
         ],
+        // Extras for humans (ignored by renderer)
+        title: '❌ Invalid Input',
+        description: 'Provide a valid id (e.g., p2:123 or round:45).',
       })
     }
 
-    // Server signer (never expose PRIVATE_KEY client-side)
     const pk = process.env.PRIVATE_KEY
-    if (!pk) {
-      throw new Error('Server PRIVATE_KEY is not set')
-    }
+    if (!pk) throw new Error('Server PRIVATE_KEY is not set')
+
     const provider = new ethers.JsonRpcProvider(BASE_RPC, undefined, { staticNetwork: true })
     const signer = new ethers.Wallet(pk, provider)
     const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
-    // If kind=round, resolve most recent *active* Pool2 for that round
+    // If kind=round, resolve latest unclaimed pool2 for that round
     let pool2Id
     if (kind === 'pool2') {
       pool2Id = BigInt(rawId)
@@ -97,7 +113,6 @@ export default async function handler(req, res) {
       const roundId = BigInt(rawId)
       const p2Count = Number(await ct.pool2Count())
       let found = null
-      // Scan newest -> oldest until we find pool2.originalPool1Id == roundId && !claimed
       for (let id = p2Count; id >= 1; id--) {
         const info = await ct.getPool2Info(BigInt(id))
         const originalPool1Id = Number(info[0])
@@ -109,51 +124,56 @@ export default async function handler(req, res) {
       }
       if (!found) {
         return json(res, 404, {
+          image: ogUrl({ screen: 'vote', title: 'No Active Challenge', subtitle: `Round ${roundId} has none.` }),
+          image_aspect_ratio: '1.91:1',
+          post_url: `${SITE}/api/frame`,
+          buttons: [
+            { label: '🚀 Start Challenger', action: 'link', target: `${SITE}/challenge` },
+            { label: '🔎 View Round', action: 'link', target: `${SITE}/round/${roundId}` },
+          ],
           title: '😴 No Active Challenge',
           description: `Round ${roundId} has no open challenge to vote on.`,
-          image: `${siteUrl}/og/empty.PNG`,
-          imageAspectRatio: '1.91:1',
-          buttons: [
-            { label: '🚀 Start a Challenger', action: 'link', target: `${siteUrl}/challenge` },
-            { label: '🔎 View Round', action: 'link', target: `${siteUrl}/round/${roundId}` },
-          ],
         })
       }
       pool2Id = BigInt(found)
     }
 
-    // Vote on Pool2 (send a small buffer to reduce "insufficient funds" reverts)
+    // Send vote from server signer
     const tx = await ct.votePool2(pool2Id, Boolean(voteChallenger), { value: VOTE_FEE_WITH_BUFFER })
     const rc = await tx.wait()
-    console.log('✅ votePool2 hash:', rc?.hash)
+    console.log('✅ votePool2 hash:', rc?.hash || rc?.transactionHash)
 
-    const img = voteChallenger
-      ? `${siteUrl}/og/CHALLENGER_CONFIRMED.PNG`
-      : `${siteUrl}/og/VOTE_CONFIRMED.PNG`
+    const img = ogUrl({
+      screen: 'vote',
+      title: 'Vote Recorded!',
+      subtitle: `${voteChallenger ? 'Challenger' : 'Original'} • #${pool2Id}`,
+    })
 
     return json(res, 200, {
-      title: '✅ Vote Recorded!',
-      description: `You voted for ${voteChallenger ? 'Challenger' : 'Original'} in Challenge ${pool2Id}.`,
       image: img,
-      imageAspectRatio: '1.91:1',
+      image_aspect_ratio: '1.91:1',
+      post_url: `${SITE}/api/frame`,
       buttons: [
-        { label: '📊 More Votes', action: 'link', target: `${siteUrl}/vote` },
-        { label: '🏠 MadFill', action: 'link', target: siteUrl },
+        { label: '📊 More Votes', action: 'link', target: `${SITE}/vote` },
+        { label: '🏠 MadFill', action: 'link', target: SITE },
       ],
+      title: '✅ Vote Recorded!',
+      description: `You voted for ${voteChallenger ? 'Challenger' : 'Original'} in Challenge ${String(pool2Id)}.`,
     })
   } catch (err) {
     console.error('❌ Frame vote error:', err)
     return json(res, 500, {
-      title: '❌ Vote Failed',
-      description: (err?.shortMessage || err?.reason || err?.message || 'There was an issue submitting your vote.')
-        .toString()
-        .slice(0, 140),
-      image: `${siteUrl}/og/error.PNG`,
-      imageAspectRatio: '1.91:1',
+      image: ogUrl({ screen: 'error', title: 'Vote Failed', subtitle: 'Please try again' }),
+      image_aspect_ratio: '1.91:1',
+      post_url: `${siteUrl()}/api/frame`,
       buttons: [
         { label: '🔁 Try Again', action: 'post' },
-        { label: '🏠 MadFill', action: 'link', target: siteUrl },
+        { label: '🏠 MadFill', action: 'link', target: siteUrl() },
       ],
+      title: '❌ Vote Failed',
+      description: (err?.shortMessage || err?.reason || err?.message || 'Issue submitting your vote.')
+        .toString()
+        .slice(0, 140),
     })
   }
 }
