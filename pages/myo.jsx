@@ -1,7 +1,6 @@
 // pages/myo.jsx
 'use client'
 
-import Layout from '@/components/Layout'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import clsx from 'clsx'
@@ -367,7 +366,7 @@ export default function MyoPage() {
 
   /** ============== Render ============== */
   return (
-    <Layout>
+    <>
       <Head>
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
@@ -600,6 +599,6 @@ export default function MyoPage() {
           </div>
         </div>
       )}
-    </Layout>
+    </>
   )
 }
