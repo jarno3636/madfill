@@ -724,10 +724,11 @@ export default function RoundDetailPage() {
             {/* Social & nav */}
             <div className="mt-6 rounded-xl bg-slate-900/70 border border-slate-700 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
+                {/* ensures an image embed */}
                 <ShareBar
-                  url={pageUrl}
-                  text={`Join my MadFill round: ${round.name}`}
-                  og={{ screen: 'round', roundId: id }}  {/* ensures an image embed */}
+                 url={pageUrl}
+                 text={`Join my MadFill round: ${round?.name || ''}`}
+                 og={{ screen: 'round', roundId: id }}
                 />
                 <Link href="/active" className="underline text-indigo-300">
                   ← Back to Active Rounds
