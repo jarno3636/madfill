@@ -36,15 +36,13 @@ const extractError = (e) =>
 
 export default function Home() {
   useMiniAppReady()
-  // status + logs
+
   const [status, setStatus] = useState('')
   const [logs, setLogs] = useState([])
   const loggerRef = useRef(null)
 
-  // passive wallet signal (no UI here—wallet lives in Layout)
   const [address, setAddress] = useState(null)
 
-  // form state
   const [roundId, setRoundId] = useState('')
   const [roundName, setRoundName] = useState('')
   const [catIdx, setCatIdx] = useState(0)
@@ -55,17 +53,15 @@ export default function Home() {
   const [feeEth, setFeeEth] = useState(0.01) // ETH on Base
   const [busy, setBusy] = useState(false)
 
-  // flair + confetti
   const [profile, setProfile] = useState(null)
   const [showConfetti, setShowConfetti] = useState(false)
 
-  // featured
   const [featured, setFeatured] = useState([])
   const [loadingFeatured, setLoadingFeatured] = useState(true)
 
   const { width, height } = useWindowSize()
   const selectedCategory = categories[catIdx]
-  const tpl = selectedCategory.templates[tplIdx] // { name, parts, blanks }
+  const tpl = selectedCategory.templates[tplIdx]
 
   const log = (msg) => {
     setLogs((prev) => [...prev, msg])
@@ -112,7 +108,6 @@ export default function Home() {
       .slice(0, 16)
   }
 
-  // passive wallet (no prompting)
   useEffect(() => {
     if (!window?.ethereum) return
     let cancelled = false
@@ -130,7 +125,6 @@ export default function Home() {
     return () => { cancelled = true }
   }, [])
 
-  // fetch farcaster flair once we know the address
   useEffect(() => {
     if (!address) return
     ;(async () => {
@@ -141,7 +135,6 @@ export default function Home() {
     })()
   }, [address])
 
-  // featured rounds (read-only)
   useEffect(() => {
     let cancelled = false
     setLoadingFeatured(true)
@@ -161,7 +154,7 @@ export default function Home() {
           const name = info[0]
           const theme = info[1]
           const parts = info[2]
-          const feeBase = info[3]
+          const feeBase = info[3] // not directly used here; left for future display
           const deadline = Number(info[4])
           const creator = info[5]
           const participants = info[6] || []
@@ -232,8 +225,8 @@ export default function Home() {
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
-      const feeBase = ethers.parseUnits(String(feeEth), 18) // ETH on Base
-      const value = feeBase // exact value; contract skims 0.5% internally
+      const feeBase = ethers.parseUnits(String(feeEth), 18)
+      const value = feeBase
 
       const parts = tpl.parts.map((p) => p.trim())
       const name = (roundName || 'Untitled').slice(0, 48)
@@ -244,7 +237,6 @@ export default function Home() {
 
       log(`Creating round "${name}"...`)
 
-      // Preflight for revert reasons
       await ct.createPool1.staticCall(
         name,
         theme,
@@ -257,7 +249,6 @@ export default function Home() {
         { value }
       )
 
-      // Real tx
       const tx = await ct.createPool1(
         name,
         theme,
@@ -271,7 +262,6 @@ export default function Home() {
       )
       const rc = await tx.wait()
 
-      // Try to grab id from event; fallback to counter
       let newId = ''
       try {
         const evt = rc.logs?.find((l) => l.fragment?.name === 'Pool1Created')
@@ -318,13 +308,13 @@ export default function Home() {
 
   return (
     <Layout>
-      {/* Farcaster Mini App hint + canonical/icon for clients */}
       <Head>
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
         <meta property="fc:frame:button:1" content="Open MadFill" />
         <meta property="fc:frame:button:1:action" content="link" />
         <meta property="fc:frame:button:1:target" content={origin} />
+        <link rel="canonical" href={origin} />
       </Head>
 
       <SEO
@@ -337,7 +327,6 @@ export default function Home() {
       {showConfetti && <Confetti width={width} height={height} />}
 
       <main className="max-w-6xl mx-auto p-4 md:p-6 space-y-6 text-white">
-        {/* Hero (wallet lives in Layout header) */}
         <div className="rounded-2xl bg-gradient-to-br from-indigo-700 via-fuchsia-700 to-cyan-700 p-6 md:p-8 shadow-xl ring-1 ring-white/10">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
@@ -355,7 +344,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Create Round */}
         <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
           <CardHeader className="border-b border-slate-700 bg-slate-800/50">
             <div className="flex items-center justify-between">
@@ -372,7 +360,6 @@ export default function Home() {
               </div>
             )}
 
-            {/* Name + Category/Template */}
             <div className="grid md:grid-cols-2 gap-4">
               <label className="block text-sm text-slate-300">
                 Round name (optional)
@@ -405,7 +392,7 @@ export default function Home() {
                 <label className="block text-sm text-slate-300">
                   Template
                   <select
-                    className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                    className="mt-1 w/full rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                     value={tplIdx}
                     onChange={(e) => {
                       setTplIdx(Number(e.target.value))
@@ -421,7 +408,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Preview with blank picker */}
             <div className="rounded-xl bg-slate-800/60 border border-slate-700 p-4">
               <div className="text-slate-300 text-sm mb-2">Card preview</div>
               <div className="text-base leading-relaxed">
@@ -447,7 +433,6 @@ export default function Home() {
               <div className="mt-3 text-xs italic opacity-80">{preview}</div>
             </div>
 
-            {/* Your word */}
             <label className="block text-sm text-slate-300">
               Your word (one word, letters/numbers/_/-, max 16 chars)
               <input
@@ -460,7 +445,6 @@ export default function Home() {
               />
             </label>
 
-            {/* Fee + Duration */}
             <div className="grid md:grid-cols-2 gap-4">
               <label className="block text-sm text-slate-300">
                 Duration
@@ -502,7 +486,6 @@ export default function Home() {
               </label>
             </div>
 
-            {/* Submit */}
             <div className="flex flex-wrap items-center gap-3">
               <Button
                 onClick={handleCreateRound}
@@ -518,12 +501,15 @@ export default function Home() {
               )}
             </div>
 
-            {/* Share */}
             <div className="pt-2">
-              <ShareBar url={roundUrl} text={shareText} embedUrl={roundUrl} />
+              <ShareBar
+                url={roundUrl}
+                text={shareText}
+                embedUrl={roundUrl}
+                og={{ screen: 'home', title: roundId ? `Round #${roundId}` : 'MadFill' }}
+              />
             </div>
 
-            {/* Logs */}
             {logs.length > 0 && (
               <div
                 className="text-green-200 text-xs mt-4 max-h-40 overflow-y-auto p-2 bg-black/40 border border-green-400 rounded"
@@ -535,7 +521,6 @@ export default function Home() {
           </CardContent>
         </Card>
 
-        {/* Featured */}
         <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
           <CardHeader className="border-b border-slate-700 bg-slate-800/50">
             <div className="flex items-center justify-between">
@@ -583,7 +568,13 @@ export default function Home() {
                         <Link href={`/round/${r.id}`} className="underline text-indigo-300 text-sm">
                           Open
                         </Link>
-                        <ShareBar url={rUrl} text={shareTxt} embedUrl={rUrl} small />
+                        <ShareBar
+                          url={rUrl}
+                          text={shareTxt}
+                          embedUrl={rUrl}
+                          small
+                          og={{ screen: 'round', roundId: String(r.id) }}
+                        />
                       </div>
                     </div>
                   )
@@ -593,7 +584,6 @@ export default function Home() {
           </CardContent>
         </Card>
 
-        {/* Fees, explained */}
         <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
           <CardHeader className="border-b border-slate-700 bg-slate-800/50">
             <h2 className="text-xl font-bold">How fees work</h2>
