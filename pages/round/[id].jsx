@@ -5,7 +5,6 @@ import { useRouter } from 'next/router'
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { ethers } from 'ethers'
 import abi from '@/abi/FillInStoryV3_ABI.json'
-import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import Confetti from 'react-confetti'
@@ -457,7 +456,7 @@ export default function RoundDetailPage() {
   const ogImage = buildOgUrl({ screen: 'round', roundId: String(id || '') }) // 🔧 stringify
 
   return (
-    <Layout>
+    <>
       <Head>
         {/* Farcaster Mini App frame meta */}
         <meta name="fc:frame" content="vNext" />
@@ -738,6 +737,6 @@ export default function RoundDetailPage() {
           </>
         )}
       </main>
-    </Layout>
+    </>
   )
 }
