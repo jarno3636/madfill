@@ -3,7 +3,6 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { ethers } from 'ethers'
-import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import abi from '@/abi/FillInStoryV3_ABI.json'
@@ -366,7 +365,7 @@ export default function ChallengePage() {
   const ogImage = buildOgUrl({ screen: 'challenge', title: 'Submit a Challenger' })
 
   return (
-    <Layout>
+    <>
       <Head>
         {/* Farcaster Mini App */}
         <meta property="fc:frame" content="vNext" />
@@ -574,6 +573,6 @@ export default function ChallengePage() {
           </CardContent>
         </Card>
       </main>
-    </Layout>
+    </>
   )
 }
