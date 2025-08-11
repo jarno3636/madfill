@@ -1,58 +1,59 @@
-// pages/_app.jsx
-'use client'
+import '../styles/globals.css';
+import { useMiniAppReady } from '../hooks/useMiniAppReady';
+import { useEffect } from 'react';
+import ErrorBoundary from '../components/ErrorBoundary';
+import { ToastProvider } from '../components/Toast';
+import LoadingSpinner from '../components/LoadingSpinner';
 
-import '@/styles/globals.css'
-import Head from 'next/head'
-import Layout from '@/components/Layout'
-import { DEFAULT_SEO } from '@/lib/seo'
+function MyApp({ Component, pageProps }) {
+  const { isReady, error } = useMiniAppReady();
 
-// If you have wallet/provider setup:
-// import { WagmiConfig } from 'wagmi'
-// import { config } from '@/lib/wagmi'
+  useEffect(() => {
+    if (isReady) {
+      console.log('Farcaster Mini App is ready');
+    }
+    if (error) {
+      console.error('Mini App initialization error:', error);
+    }
+  }, [isReady, error]);
 
-export default function App({ Component, pageProps }) {
+  // Show loading state while Mini App is initializing
+  if (!isReady && !error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900">
+        <div className="text-center">
+          <LoadingSpinner size="xl" text="Initializing MadFill..." />
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state if initialization failed
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900">
+        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-8 max-w-md text-center">
+          <div className="text-red-400 text-4xl mb-4">⚠️</div>
+          <h2 className="text-white text-xl font-bold mb-4">Failed to initialize Mini App</h2>
+          <p className="text-purple-200 mb-6">{error.message}</p>
+          <button 
+            onClick={() => window.location.reload()}
+            className="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 px-4 rounded-lg transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <>
-      <Head>
-        {/* --- Default SEO fallbacks (overridden by per-page <SEO />) --- */}
-        <title>{DEFAULT_SEO.title}</title>
-        <meta name="description" content={DEFAULT_SEO.description} />
-
-        {/* Open Graph */}
-        <meta property="og:type" content="website" />
-        <meta property="og:title" content={DEFAULT_SEO.title} />
-        <meta property="og:description" content={DEFAULT_SEO.description} />
-        {/* Use your dynamic OG when available; fallback to a static */}
-        <meta property="og:image" content={DEFAULT_SEO.image || '/og/default.png'} />
-        <meta property="og:image:width" content="1200" />
-        <meta property="og:image:height" content="630" />
-
-        {/* Twitter */}
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content={DEFAULT_SEO.title} />
-        <meta name="twitter:description" content={DEFAULT_SEO.description} />
-        <meta name="twitter:image" content={DEFAULT_SEO.image || '/og/default.png'} />
-
-        {/* PWA / icons (no transparent backgrounds) */}
-        <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
-        <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
-        <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-        <link rel="icon" sizes="192x192" href="/android-chrome-192x192.png" />
-        <link rel="icon" sizes="512x512" href="/android-chrome-512x512.png" />
-        {/* If you add a webmanifest later, uncomment this: */}
-        {/* <link rel="manifest" href="/site.webmanifest" /> */}
-        <meta name="theme-color" content="#0b1220" />
-
-        {/* We do NOT set Farcaster frame tags globally to avoid duplicates.
-            Each page that needs a frame adds its own <meta property="fc:*" ... /> */}
-      </Head>
-
-      {/* Uncomment if you use wagmi */}
-      {/* <WagmiConfig config={config}> */}
-      <Layout>
+    <ErrorBoundary>
+      <ToastProvider>
         <Component {...pageProps} />
-      </Layout>
-      {/* </WagmiConfig> */}
-    </>
-  )
+      </ToastProvider>
+    </ErrorBoundary>
+  );
 }
+
+export default MyApp;
