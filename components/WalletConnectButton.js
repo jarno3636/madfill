@@ -1,76 +1,63 @@
-// components/WalletConnectButton.js
-'use client'
+import { useMiniWallet } from '../hooks/useMiniWallet';
 
-import useWallet from '@/lib/useWallet'
-import { Button } from '@/components/ui/button'
+export function WalletConnectButton({ children, className = '', onConnected, ...props }) {
+  const { address, isConnected, isLoading, connect, disconnect, error } = useMiniWallet();
 
-function shortAddr(a) {
-  return a ? `${a.slice(0, 6)}…${a.slice(-4)}` : ''
-}
+  const handleConnect = async () => {
+    try {
+      if (!isConnected) {
+        await connect();
+        if (onConnected) {
+          onConnected(address);
+        }
+      } else {
+        await disconnect();
+      }
+    } catch (err) {
+      console.error('Wallet connection error:', err);
+    }
+  };
 
-export default function WalletConnectButton() {
-  const {
-    address,
-    isOnBase,
-    connecting,
-    error,
-    connect,
-    disconnect,
-    switchToBase,
-  } = useWallet()
-
-  // If we're inside Warpcast AND there's no injected wallet,
-  // hide this button (the MiniConnectButton handles Warpcast).
-  const isWarpcast =
-    typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
-  const hasInjected =
-    typeof window !== 'undefined' && typeof window.ethereum !== 'undefined'
-
-  if (isWarpcast && !hasInjected) {
-    return null
-  }
+  const formatAddress = (addr) => {
+    if (!addr) return '';
+    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  };
 
   return (
-    <div className="flex items-center gap-2">
-      {!address ? (
-        <Button
-          onClick={connect}
-          className="bg-indigo-600 hover:bg-indigo-500"
-          disabled={connecting}
-          aria-busy={connecting ? 'true' : 'false'}
-          title="Connect an injected wallet (e.g., MetaMask)"
-        >
-          {connecting ? 'Connecting…' : 'Connect Wallet'}
-        </Button>
-      ) : (
+    <button
+      onClick={handleConnect}
+      disabled={isLoading}
+      className={`
+        inline-flex items-center justify-center
+        px-4 py-2 border border-transparent text-sm font-medium rounded-md
+        transition-colors duration-200
+        ${isConnected 
+          ? 'text-red-700 bg-red-100 hover:bg-red-200' 
+          : 'text-white bg-blue-600 hover:bg-blue-700'
+        }
+        disabled:opacity-50 disabled:cursor-not-allowed
+        ${className}
+      `}
+      {...props}
+    >
+      {isLoading ? (
         <>
-          {!isOnBase && (
-            <Button
-              onClick={switchToBase}
-              className="bg-cyan-700 hover:bg-cyan-600"
-              title="Switch to Base network"
-            >
-              Switch to Base
-            </Button>
-          )}
-          <span className="px-2 py-1 rounded bg-slate-800/80 border border-slate-700 text-xs" title={address}>
-            {shortAddr(address)}
-          </span>
-          <Button
-            onClick={disconnect}
-            variant="secondary"
-            className="bg-slate-700 hover:bg-slate-600"
-            title="Disconnect (clears local state)"
-          >
-            Disconnect
-          </Button>
+          <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></div>
+          Connecting...
         </>
+      ) : isConnected ? (
+        children || `Disconnect ${formatAddress(address)}`
+      ) : (
+        children || 'Connect Wallet'
       )}
+      
       {error && (
-        <span className="text-xs text-amber-300 max-w-[220px] truncate" title={error}>
-          {error}
+        <span className="ml-2 text-red-500" title={error.message}>
+          ⚠️
         </span>
       )}
-    </div>
-  )
+    </button>
+  );
 }
+
+export default WalletConnectButton;

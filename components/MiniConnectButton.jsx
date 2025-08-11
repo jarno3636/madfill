@@ -1,35 +1,59 @@
-// components/MiniConnectButton.jsx
-'use client'
-import { useEffect, useState } from 'react'
-import { Button } from '@/components/ui/button'
-import { useMiniWallet } from '@/hooks/useMiniWallet'
+import { useMiniWallet } from '../hooks/useMiniWallet';
 
-export default function MiniConnectButton() {
-  // Avoid rendering until after mount to dodge hydration edge cases
-  const [mounted, setMounted] = useState(false)
-  useEffect(() => setMounted(true), [])
+export default function MiniConnectButton({ className = '' }) {
+  const { address, isConnected, isLoading, connect, disconnect, error } = useMiniWallet();
 
-  const { isWarpcast, ready, address, connect, disconnect, connecting, error } = useMiniWallet()
+  const handleClick = async () => {
+    if (isConnected) {
+      await disconnect();
+    } else {
+      await connect();
+    }
+  };
 
-  if (!mounted || !isWarpcast) return null
-
-  if (address) {
-    return (
-      <div className="flex items-center gap-2">
-        <span className="px-2 py-1 rounded bg-slate-800/70 border border-slate-700 text-xs">
-          👛 {address.slice(0,6)}…{address.slice(-4)}
-        </span>
-        <Button onClick={disconnect} className="bg-slate-700 hover:bg-slate-600">Disconnect</Button>
-      </div>
-    )
-  }
+  const formatAddress = (addr) => {
+    if (!addr) return '';
+    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  };
 
   return (
-    <div className="flex items-center gap-2">
-      <Button onClick={connect} disabled={!ready || connecting} className="bg-purple-600 hover:bg-purple-500">
-        {connecting ? 'Connecting…' : 'Connect (Warpcast)'}
-      </Button>
-      {error ? <span className="text-xs text-amber-300">{error}</span> : null}
+    <div className={`flex flex-col items-center space-y-2 ${className}`}>
+      <button
+        onClick={handleClick}
+        disabled={isLoading}
+        className={`
+          px-6 py-3 rounded-lg font-semibold transition-all duration-200
+          ${isConnected 
+            ? 'bg-red-500 hover:bg-red-600 text-white' 
+            : 'bg-blue-500 hover:bg-blue-600 text-white'
+          }
+          ${isLoading ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105'}
+          disabled:opacity-50 disabled:cursor-not-allowed
+        `}
+      >
+        {isLoading ? (
+          <span className="flex items-center space-x-2">
+            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+            <span>Connecting...</span>
+          </span>
+        ) : isConnected ? (
+          `Disconnect ${formatAddress(address)}`
+        ) : (
+          'Connect Wallet'
+        )}
+      </button>
+
+      {error && (
+        <div className="text-red-500 text-sm text-center">
+          Error: {error.message}
+        </div>
+      )}
+
+      {isConnected && address && (
+        <div className="text-sm text-gray-600 text-center">
+          Connected: {formatAddress(address)}
+        </div>
+      )}
     </div>
-  )
+  );
 }
