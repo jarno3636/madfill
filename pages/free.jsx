@@ -180,6 +180,7 @@ export default function FreeGame() {
          <meta property="fc:frame:button:1" content="Play Free" />
          <meta property="fc:frame:button:1:action" content="link" />
          <meta property="fc:frame:button:1:target" content={permalink || pageUrl} />
+         <link rel="canonical" href={permalink || pageUrl} />
       </Head>
       <SEO
         title="Free Game — MadFill"
@@ -323,7 +324,18 @@ export default function FreeGame() {
                   )}
                 </div>
 
-                <ShareBar url={permalink} text={shareText} embedUrl={permalink} />
+                <ShareBar
+                 url={permalink}
+                 text={shareText}
+                 embedUrl={permalink}
+                 og={{
+                   screen: 'free',
+                   c: String(catIdx),
+                   t: String(tplIdx),
+                   w: buildWordsParam(words, template.blanks),
+                   title: 'Free MadFill'
+                 }}
+               />
 
                 <div className="flex flex-wrap gap-2">
                   <Button onClick={handleRemix} className="bg-slate-700 hover:bg-slate-600" type="button">
