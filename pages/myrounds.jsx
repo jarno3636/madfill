@@ -1,7 +1,7 @@
 // pages/myrounds.jsx
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { ethers } from 'ethers'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -22,10 +22,12 @@ const CONTRACT_ADDRESS =
   '0x6975a550130642E5cb67A87BE25c8134542D5a0a'
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+const BASE_CHAIN_ID = 8453n
 const BASE_CHAIN_ID_HEX = '0x2105' // 8453
 
 export default function MyRounds() {
   useMiniAppReady()
+
   const [address, setAddress] = useState(null)
   const [isOnBase, setIsOnBase] = useState(true)
   const [loading, setLoading] = useState(true)
@@ -48,6 +50,23 @@ export default function MyRounds() {
 
   const { width, height } = useWindowSize()
   const tickRef = useRef(null)
+
+  // ---- Farcaster Mini wallet preference (fallback to injected) ----
+  const miniProvRef = useRef(null)
+  const getEip1193 = useCallback(async () => {
+    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
+    if (miniProvRef.current) return miniProvRef.current
+    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+    if (!inWarpcast) return null
+    try {
+      const mod = await import('@farcaster/miniapp-sdk')
+      const prov = await mod.sdk.wallet.getEthereumProvider()
+      miniProvRef.current = prov
+      return prov
+    } catch {
+      return null
+    }
+  }, [])
 
   // utils
   const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
@@ -87,36 +106,51 @@ export default function MyRounds() {
 
   // wallet + chain (observe only; connect handled in the header)
   useEffect(() => {
-    if (!window?.ethereum) return
     let cancelled = false
     ;(async () => {
-      try {
-        const accts = await window.ethereum.request({ method: 'eth_accounts' }) // passive, no prompt
-        if (!cancelled) setAddress(accts?.[0] || null)
-      } catch {}
-      try {
-        const provider = new ethers.BrowserProvider(window.ethereum)
-        const net = await provider.getNetwork()
-        if (!cancelled) setIsOnBase(net?.chainId === 8453n)
-      } catch {
-        if (!cancelled) setIsOnBase(true)
+      // injected first
+      if (window?.ethereum) {
+        try {
+          const accts = await window.ethereum.request({ method: 'eth_accounts' }) // passive, no prompt
+          if (!cancelled) setAddress(accts?.[0] || null)
+        } catch {}
+        try {
+          const provider = new ethers.BrowserProvider(window.ethereum)
+          const net = await provider.getNetwork()
+          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
+        } catch {
+          if (!cancelled) setIsOnBase(true)
+        }
+        const onChain = () => location.reload()
+        const onAcct = (accs) => setAddress(accs?.[0] || null)
+        window.ethereum.on?.('chainChanged', onChain)
+        window.ethereum.on?.('accountsChanged', onAcct)
+        return () => {
+          window.ethereum.removeListener?.('chainChanged', onChain)
+          window.ethereum.removeListener?.('accountsChanged', onAcct)
+        }
       }
-      const onChain = () => location.reload()
-      const onAcct = (accs) => setAddress(accs?.[0] || null)
-      window.ethereum.on?.('chainChanged', onChain)
-      window.ethereum.on?.('accountsChanged', onAcct)
-      return () => {
-        window.ethereum.removeListener?.('chainChanged', onChain)
-        window.ethereum.removeListener?.('accountsChanged', onAcct)
+      // otherwise try Warpcast Mini provider
+      const mini = await getEip1193()
+      if (mini && !cancelled) {
+        try {
+          const p = new ethers.BrowserProvider(mini)
+          const signer = await p.getSigner().catch(() => null)
+          const addr = await signer?.getAddress().catch(() => null)
+          if (!cancelled) setAddress(addr || null)
+          const net = await p.getNetwork()
+          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
+        } catch {}
       }
     })()
     return () => { cancelled = true }
-  }, [])
+  }, [getEip1193])
 
   async function switchToBase() {
-    if (!window?.ethereum) return
+    const eip = await getEip1193()
+    if (!eip) return
     try {
-      await window.ethereum.request({
+      await eip.request({
         method: 'wallet_switchEthereumChain',
         params: [{ chainId: BASE_CHAIN_ID_HEX }],
       })
@@ -124,7 +158,7 @@ export default function MyRounds() {
     } catch (e) {
       if (e?.code === 4902) {
         try {
-          await window.ethereum.request({
+          await eip.request({
             method: 'wallet_addEthereumChain',
             params: [{
               chainId: BASE_CHAIN_ID_HEX,
@@ -314,12 +348,16 @@ export default function MyRounds() {
   // actions
   async function finalizePool1(id) {
     try {
-      if (!window?.ethereum) throw new Error('Wallet not found')
+      const eip = await getEip1193()
+      if (!eip) throw new Error('Wallet not found')
       setStatus('Finalizing round…')
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      const signer = await provider.getSigner()
+
+      await eip.request?.({ method: 'eth_requestAccounts' })
+      const provider = new ethers.BrowserProvider(eip)
       const net = await provider.getNetwork()
-      if (net?.chainId !== 8453n) await switchToBase()
+      if (net?.chainId !== BASE_CHAIN_ID) await switchToBase()
+
+      const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
       const tx = await ct.claimPool1(BigInt(id))
       await tx.wait()
@@ -396,6 +434,7 @@ export default function MyRounds() {
         <meta property="fc:frame:button:1" content="My Rounds" />
         <meta property="fc:frame:button:1:action" content="link" />
         <meta property="fc:frame:button:1:target" content={pageUrl} />
+        <link rel="canonical" href={pageUrl} />
       </Head>
       <SEO
         title={ogTitle}
@@ -405,8 +444,6 @@ export default function MyRounds() {
         type="profile"
         twitterCard="summary_large_image"
       />
-
-      {/* Farcaster frame + creator meta */}
 
       {showConfetti && <Confetti width={width} height={height} />}
 
@@ -587,12 +624,12 @@ export default function MyRounds() {
                         <span className="text-sm font-semibold text-emerald-300">Prize Claimed</span>
                       )}
 
-                      {/* Polished Share buttons (Warpcast / X / Share) */}
                       <ShareBar
                         url={shareUrl}
                         text={shareText}
                         small
                         className="ml-auto"
+                        og={{ screen: 'round', roundId: String(targetRoundId) }}
                       />
                     </div>
                   </CardContent>
