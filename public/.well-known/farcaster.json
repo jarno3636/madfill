@@ -1,26 +1,18 @@
-
 {
   "accountAssociation": {
     "header": "eyJmaWQiOjExNTQ4OTAsInR5cGUiOiJjdXN0b2R5Iiwia2V5IjoiMHgxZDEzMDA2OTFCQ0NjNEM5YWU5MUU0YTgyMDc2NkIyOEM3YzRCMDEyIn0",
-    "payload": "eyJkb21haW4iOiJtYWRmaWxsLnZlcmNlbC5hcHBzIn0",
-    "signature": "MHg0ODQxNTM3ZGYwZmE1NDViMmFhNzYzOWZmYjdlMTZkZWMzYmJhODVlNGRjYWUyYzliZjA3MzkwNmFlYzBmMGEwNGE1Y2U2MzYyMzVjYzUyYzE4ZWY1YThhYWUyNWQxYzU3MzExOTZmMWViYTE5ODljZDFiZmYwYzE2NDBjZTEyZDFi"
+    "payload": "eyJkb21haW4iOiJtYWRmaWxsLnZlcmNlbC5hcHAifQ",
+    "signature": "MHg4NzMyOWQ5NjI3ZTU5M2I5Y2NiZGUzODMwNzgzZjMzYzA0MjgyODI0ZGQwZWMwMGE0YzAyZTg1NTI2M2UzMWRlNWY2NGY2NWI5MWZiMTc4ZjkzNDljZjA2Nzc3YzljOGM1YmZhMGRlMmM4NTA3MWZkZmQ4YzdhNjdmNjAzY2UzYjFi"
   },
-  "miniapp": {
+  "frame": {
     "version": "1",
     "name": "MadFill",
-    "homeUrl": "https://madfill.vercel.app",
     "iconUrl": "https://madfill.vercel.app/og/app-icon-1024.png",
+    "homeUrl": "https://madfill.vercel.app",
+    "imageUrl": "https://madfill.vercel.app/og/cover-1200x630.jpg",
+    "buttonTitle": "Open MadFill",
     "splashImageUrl": "https://madfill.vercel.app/og/app-splash-200.png",
     "splashBackgroundColor": "#1e1b4b",
-    "subtitle": "Fill the blank. Win the pot.",
-    "description": "Create a round, enter with one word, vote Original vs Challenger on Base.",
-    "heroImageUrl": "https://madfill.vercel.app/og/cover-1200x630.jpg",
-    "ogTitle": "MadFill",
-    "ogDescription": "Play MadFill on Base — create, challenge, vote, win.",
-    "ogImageUrl": "https://madfill.vercel.app/og/cover-1200x630.jpg",
-    "requiredChains": ["eip155:8453"],
-    "requiredCapabilities": [
-      "wallet.getEthereumProvider"
-    ]
+    "webhookUrl": "https://madfill.vercel.app/api/webhook"
   }
 }
