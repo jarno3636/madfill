@@ -3,7 +3,6 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { ethers } from 'ethers'
-import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import abi from '@/abi/FillInStoryV3_ABI.json'
@@ -415,7 +414,7 @@ export default function VotePage() {
 
   // ---- UI ----
   return (
-    <Layout>
+    <>
       <SEO
         title={ogTitle}
         description={ogDesc}
@@ -601,6 +600,6 @@ export default function VotePage() {
 
         {status && <div className="mt-6 text-center text-yellow-300">{status}</div>}
       </main>
-    </Layout>
+    </>
   )
 }
