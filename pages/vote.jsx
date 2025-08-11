@@ -1,7 +1,7 @@
 // pages/vote.jsx
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { ethers } from 'ethers'
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -19,10 +19,11 @@ import Head from 'next/head'
 // ---- Config ----
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // env wins
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
-const BASE_CHAIN_ID_HEX = '0x2105' // Base chainId
+const BASE_CHAIN_ID = 8453n
+const BASE_CHAIN_ID_HEX = '0x2105' // Base
 
 // IMPORTANT: V3 does not expose Pool2 feeBase in views. Set it in env.
 // Fallback: 0.0005 ETH
@@ -33,6 +34,7 @@ const VOTE_FEE_WEI =
 
 export default function VotePage() {
   useMiniAppReady()
+
   // state
   const [rounds, setRounds] = useState([]) // Pool2 cards
   const [loading, setLoading] = useState(true)
@@ -47,6 +49,23 @@ export default function VotePage() {
 
   const { width, height } = useWindowSize()
   const tickRef = useRef(null)
+
+  // Prefer Warpcast Mini wallet; fallback to injected
+  const miniProvRef = useRef(null)
+  const getEip1193 = useCallback(async () => {
+    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
+    if (miniProvRef.current) return miniProvRef.current
+    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+    if (!inWarpcast) return null
+    try {
+      const mod = await import('@farcaster/miniapp-sdk')
+      const prov = await mod.sdk.wallet.getEthereumProvider()
+      miniProvRef.current = prov
+      return prov
+    } catch {
+      return null
+    }
+  }, [])
 
   // ---- utils ----
   const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
@@ -74,7 +93,7 @@ export default function VotePage() {
     const n = parts?.length || 0
     if (n === 0) return ''
     const blanks = Math.max(0, n - 1)
-    const idx = Math.max(0, Math.min(Math.max(0, blanks - 1), blankIndex || 0))
+    const idx = Math.max(0, Math.min(Math.max(0, blanks - 1), Number(blankIndex) || 0))
     const out = []
     for (let i = 0; i < n; i++) {
       out.push(parts[i] || '')
@@ -100,36 +119,50 @@ export default function VotePage() {
 
   // ---- wallet / chain (observe only; connect handled in header) ----
   useEffect(() => {
-    if (!window?.ethereum) return
     let cancelled = false
     ;(async () => {
-      try {
-        const accts = await window.ethereum.request({ method: 'eth_accounts' }) // passive
-        if (!cancelled) setAddress(accts?.[0] || null)
-      } catch {}
-      try {
-        const provider = new ethers.BrowserProvider(window.ethereum)
-        const net = await provider.getNetwork()
-        if (!cancelled) setIsOnBase(net?.chainId === 8453n)
-      } catch {
-        if (!cancelled) setIsOnBase(true)
+      if (window?.ethereum) {
+        try {
+          const accts = await window.ethereum.request({ method: 'eth_accounts' })
+          if (!cancelled) setAddress(accts?.[0] || null)
+        } catch {}
+        try {
+          const provider = new ethers.BrowserProvider(window.ethereum)
+          const net = await provider.getNetwork()
+          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
+        } catch {
+          if (!cancelled) setIsOnBase(true)
+        }
+        const onChain = () => location.reload()
+        const onAcct = (accs) => setAddress(accs?.[0] || null)
+        window.ethereum.on?.('chainChanged', onChain)
+        window.ethereum.on?.('accountsChanged', onAcct)
+        return () => {
+          window.ethereum.removeListener?.('chainChanged', onChain)
+          window.ethereum.removeListener?.('accountsChanged', onAcct)
+        }
       }
-      const onChain = () => location.reload()
-      const onAcct = (accs) => setAddress(accs?.[0] || null)
-      window.ethereum.on?.('chainChanged', onChain)
-      window.ethereum.on?.('accountsChanged', onAcct)
-      return () => {
-        window.ethereum.removeListener?.('chainChanged', onChain)
-        window.ethereum.removeListener?.('accountsChanged', onAcct)
+      // Warpcast Mini fallback
+      const mini = await getEip1193()
+      if (mini && !cancelled) {
+        try {
+          const p = new ethers.BrowserProvider(mini)
+          const signer = await p.getSigner().catch(() => null)
+          const addr = await signer?.getAddress().catch(() => null)
+          if (!cancelled) setAddress(addr || null)
+          const net = await p.getNetwork()
+          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
+        } catch {}
       }
     })()
     return () => { cancelled = true }
-  }, [])
+  }, [getEip1193])
 
   async function switchToBase() {
-    if (!window?.ethereum) return
+    const eip = await getEip1193()
+    if (!eip) return
     try {
-      await window.ethereum.request({
+      await eip.request({
         method: 'wallet_switchEthereumChain',
         params: [{ chainId: BASE_CHAIN_ID_HEX }],
       })
@@ -137,7 +170,7 @@ export default function VotePage() {
     } catch (e) {
       if (e?.code === 4902) {
         try {
-          await window.ethereum.request({
+          await eip.request({
             method: 'wallet_addEthereumChain',
             params: [{
               chainId: BASE_CHAIN_ID_HEX,
@@ -241,12 +274,15 @@ export default function VotePage() {
   // ---- actions ----
   async function votePool2(id, voteChallenger) {
     try {
-      if (!window?.ethereum) throw new Error('Wallet not found')
+      const eip = await getEip1193()
+      if (!eip) throw new Error('Wallet not found')
       setStatus('Submitting vote…')
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      const signer = await provider.getSigner()
+
+      await eip.request?.({ method: 'eth_requestAccounts' })
+      const provider = new ethers.BrowserProvider(eip)
       const net = await provider.getNetwork()
-      if (net?.chainId !== 8453n) await switchToBase()
+      if (net?.chainId !== BASE_CHAIN_ID) await switchToBase()
+      const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
       // small buffer
@@ -321,13 +357,17 @@ export default function VotePage() {
 
   async function claimPool2(id) {
     try {
-      if (!window?.ethereum) throw new Error('Wallet not found')
+      const eip = await getEip1193()
+      if (!eip) throw new Error('Wallet not found')
       setStatus('Claiming…')
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      const signer = await provider.getSigner()
+
+      await eip.request?.({ method: 'eth_requestAccounts' })
+      const provider = new ethers.BrowserProvider(eip)
       const net = await provider.getNetwork()
-      if (net?.chainId !== 8453n) await switchToBase()
+      if (net?.chainId !== BASE_CHAIN_ID) await switchToBase()
+      const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
+
       const tx = await ct.claimPool2(BigInt(id))
       await tx.wait()
       setClaimedId(id)
@@ -364,7 +404,6 @@ export default function VotePage() {
   const ogDesc = 'Pick the punchline. Vote Original vs Challenger and split the pool with the winners on Base.'
   const ogImage = buildOgUrl({ screen: 'vote', title: 'Community Vote' })
 
-  // ---- render helpers ----
   function StatusPill({ claimed, challengerWon }) {
     if (!claimed) return <span className="px-2 py-1 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 text-xs">Voting</span>
     return (
@@ -393,7 +432,8 @@ export default function VotePage() {
         <meta property="fc:frame:button:1" content="Open Vote" />
         <meta property="fc:frame:button:1:action" content="link" />
         <meta property="fc:frame:button:1:target" content={pageUrl} />
-     </Head>
+        <link rel="canonical" href={pageUrl} />
+      </Head>
       
       {(success || claimedId) && <Confetti width={width} height={height} />}
 
@@ -539,7 +579,13 @@ export default function VotePage() {
                       )}
 
                       {/* Social */}
-                      <ShareBar url={shareUrl} text={shareText} small className="ml-auto" />
+                      <ShareBar
+                        url={shareUrl}
+                        text={shareText}
+                        small
+                        className="ml-auto"
+                        og={{ screen: 'round', roundId: String(r.originalPool1Id) }}
+                      />
                     </div>
 
                     <div className="text-[11px] text-slate-500">
