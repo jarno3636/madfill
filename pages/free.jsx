@@ -2,7 +2,6 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useWindowSize } from 'react-use'
@@ -173,7 +172,7 @@ export default function FreeGame() {
   }
 
   return (
-    <Layout>
+    <>
       <Head>
          <meta property="fc:frame" content="vNext" />
          <meta property="fc:frame:image" content={ogImage} />
@@ -357,6 +356,6 @@ export default function FreeGame() {
           </CardContent>
         </Card>
       </main>
-    </Layout>
+    </>
   )
 }
