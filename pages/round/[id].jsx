@@ -15,7 +15,7 @@ import Head from 'next/head'
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
-import { useMiniAppReady } from '@/hooks/useMiniAppReady' // good to keep
+import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
@@ -27,7 +27,8 @@ const BASE_CHAIN_ID_HEX = '0x2105' // 8453
 export default function RoundDetailPage() {
   useMiniAppReady()
   const router = useRouter()
-  const idParam = router?.query?.id
+  const isReady = router?.isReady // 🔧 guard
+  const idParam = isReady ? router.query?.id : undefined
   const id = useMemo(() => (Array.isArray(idParam) ? idParam[0] : idParam), [idParam])
 
   const [loading, setLoading] = useState(true)
@@ -38,7 +39,7 @@ export default function RoundDetailPage() {
 
   const [round, setRound] = useState(null)
   const [submissions, setSubmissions] = useState([]) // [{addr, username, word, index, preview}]
-  const [takenSet, setTakenSet] = useState(new Set()) // Set<number>
+  const [takenSet, setTakenSet] = useState(new Set())
 
   const [wordInput, setWordInput] = useState('')
   const [usernameInput, setUsernameInput] = useState('')
@@ -47,7 +48,7 @@ export default function RoundDetailPage() {
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const [priceUsd, setPriceUsd] = useState(3800) // ETH-USD fallback
+  const [priceUsd, setPriceUsd] = useState(3800)
   const [claimedNow, setClaimedNow] = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
   const [shareUrl, setShareUrl] = useState('')
@@ -142,10 +143,10 @@ export default function RoundDetailPage() {
   const getEip1193 = useCallback(async () => {
     if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
     if (miniProvRef.current) return miniProvRef.current
-    // very light UA check before lazy-importing SDK
     const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
     if (!inWarpcast) return null
     try {
+      // 🔧 try the mini app SDK; fail gracefully at runtime if unavailable
       const mod = await import('@farcaster/miniapp-sdk')
       const prov = await mod.sdk.wallet.getEthereumProvider()
       miniProvRef.current = prov
@@ -157,9 +158,9 @@ export default function RoundDetailPage() {
 
   // ---------- wallet + chain (observe only) ----------
   useEffect(() => {
+    if (!isReady) return // 🔧 wait for router
     let cancelled = false
     ;(async () => {
-      // try injected first
       if (window?.ethereum) {
         try {
           const accts = await window.ethereum.request({ method: 'eth_accounts' })
@@ -182,7 +183,6 @@ export default function RoundDetailPage() {
         }
       }
 
-      // otherwise try mini app provider (no listeners; Warpcast handles account)
       const mini = await getEip1193()
       if (mini && !cancelled) {
         try {
@@ -192,13 +192,11 @@ export default function RoundDetailPage() {
           if (!cancelled) setAddress(addr || null)
           const net = await p.getNetwork()
           if (!cancelled) setIsOnBase(net?.chainId === 8453n)
-        } catch {
-          // let UI drive connection via header button
-        }
+        } catch { /* noop */ }
       }
     })()
     return () => { cancelled = true }
-  }, [getEip1193])
+  }, [getEip1193, isReady])
 
   async function switchToBase() {
     const eip = await getEip1193()
@@ -232,6 +230,7 @@ export default function RoundDetailPage() {
 
   // ---------- price + share url + ticker ----------
   useEffect(() => {
+    if (!isReady) return // 🔧
     ;(async () => {
       try {
         const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
@@ -244,11 +243,11 @@ export default function RoundDetailPage() {
     setShareUrl(absoluteUrl(router.asPath || `/round/${id || ''}`))
     tickRef.current = setInterval(() => setStatus((s) => (s ? s : '')), 1000)
     return () => clearInterval(tickRef.current)
-  }, [router.asPath, id])
+  }, [router.asPath, id, isReady])
 
   // ---------- load pool1 from V3 ----------
   useEffect(() => {
-    if (!id) return
+    if (!isReady || !id) return // 🔧
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -336,7 +335,7 @@ export default function RoundDetailPage() {
     })()
 
     return () => { cancelled = true }
-  }, [id])
+  }, [id, isReady])
 
   // ---------- input handling ----------
   function sanitizeWord(raw) {
@@ -370,7 +369,6 @@ export default function RoundDetailPage() {
       setBusy(true)
       setStatus('Submitting your entry…')
 
-      // Request accounts via whichever provider we obtained
       await eip.request?.({ method: 'eth_requestAccounts' })
 
       const provider = new ethers.BrowserProvider(eip)
@@ -452,21 +450,21 @@ export default function RoundDetailPage() {
     !busy
   const canFinalize = ended && !round?.claimed && !claimedNow && (round?.entrants || 0) > 0 && !busy
 
-  // SEO bits (use roundId for OG so the /api/og endpoint knows what to draw)
+  // SEO bits
   const pageTitle = round?.name ? `${round.name} — MadFill` : id ? `MadFill Round #${id}` : 'MadFill Round'
   const pageDesc = 'Join a MadFill round on Base. Fill the blank, compete, and win the pot.'
   const pageUrl = shareUrl || absoluteUrl(`/round/${id || ''}`)
-  const ogImage = buildOgUrl({ screen: 'round', roundId: id || '' })
+  const ogImage = buildOgUrl({ screen: 'round', roundId: String(id || '') }) // 🔧 stringify
 
   return (
     <Layout>
       <Head>
         {/* Farcaster Mini App frame meta */}
-        <meta property="fc:frame" content="vNext" />
-        <meta property="fc:frame:image" content={ogImage} />
-        <meta property="fc:frame:button:1" content="Open Round" />
-        <meta property="fc:frame:button:1:action" content="link" />
-        <meta property="fc:frame:button:1:target" content={pageUrl} />
+        <meta name="fc:frame" content="vNext" />
+        <meta name="fc:frame:image" content={ogImage} />
+        <meta name="fc:frame:button:1" content="Open Round" />
+        <meta name="fc:frame:button:1:action" content="link" />
+        <meta name="fc:frame:button:1:target" content={pageUrl} />
       </Head>
       <SEO title={pageTitle} description={pageDesc} url={pageUrl} image={ogImage} />
 
@@ -724,11 +722,10 @@ export default function RoundDetailPage() {
             {/* Social & nav */}
             <div className="mt-6 rounded-xl bg-slate-900/70 border border-slate-700 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                {/* ensures an image embed */}
                 <ShareBar
-                 url={pageUrl}
-                 text={`Join my MadFill round: ${round?.name || ''}`}
-                 og={{ screen: 'round', roundId: id }}
+                  url={pageUrl}
+                  text={`Join my MadFill round: ${round?.name || ''}`}
+                  og={{ screen: 'round', roundId: String(id) }} {/* 🔧 ensures an image embed */}
                 />
                 <Link href="/active" className="underline text-indigo-300">
                   ← Back to Active Rounds
