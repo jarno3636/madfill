@@ -2,7 +2,7 @@
 'use client'
 
 import Layout from '@/components/Layout'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import clsx from 'clsx'
 import { ethers } from 'ethers'
@@ -11,7 +11,7 @@ import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import Head from 'next/head'
-import { useMiniAppReady } from '@/hooks/useMiniAppReady'   // ✅ Farcaster hook
+import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
 /** =========================
  *  Visual presets
@@ -37,7 +37,7 @@ function getNftAddress() {
 }
 
 export default function MyoPage() {
-  // ✅ Tell Farcaster Mini App host we’re ready (harmless on web)
+  // ✅ Farcaster Mini App ready (no-op on web)
   useMiniAppReady()
 
   // editor
@@ -67,6 +67,23 @@ export default function MyoPage() {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
 
+  // prefer Mini App provider (Warpcast) if present
+  const miniProvRef = useRef(null)
+  const getEip1193 = useCallback(async () => {
+    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
+    if (miniProvRef.current) return miniProvRef.current
+    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+    if (!inWarpcast) return null
+    try {
+      const mod = await import('@farcaster/miniapp-sdk')
+      const prov = await mod.sdk.wallet.getEthereumProvider()
+      miniProvRef.current = prov
+      return prov
+    } catch {
+      return null
+    }
+  }, [])
+
   /** ============== Draft load/save ============== */
   useEffect(() => {
     try {
@@ -85,54 +102,70 @@ export default function MyoPage() {
     } catch {}
   }, [title, description, parts, theme])
 
-  /** ============== Wallet + chain ============== */
+  /** ============== Wallet + chain (observe) ============== */
   useEffect(() => {
-    if (!window?.ethereum) return
     let cancelled = false
     ;(async () => {
-      try {
-        const accts = await window.ethereum.request({ method: 'eth_accounts' })
-        if (!cancelled) setAddress(accts?.[0] || null)
-      } catch {}
-      try {
-        const provider = new ethers.BrowserProvider(window.ethereum)
-        const net = await provider.getNetwork()
-        if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-      } catch {
-        if (!cancelled) setIsOnBase(true)
+      // injected first
+      if (window?.ethereum) {
+        try {
+          const accts = await window.ethereum.request({ method: 'eth_accounts' })
+          if (!cancelled) setAddress(accts?.[0] || null)
+        } catch {}
+        try {
+          const provider = new ethers.BrowserProvider(window.ethereum)
+          const net = await provider.getNetwork()
+          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
+        } catch {
+          if (!cancelled) setIsOnBase(true)
+        }
+        const onChain = () => location.reload()
+        const onAcct = (accs) => setAddress(accs?.[0] || null)
+        window.ethereum.on?.('chainChanged', onChain)
+        window.ethereum.on?.('accountsChanged', onAcct)
+        return () => {
+          window.ethereum.removeListener?.('chainChanged', onChain)
+          window.ethereum.removeListener?.('accountsChanged', onAcct)
+        }
       }
-      const onChain = () => location.reload()
-      const onAcct = (accs) => setAddress(accs?.[0] || null)
-      window.ethereum.on?.('chainChanged', onChain)
-      window.ethereum.on?.('accountsChanged', onAcct)
-      return () => {
-        window.ethereum.removeListener?.('chainChanged', onChain)
-        window.ethereum.removeListener?.('accountsChanged', onAcct)
+      // try Mini App provider
+      const mini = await getEip1193()
+      if (mini && !cancelled) {
+        try {
+          const p = new ethers.BrowserProvider(mini)
+          const signer = await p.getSigner().catch(() => null)
+          const addr = await signer?.getAddress().catch(() => null)
+          if (!cancelled) setAddress(addr || null)
+          const net = await p.getNetwork()
+          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
+        } catch {}
       }
     })()
-    return () => {}
-  }, [])
+    return () => { cancelled = true }
+  }, [getEip1193])
 
   async function connectWallet() {
-    if (!window?.ethereum) {
+    const eip = await getEip1193()
+    if (!eip) {
       setStatus('❌ No wallet detected.')
       return
     }
     try {
-      const accts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+      const accts = await eip.request?.({ method: 'eth_requestAccounts' })
       setAddress(accts?.[0] || null)
-      const provider = new ethers.BrowserProvider(window.ethereum)
+      const provider = new ethers.BrowserProvider(eip)
       const net = await provider.getNetwork()
       setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-    } catch (e) {
+    } catch {
       setStatus('❌ Wallet connection rejected')
     }
   }
 
   async function switchToBase() {
-    if (!window?.ethereum) return
+    const eip = await getEip1193()
+    if (!eip) return
     try {
-      await window.ethereum.request({
+      await eip.request({
         method: 'wallet_switchEthereumChain',
         params: [{ chainId: BASE_CHAIN_ID_HEX }],
       })
@@ -140,7 +173,7 @@ export default function MyoPage() {
     } catch (e) {
       if (e?.code === 4902) {
         try {
-          await window.ethereum.request({
+          await eip.request({
             method: 'wallet_addEthereumChain',
             params: [{
               chainId: BASE_CHAIN_ID_HEX,
@@ -242,26 +275,24 @@ export default function MyoPage() {
     return null
   }
 
-  /** ============== Mint (fixed for wallet prompt/Base switch) ============== */
+  /** ============== Mint (Mini App provider-aware) ============== */
   async function mintTemplate() {
     setStatus('')
 
-    // 0) Validate UI first
     const error = validateTemplate()
     if (error) {
       setStatus('❌ ' + error)
       return
     }
 
-    // 1) Ensure contract address is set
     const addr = getNftAddress()
     if (!addr) {
       setStatus('❌ NFT contract address not configured (set NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS).')
       return
     }
 
-    // 2) Ensure wallet exists
-    if (!window?.ethereum) {
+    const eip = await getEip1193()
+    if (!eip) {
       setStatus('❌ No wallet detected.')
       return
     }
@@ -270,27 +301,23 @@ export default function MyoPage() {
       setBusy(true)
       setStatus('🔌 Connecting wallet…')
 
-      // 3) Fresh provider/signer (don’t trust stale state)
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      await provider.send('eth_requestAccounts', [])
+      const provider = new ethers.BrowserProvider(eip)
+      await eip.request?.({ method: 'eth_requestAccounts' })
       let signer = await provider.getSigner()
 
-      // 4) Ensure Base chain before instantiating contract
       const net = await provider.getNetwork()
       if (net?.chainId !== BASE_CHAIN_ID) {
         setStatus('🌉 Switching to Base…')
         await switchToBase()
-        const p2 = new ethers.BrowserProvider(window.ethereum)
+        const p2 = new ethers.BrowserProvider(await getEip1193())
         signer = await p2.getSigner()
       }
 
-      // 5) Contract + price
       const ct = new ethers.Contract(addr, NFT_ABI, signer)
       setStatus('⏳ Fetching mint price…')
-      const priceWei = await ct.getMintPriceWei()      // bigint
-      const buffer   = (priceWei * 1005n) / 1000n      // +0.5% buffer
+      const priceWei = await ct.getMintPriceWei()
+      const buffer   = (priceWei * 1005n) / 1000n  // +0.5%
 
-      // 6) Send tx (wallet prompt appears here)
       setStatus('🧪 Sending mint…')
       const tx = await ct.mintTemplate(
         title.trim(),
@@ -303,7 +330,6 @@ export default function MyoPage() {
       setStatus('⛏️ Minting… waiting for confirmation')
       const r = await tx.wait()
 
-      // 7) Try to pull tokenId from logs
       let tokenIdStr = null
       try {
         for (const log of r.logs || []) {
@@ -348,6 +374,7 @@ export default function MyoPage() {
         <meta property="fc:frame:button:1" content="Make Your Own" />
         <meta property="fc:frame:button:1:action" content="link" />
         <meta property="fc:frame:button:1:target" content={pageUrl} />
+        <link rel="canonical" href={pageUrl} />
       </Head>
       <SEO
         title="Make Your Own — MadFill"
@@ -383,7 +410,6 @@ export default function MyoPage() {
               )}
             </div>
 
-            {/* 🔔 Env var warning */}
             {!getNftAddress() && (
               <div className="mt-2 text-xs rounded bg-rose-500/10 border border-rose-500/40 text-rose-200 px-3 py-2">
                 ⚠️ Missing <code>NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS</code>. Set it in your Vercel env vars.
@@ -482,7 +508,7 @@ export default function MyoPage() {
               <input
                 value={part}
                 onChange={(e) => handlePartChange(e.target.value, i)}
-                className="w-full bg-slate-800 text-white border border-slate-600 rounded px-3 py-2"
+                className="w/full bg-slate-800 text-white border border-slate-600 rounded px-3 py-2"
                 placeholder={i % 2 ? '____' : 'Write some text…'}
               />
               <Button
@@ -519,7 +545,6 @@ export default function MyoPage() {
             {busy ? '⛏️ Minting…' : '🪙 Mint Template'}
           </Button>
 
-          {/* live numbers */}
           <div className="flex-1">
             {mintEth != null && (
               <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-800 px-3 py-1 text-xs text-slate-200">
@@ -536,8 +561,13 @@ export default function MyoPage() {
             )}
           </div>
 
-          {/* Share */}
-          <ShareBar url={pageUrl} text={`🧠 I made a custom MadFill!\n\n${parts.join(' ')}`} embedUrl={pageUrl} small />
+          <ShareBar
+            url={pageUrl}
+            text={`🧠 I made a custom MadFill!\n\n${parts.join(' ')}`}
+            embedUrl={pageUrl}
+            small
+            og={{ screen: 'myo', title }}
+          />
         </div>
 
         {status && (
