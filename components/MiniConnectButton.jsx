@@ -1,63 +1,123 @@
-import { useMiniWallet } from '../hooks/useMiniWallet'
+'use client'
+import { useState, useEffect } from 'react'
+import { Button } from './ui/button'
 
-export default function MiniConnectButton({ className = '' }) {
-  const { address, isConnected, isLoading, connect, disconnect, error, isInFarcaster } = useMiniWallet()
+export default function MiniConnectButton() {
+  const [sdk, setSdk] = useState(null)
+  const [user, setUser] = useState(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState(null)
 
-  const handleClick = async () => {
-    if (isConnected) {
-      await disconnect()
-    } else {
-      await connect()
+  useEffect(() => {
+    // Only load SDK in Farcaster environment
+    if (typeof window === 'undefined') return
+    
+    const isFarcaster = window.location !== window.parent.location || 
+                       window.location.hostname.includes('warpcast') ||
+                       window.navigator.userAgent.includes('Farcaster')
+    
+    if (!isFarcaster) return
+
+    import('@farcaster/miniapp-sdk').then(({ default: MiniAppSDK }) => {
+      try {
+        const miniAppSdk = new MiniAppSDK()
+        setSdk(miniAppSdk)
+        
+        // Check if already authenticated
+        if (miniAppSdk.isAuthenticated) {
+          setUser(miniAppSdk.user)
+        }
+      } catch (err) {
+        console.error('Failed to initialize Farcaster SDK:', err)
+        setError('Failed to initialize Farcaster connection')
+      }
+    }).catch(err => {
+      console.error('Failed to load Farcaster SDK:', err)
+      setError('Farcaster SDK not available')
+    })
+  }, [])
+
+  const handleConnect = async () => {
+    if (!sdk) return
+    
+    setIsLoading(true)
+    setError(null)
+    
+    try {
+      await sdk.authenticate()
+      setUser(sdk.user)
+    } catch (error) {
+      console.error('Farcaster authentication failed:', error)
+      setError('Connection failed. Please try again.')
+    } finally {
+      setIsLoading(false)
     }
   }
 
-  const formatAddress = (addr) => {
-    if (!addr) return ''
-    return `${addr.slice(0, 6)}...${addr.slice(-4)}`
+  const handleDisconnect = () => {
+    if (sdk) {
+      sdk.logout()
+      setUser(null)
+    }
   }
 
-  // Show connection type for development
-  const connectionType = isInFarcaster ? 'Farcaster' : 'Browser'
+  // Don't render if SDK not available
+  if (!sdk && !error) return null
+
+  if (error) {
+    return (
+      <div className="text-xs text-red-400 max-w-32">
+        {error}
+      </div>
+    )
+  }
+
+  if (user) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 bg-purple-600/80 rounded-lg border border-purple-500">
+        <img 
+          src={user.pfpUrl || '/default.png'} 
+          alt={user.displayName || user.username}
+          className="w-5 h-5 rounded-full"
+          onError={(e) => {
+            e.target.src = '/default.png'
+          }}
+        />
+        <div className="flex flex-col min-w-0">
+          <span className="text-xs text-white font-medium truncate">
+            {user.displayName || user.username}
+          </span>
+          {user.displayName && user.username && (
+            <span className="text-xs text-purple-200 truncate">
+              @{user.username}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={handleDisconnect}
+          className="text-purple-200 hover:text-white text-xs ml-1"
+          title="Disconnect"
+        >
+          ×
+        </button>
+      </div>
+    )
+  }
 
   return (
-    <div className={`flex flex-col items-center space-y-2 ${className}`}>
-      <button
-        onClick={handleClick}
-        disabled={isLoading}
-        className={`
-          px-6 py-3 rounded-lg font-semibold transition-all duration-200
-          ${isConnected
-            ? 'bg-red-500 hover:bg-red-600 text-white'
-            : 'bg-blue-500 hover:bg-blue-600 text-white'
-          }
-          ${isLoading ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105'}
-          disabled:opacity-50 disabled:cursor-not-allowed
-        `}
-      >
-        {isLoading ? (
-          <span className="flex items-center space-x-2">
-            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-            <span>Connecting...</span>
-          </span>
-        ) : isConnected ? (
-          `Disconnect ${formatAddress(address)}`
-        ) : (
-          `Connect ${connectionType} Wallet`
-        )}
-      </button>
-
-      {error && (
-        <div className="text-red-500 text-sm text-center max-w-xs">
-          Error: {error.message}
+    <Button
+      onClick={handleConnect}
+      disabled={isLoading}
+      className="bg-purple-600 hover:bg-purple-700 text-white text-sm px-3 py-2 h-auto"
+    >
+      {isLoading ? (
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin"></div>
+          <span>Connecting...</span>
         </div>
+      ) : (
+        'Connect Farcaster'
       )}
-
-      {isConnected && address && (
-        <div className="text-sm text-gray-300 text-center">
-          <div>Connected via {connectionType}</div>
-          <div className="font-mono">{formatAddress(address)}</div>
-        </div>
-      )}
-    </div>
+    </Button>
   )
 }

@@ -1,74 +1,58 @@
-import React from 'react'
+import React from 'react';
+import { ErrorBoundary as ReactErrorBoundary } from 'react-error-boundary';
 
-class ErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props)
-    this.state = { hasError: false, error: null, errorInfo: null }
-  }
-
-  static getDerivedStateFromError(error) {
-    return { hasError: true }
-  }
-
-  componentDidCatch(error, errorInfo) {
-    this.setState({
-      error: error,
-      errorInfo: errorInfo
-    })
-    
-    // Log error to console for debugging
-    console.error('ErrorBoundary caught an error:', error, errorInfo)
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900">
-          <div className="bg-white/10 backdrop-blur-sm rounded-xl p-8 max-w-2xl text-center">
-            <div className="text-red-400 text-6xl mb-6">💥</div>
-            <h2 className="text-white text-2xl font-bold mb-4">Something went wrong</h2>
-            <p className="text-purple-200 mb-6">
-              We encountered an unexpected error. Please try refreshing the page.
-            </p>
-            
-            {process.env.NODE_ENV === 'development' && (
-              <details className="mt-4 text-left">
-                <summary className="cursor-pointer text-yellow-400 mb-2">
-                  Show error details (development)
-                </summary>
-                <div className="bg-black/50 p-4 rounded text-red-300 text-sm font-mono overflow-auto max-h-48">
-                  <div className="mb-2">
-                    <strong>Error:</strong> {this.state.error && this.state.error.toString()}
-                  </div>
-                  <div>
-                    <strong>Stack Trace:</strong>
-                    <pre>{this.state.errorInfo.componentStack}</pre>
-                  </div>
-                </div>
-              </details>
-            )}
-            
-            <div className="flex gap-4 justify-center mt-6">
-              <button
-                onClick={() => window.location.reload()}
-                className="bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 px-6 rounded-lg transition-colors"
-              >
-                Refresh Page
-              </button>
-              <button
-                onClick={() => this.setState({ hasError: false, error: null, errorInfo: null })}
-                className="bg-purple-500 hover:bg-purple-600 text-white font-medium py-3 px-6 rounded-lg transition-colors"
-              >
-                Try Again
-              </button>
-            </div>
-          </div>
+function ErrorFallback({ error, resetErrorBoundary }) {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-900 to-purple-950 flex items-center justify-center p-4">
+      <div className="bg-slate-900/80 rounded-2xl p-8 max-w-md w-full text-center border border-slate-700">
+        <div className="text-6xl mb-4">🚨</div>
+        <h2 className="text-2xl font-bold text-white mb-4">Something went wrong</h2>
+        <p className="text-slate-300 mb-6">
+          We encountered an unexpected error. Please try refreshing the page.
+        </p>
+        <div className="space-y-3">
+          <button
+            onClick={resetErrorBoundary}
+            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+          >
+            Try again
+          </button>
+          <button
+            onClick={() => window.location.href = '/'}
+            className="w-full bg-slate-700 hover:bg-slate-600 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+          >
+            Go to homepage
+          </button>
         </div>
-      )
-    }
-
-    return this.props.children
-  }
+        {process.env.NODE_ENV === 'development' && (
+          <details className="mt-6 text-left">
+            <summary className="text-slate-400 cursor-pointer">Error details</summary>
+            <pre className="mt-2 text-xs text-red-400 bg-slate-800 p-3 rounded overflow-auto">
+              {error.message}
+            </pre>
+          </details>
+        )}
+      </div>
+    </div>
+  );
 }
 
-export default ErrorBoundary
+export default function ErrorBoundary({ children }) {
+  return (
+    <ReactErrorBoundary
+      FallbackComponent={ErrorFallback}
+      onError={(error, errorInfo) => {
+        console.error('Error caught by boundary:', error, errorInfo);
+        // Send to error reporting service
+        if (typeof window !== 'undefined' && window.gtag) {
+          window.gtag('event', 'exception', {
+            description: error.toString(),
+            fatal: false,
+          });
+        }
+      }}
+    >
+      {children}
+    </ReactErrorBoundary>
+  );
+}
