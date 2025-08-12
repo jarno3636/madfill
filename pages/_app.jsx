@@ -1,59 +1,66 @@
-import '../styles/globals.css'
-import { useMiniAppReady } from '../hooks/useMiniAppReady'
 import { useEffect } from 'react'
+import Script from 'next/script'
 import ErrorBoundary from '../components/ErrorBoundary'
-import { ToastProvider } from '../components/Toast'
-import LoadingSpinner from '../components/LoadingSpinner'
+import { performanceMonitor } from '../lib/performance'
+import { GA_TRACKING_ID, pageview } from '../lib/analytics'
+import { useRouter } from 'next/router'
+import '../styles/globals.css'
 
-function MyApp({ Component, pageProps }) {
-  const { isReady, error } = useMiniAppReady()
+export default function App({ Component, pageProps }) {
+  const router = useRouter()
 
   useEffect(() => {
-    if (isReady) {
-      console.log('Farcaster Mini App is ready')
+    // Track page views
+    const handleRouteChange = (url) => {
+      pageview(url)
     }
-    if (error) {
-      console.error('Mini App initialization error:', error)
+
+    router.events.on('routeChangeComplete', handleRouteChange)
+    return () => {
+      router.events.off('routeChangeComplete', handleRouteChange)
     }
-  }, [isReady, error])
+  }, [router.events])
 
-  // Show loading state while Mini App is initializing
-  if (!isReady && !error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900">
-        <div className="text-center">
-          <LoadingSpinner size="xl" text="Initializing MadFill..." />
-        </div>
-      </div>
-    )
-  }
-
-  // Show error state if initialization failed
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900">
-        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-8 max-w-md text-center">
-          <div className="text-red-400 text-4xl mb-4">⚠️</div>
-          <h2 className="text-white text-xl font-bold mb-4">Failed to initialize Mini App</h2>
-          <p className="text-purple-200 mb-6">{error.message}</p>
-          <button
-            onClick={() => window.location.reload()}
-            className="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 px-4 rounded-lg transition-colors"
-          >
-            Retry
-          </button>
-        </div>
-      </div>
-    )
-  }
+  useEffect(() => {
+    // Clean up performance monitor on unmount
+    return () => {
+      performanceMonitor.cleanup()
+    }
+  }, [])
 
   return (
     <ErrorBoundary>
-      <ToastProvider>
-        <Component {...pageProps} />
-      </ToastProvider>
+      {/* Google Analytics */}
+      {GA_TRACKING_ID && (
+        <>
+          <Script
+            strategy="afterInteractive"
+            src={`https://www.googletagmanager.com/gtag/js?id=${GA_TRACKING_ID}`}
+          />
+          <Script
+            id="gtag-init"
+            strategy="afterInteractive"
+            dangerouslySetInnerHTML={{
+              __html: `
+                window.dataLayer = window.dataLayer || [];
+                function gtag(){dataLayer.push(arguments);}
+                gtag('js', new Date());
+                gtag('config', '${GA_TRACKING_ID}', {
+                  page_path: window.location.pathname,
+                });
+              `,
+            }}
+          />
+        </>
+      )}
+
+      {/* Vercel Analytics */}
+      <Script
+        strategy="afterInteractive"
+        src="/_vercel/insights/script.js"
+      />
+
+      <Component {...pageProps} />
     </ErrorBoundary>
   )
 }
-
-export default MyApp
