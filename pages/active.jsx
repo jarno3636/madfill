@@ -6,7 +6,7 @@ import Head from 'next/head'
 import Link from 'next/link'
 import { motion } from 'framer-motion'
 import { ethers } from 'ethers'
-
+import Layout from '@/components/Layout'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
