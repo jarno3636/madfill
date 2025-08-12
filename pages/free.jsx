@@ -6,7 +6,6 @@ import Head from 'next/head'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useWindowSize } from 'react-use'
-import Confetti from 'react-confetti'
 import { categories } from '@/data/templates'
 import StyledCard from '@/components/StyledCard'
 import { fetchFarcasterProfile } from '@/lib/neynar'
@@ -15,6 +14,9 @@ import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import Layout from '@/components/Layout'
+import dynamic from 'next/dynamic'
+
+const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 function sanitizeWord(raw) {
   return (raw || '')
