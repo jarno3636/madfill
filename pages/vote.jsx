@@ -5,9 +5,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import { ethers } from 'ethers'
-import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
-
 import Layout from '@/components/Layout' // ✅ wrap each page (since _app doesn't)
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
@@ -16,6 +14,9 @@ import { Button } from '@/components/ui/button'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
+import dynamic from 'next/dynamic'
+
+const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 // ---- Config ----
 const CONTRACT_ADDRESS =
