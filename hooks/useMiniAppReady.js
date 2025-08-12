@@ -2,7 +2,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { sdk } from '@farcaster/miniapp-sdk'
 
 export function useMiniAppReady() {
   const [isReady, setIsReady] = useState(false)
@@ -10,22 +9,32 @@ export function useMiniAppReady() {
   const [isInFarcaster, setIsInFarcaster] = useState(false)
 
   useEffect(() => {
-    const inWarpcast =
-      typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent);
-    setIsInFarcaster(inWarpcast)
+    let cancelled = false
 
-    (async () => {
+    const run = async () => {
+      const inWarpcast =
+        typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+      if (!cancelled) setIsInFarcaster(inWarpcast)
+
       try {
         if (inWarpcast) {
-          await sdk.ready()
+          // Lazy-load the SDK only in the browser + only if inside Warpcast
+          const mod = await import('@farcaster/miniapp-sdk')
+          const readyFn = mod?.sdk?.ready ?? mod?.sdk?.app?.ready ?? (async () => {})
+          await readyFn()
         }
-        setIsReady(true)
+        if (!cancelled) setIsReady(true)
       } catch (err) {
         console.error('Mini App ready failed:', err)
-        setError(err)
-        setIsReady(true) // allow web fallback
+        if (!cancelled) {
+          setError(err)
+          setIsReady(true) // fall back to standard web
+        }
       }
-    })()
+    }
+
+    run()
+    return () => { cancelled = true }
   }, [])
 
   return { isReady, error, isInFarcaster }
