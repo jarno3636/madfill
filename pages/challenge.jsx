@@ -6,19 +6,19 @@ import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { ethers } from 'ethers'
-import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
-
 import Layout from '@/components/Layout'                 // ✅ wrap each page
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
+import dynamic from 'next/dynamic'
+
+const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 // Env
 const CONTRACT_ADDRESS =
