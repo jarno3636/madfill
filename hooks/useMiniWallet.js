@@ -1,121 +1,117 @@
-import { useState, useEffect, useCallback } from 'react'
-import { miniApp } from '@farcaster/miniapp-sdk'
+// hooks/useMiniWallet.js
+'use client'
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ethers } from 'ethers'
+
+const BASE_CHAIN_ID = 8453n
+const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+const BASE_CHAIN_ID_HEX = '0x2105'
 
 export function useMiniWallet() {
   const [address, setAddress] = useState(null)
   const [isConnected, setIsConnected] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState(null)
-  const [isInFarcaster, setIsInFarcaster] = useState(false)
+  const miniProvRef = useRef(null)
 
-  useEffect(() => {
-    // Check if we're in Farcaster environment
-    const inFarcaster = typeof window !== 'undefined' && 
-      (window.parent !== window || window.location !== window.parent.location)
-    
-    setIsInFarcaster(inFarcaster)
-    checkConnection()
+  const getMiniProvider = useCallback(async () => {
+    if (miniProvRef.current) return miniProvRef.current
+    if (typeof window === 'undefined') return null
+    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+    if (!inWarpcast) return null
+    try {
+      const mod = await import('@farcaster/miniapp-sdk')
+      const prov = await mod.sdk.wallet.getEthereumProvider()
+      miniProvRef.current = prov || null
+      return miniProvRef.current
+    } catch {
+      return null
+    }
   }, [])
 
-  const checkConnection = useCallback(async () => {
-    try {
-      if (isInFarcaster) {
-        // We're in Farcaster environment - use Mini App SDK
-        const connected = await miniApp.wallet.isConnected()
-        if (connected) {
-          const walletAddress = await miniApp.wallet.getAddress()
-          setAddress(walletAddress)
+  const getEip1193 = useCallback(async () => {
+    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
+    return await getMiniProvider()
+  }, [getMiniProvider])
+
+  // passive observe
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const eip = await getEip1193()
+      if (!eip) return
+      try {
+        const provider = new ethers.BrowserProvider(eip)
+        const signer = await provider.getSigner().catch(() => null)
+        const addr = await signer?.getAddress().catch(() => null)
+        if (!cancelled && addr) {
+          setAddress(addr)
           setIsConnected(true)
         }
-      } else {
-        // Development mode - check for browser wallet or mock connection
-        if (typeof window !== 'undefined' && window.ethereum) {
-          const accounts = await window.ethereum.request({ method: 'eth_accounts' })
-          if (accounts?.[0]) {
-            setAddress(accounts[0])
-            setIsConnected(true)
-          }
-        } else {
-          // Use mock wallet for development
-          const mockAddress = localStorage.getItem('mock_wallet_address')
-          if (mockAddress) {
-            setAddress(mockAddress)
-            setIsConnected(true)
-          }
+      } catch {}
+      // react to wallet events if injected
+      if (eip?.on) {
+        const onAcct = (accs) => {
+          const a = accs?.[0] || null
+          setAddress(a)
+          setIsConnected(!!a)
+        }
+        const onChain = () => {} // no-op; page code can reload if needed
+        eip.on('accountsChanged', onAcct)
+        eip.on('chainChanged', onChain)
+        return () => {
+          eip.removeListener?.('accountsChanged', onAcct)
+          eip.removeListener?.('chainChanged', onChain)
         }
       }
-    } catch (err) {
-      console.error('Error checking wallet connection:', err)
-      setError(err)
-    }
-  }, [isInFarcaster])
+    })()
+    return () => { cancelled = true }
+  }, [getEip1193])
 
   const connect = useCallback(async () => {
     setIsLoading(true)
-    setError(null)
-
     try {
-      if (isInFarcaster) {
-        // We're in Farcaster environment - use Mini App SDK
-        const walletAddress = await miniApp.wallet.connect()
-        setAddress(walletAddress)
-        setIsConnected(true)
-        console.log('Farcaster wallet connected:', walletAddress)
-      } else {
-        // Development mode - try browser wallet first, then fallback to mock
-        if (typeof window !== 'undefined' && window.ethereum) {
-          const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
-          if (accounts?.[0]) {
-            setAddress(accounts[0])
-            setIsConnected(true)
-            console.log('Browser wallet connected:', accounts[0])
+      const eip = await getEip1193()
+      if (!eip) throw new Error('No wallet found')
+      await eip.request?.({ method: 'eth_requestAccounts' })
+      const provider = new ethers.BrowserProvider(eip)
+      const net = await provider.getNetwork()
+      if (net?.chainId !== BASE_CHAIN_ID) {
+        // try switch/add Base
+        try {
+          await eip.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] })
+        } catch (e) {
+          if (e?.code === 4902) {
+            await eip.request({
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: BASE_CHAIN_ID_HEX,
+                chainName: 'Base',
+                rpcUrls: [BASE_RPC],
+                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+                blockExplorerUrls: ['https://basescan.org'],
+              }],
+            })
+          } else {
+            throw e
           }
-        } else {
-          // Mock wallet for development
-          const mockAddress = '0x1234567890123456789012345678901234567890'
-          localStorage.setItem('mock_wallet_address', mockAddress)
-          setAddress(mockAddress)
-          setIsConnected(true)
-          console.log('Mock wallet connected:', mockAddress)
         }
       }
-    } catch (err) {
-      console.error('Failed to connect wallet:', err)
-      setError(err)
+      const signer = await provider.getSigner()
+      const addr = await signer.getAddress()
+      setAddress(addr)
+      setIsConnected(true)
+      return addr
     } finally {
       setIsLoading(false)
     }
-  }, [isInFarcaster])
+  }, [getEip1193])
 
   const disconnect = useCallback(async () => {
-    try {
-      if (isInFarcaster) {
-        // We're in Farcaster environment - use Mini App SDK
-        await miniApp.wallet.disconnect()
-        console.log('Farcaster wallet disconnected')
-      } else {
-        // Development mode cleanup
-        localStorage.removeItem('mock_wallet_address')
-        console.log('Development wallet disconnected')
-      }
+    // nothing to do for injected/mini wallets—just clear state
+    setAddress(null)
+    setIsConnected(false)
+  }, [])
 
-      setAddress(null)
-      setIsConnected(false)
-      setError(null)
-    } catch (err) {
-      console.error('Failed to disconnect wallet:', err)
-      setError(err)
-    }
-  }, [isInFarcaster])
-
-  return {
-    address,
-    isConnected,
-    isLoading,
-    error,
-    isInFarcaster,
-    connect,
-    disconnect,
-    checkConnection
-  }
+  return { address, isConnected, isLoading, connect, disconnect }
 }
