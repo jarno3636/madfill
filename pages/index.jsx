@@ -7,23 +7,24 @@ import Link from 'next/link'
 import { ethers } from 'ethers'
 import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
-import abi from '@/abi/FillInStoryV3_ABI.json'
-import { Button } from '@/components/ui/button'
-import { Card, CardHeader, CardContent } from '@/components/ui/card'
-import { categories, durations } from '@/data/templates'
-import Layout from '@/components/Layout'
-import Footer from '@/components/Footer'
-import ShareBar from '@/components/ShareBar'
-import { fetchFarcasterProfile } from '@/lib/neynar'
-import SEO from '@/components/SEO'
-import { absoluteUrl, buildOgUrl } from '@/lib/seo'
-import { useMiniAppReady } from '@/hooks/useMiniAppReady'
+import abi from '../abi/FillInStoryV3_ABI.json'
+import { Button } from '../components/ui/button'
+import { Card, CardHeader, CardContent } from '../components/ui/card'
+import { categories, durations } from '../data/templates'
+import Layout from '../components/Layout'
+import Footer from '../components/Footer'
+import ShareBar from '../components/ShareBar'
+import { fetchFarcasterProfile } from '../lib/neynar'
+import SEO from '../components/SEO'
+import { absoluteUrl, buildOgUrl } from '../lib/seo'
+import { useMiniAppReady } from '../hooks/useMiniAppReady'
 
-const CONTRACT_ADDRESS =
-  process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
+const CONTRACT_ADDRESS = 
+  process.env.NEXT_PUBLIC_FILLIN_ADDRESS || 
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // FillInStoryV3 on Base
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+
 const FEATURED_TAKE = 9
 
 const extractError = (e) =>
@@ -40,9 +41,7 @@ export default function Home() {
   const [status, setStatus] = useState('')
   const [logs, setLogs] = useState([])
   const loggerRef = useRef(null)
-
   const [address, setAddress] = useState(null)
-
   const [roundId, setRoundId] = useState('')
   const [roundName, setRoundName] = useState('')
   const [catIdx, setCatIdx] = useState(0)
@@ -52,14 +51,13 @@ export default function Home() {
   const [duration, setDuration] = useState(durations[0].value) // days
   const [feeEth, setFeeEth] = useState(0.01) // ETH on Base
   const [busy, setBusy] = useState(false)
-
   const [profile, setProfile] = useState(null)
   const [showConfetti, setShowConfetti] = useState(false)
-
   const [featured, setFeatured] = useState([])
   const [loadingFeatured, setLoadingFeatured] = useState(true)
 
   const { width, height } = useWindowSize()
+
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx]
 
@@ -73,14 +71,16 @@ export default function Home() {
   const needsSpaceBefore = (str) => {
     if (!str) return false
     const ch = str[0]
-    return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
+    return !(/\s/.test(ch) || /[.,!?;:)"'\]\\]/.test(ch))
   }
 
   function buildPreviewSingle(parts, w, idx) {
     const n = parts?.length || 0
     if (n === 0) return ''
+
     const blanks = Math.max(0, n - 1)
     const iSel = Math.max(0, Math.min(Math.max(0, blanks - 1), Number(idx) || 0))
+
     const out = []
     for (let i = 0; i < n; i++) {
       out.push(parts[i] || '')
@@ -104,29 +104,34 @@ export default function Home() {
     return (raw || '')
       .trim()
       .split(' ')[0]
-      .replace(/[^a-zA-Z0-9\-_]/g, '')
+      .replace(/[^a-zA-Z0-9\-\_]/g, '')
       .slice(0, 16)
   }
 
   useEffect(() => {
     if (!window?.ethereum) return
+
     let cancelled = false
     ;(async () => {
       try {
         const accts = await window.ethereum.request?.({ method: 'eth_accounts' })
         if (!cancelled) setAddress(accts?.[0] || null)
       } catch {}
+
       const onAcct = (accs) => setAddress(accs?.[0] || null)
       window.ethereum.on?.('accountsChanged', onAcct)
+
       return () => {
         window.ethereum.removeListener?.('accountsChanged', onAcct)
       }
     })()
+
     return () => { cancelled = true }
   }, [])
 
   useEffect(() => {
     if (!address) return
+
     ;(async () => {
       try {
         const p = await fetchFarcasterProfile(address)
@@ -138,17 +143,22 @@ export default function Home() {
   useEffect(() => {
     let cancelled = false
     setLoadingFeatured(true)
+
     ;(async () => {
       try {
         const provider = new ethers.JsonRpcProvider(BASE_RPC)
         const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
+
         const total = Number(await ct.pool1Count())
+
         if (total === 0) {
           if (!cancelled) setFeatured([])
           return
         }
+
         const start = Math.max(1, total - FEATURED_TAKE + 1)
         const rows = []
+
         for (let id = total; id >= start; id--) {
           const info = await ct.getPool1Info(BigInt(id))
           const name = info[0]
@@ -178,6 +188,7 @@ export default function Home() {
             deadline
           })
         }
+
         if (!cancelled) setFeatured(rows)
       } catch (e) {
         console.error('Featured fetch failed', e)
@@ -186,6 +197,7 @@ export default function Home() {
         if (!cancelled) setLoadingFeatured(false)
       }
     })()
+
     return () => { cancelled = true }
   }, [])
 
@@ -196,16 +208,19 @@ export default function Home() {
 
   async function handleCreateRound() {
     const cleanWord = sanitizeWord(word)
+
     if (!cleanWord) {
       setStatus('Enter one word (letters/numbers/_/-), up to 16 chars.')
       log('Invalid word')
       return
     }
+
     if ((tpl?.parts?.length || 0) !== (tpl?.blanks || 0) + 1) {
       setStatus('Template error: parts must equal blanks + 1.')
       log('Template mismatch')
       return
     }
+
     if (!window?.ethereum) {
       setStatus('No wallet detected.')
       return
@@ -215,8 +230,10 @@ export default function Home() {
       setBusy(true)
       setStatus('')
       log('Connecting wallet...')
+
       const provider = new ethers.BrowserProvider(window.ethereum)
       await provider.send('eth_requestAccounts', [])
+      
       const net = await provider.getNetwork()
       if (net?.chainId !== 8453n) {
         throw new Error('Please switch to Base network')
@@ -227,7 +244,6 @@ export default function Home() {
 
       const feeBase = ethers.parseUnits(String(feeEth), 18)
       const value = feeBase
-
       const parts = tpl.parts.map((p) => p.trim())
       const name = (roundName || 'Untitled').slice(0, 48)
       const theme = selectedCategory.name
@@ -260,6 +276,7 @@ export default function Home() {
         idx,
         { value }
       )
+
       const rc = await tx.wait()
 
       let newId = ''
@@ -267,6 +284,7 @@ export default function Home() {
         const evt = rc.logs?.find((l) => l.fragment?.name === 'Pool1Created')
         if (evt?.args?.id) newId = evt.args.id.toString()
       } catch {}
+
       if (!newId) {
         const rp = new ethers.JsonRpcProvider(BASE_RPC)
         const reader = new ethers.Contract(CONTRACT_ADDRESS, abi, rp)
@@ -277,6 +295,7 @@ export default function Home() {
       setShowConfetti(true)
       log(`Round #${newId} created.`)
       setStatus('Success!')
+
     } catch (err) {
       console.error(err)
       const msg = extractError(err)
@@ -353,6 +372,7 @@ export default function Home() {
               )}
             </div>
           </CardHeader>
+
           <CardContent className="p-5 space-y-5">
             {status && (
               <div className="rounded-lg bg-slate-800/70 border border-slate-700 p-2 text-sm">
@@ -367,259 +387,160 @@ export default function Home() {
                   value={roundName}
                   onChange={(e) => setRoundName(e.target.value.slice(0, 48))}
                   placeholder="My spicy round"
-                  className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
-                  disabled={busy}
+                  className="mt-1 w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 text-white focus:border-yellow-500 focus:outline-none"
                 />
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block text-sm text-slate-300">
-                  Category
-                  <select
-                    className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
-                    value={catIdx}
-                    onChange={(e) => {
-                      setCatIdx(Number(e.target.value))
-                      setTplIdx(0)
-                      setBlankIndex(0)
-                    }}
-                    disabled={busy}
-                  >
-                    {categories.map((c, i) => (
-                      <option key={i} value={i}>{c.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block text-sm text-slate-300">
-                  Template
-                  <select
-                    className="mt-1 w/full rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
-                    value={tplIdx}
-                    onChange={(e) => {
-                      setTplIdx(Number(e.target.value))
-                      setBlankIndex(0)
-                    }}
-                    disabled={busy}
-                  >
-                    {selectedCategory.templates.map((t, i) => (
-                      <option key={i} value={i}>{t.name}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            </div>
-
-            <div className="rounded-xl bg-slate-800/60 border border-slate-700 p-4">
-              <div className="text-slate-300 text-sm mb-2">Card preview</div>
-              <div className="text-base leading-relaxed">
-                {tpl.parts.map((p, i) => (
-                  <span key={i}>
-                    {p}
-                    {i < tpl.parts.length - 1 && (
-                      <span
-                        role="button"
-                        className={blankPill(i === Number(blankIndex))}
-                        onClick={() => setBlankIndex(i)}
-                        title={`Insert into blank #${i + 1}`}
-                      >
-                        {i === Number(blankIndex) ? (sanitizeWord(word) || '____') : '____'}
-                      </span>
-                    )}
-                  </span>
-                ))}
-              </div>
-              <div className="text-xs text-slate-400 mt-2">
-                Click a blank to choose where your word goes.
-              </div>
-              <div className="mt-3 text-xs italic opacity-80">{preview}</div>
-            </div>
-
-            <label className="block text-sm text-slate-300">
-              Your word (one word, letters/numbers/_/-, max 16 chars)
-              <input
-                value={word}
-                onChange={(e) => setWord(e.target.value)}
-                onBlur={() => setWord((w) => sanitizeWord(w))}
-                placeholder="neon"
-                className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
-                disabled={busy}
-              />
-            </label>
-
-            <div className="grid md:grid-cols-2 gap-4">
-              <label className="block text-sm text-slate-300">
-                Duration
-                <select
-                  className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
-                  value={duration}
-                  onChange={(e) => setDuration(Number(e.target.value))}
-                  disabled={busy}
-                >
-                  {durations.map((d) => (
-                    <option key={d.value} value={d.value}>{d.label}</option>
-                  ))}
-                </select>
-                <div className="text-[11px] text-slate-400 mt-1">
-                  How long entries are open.
-                </div>
               </label>
 
               <label className="block text-sm text-slate-300">
                 Entry fee (ETH on Base)
                 <input
-                  type="range"
-                  min="0.001"
-                  max="0.1"
+                  type="number"
                   step="0.001"
+                  min="0.001"
                   value={feeEth}
                   onChange={(e) => setFeeEth(Number(e.target.value))}
-                  className="mt-1 w-full"
-                  disabled={busy}
+                  className="mt-1 w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 text-white focus:border-yellow-500 focus:outline-none"
                 />
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="px-2 py-1 rounded bg-slate-800/80 border border-slate-700 text-xs">
-                    {feeEth.toFixed(3)} ETH
-                  </span>
-                  <span className="text-[11px] text-slate-400">
-                    Each entrant pays this amount to join your round.
-                  </span>
-                </div>
               </label>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3">
-              <Button
-                onClick={handleCreateRound}
-                disabled={busy || !word}
-                className="bg-indigo-600 hover:bg-indigo-500"
-              >
-                Create round and submit
-              </Button>
-              {roundId && (
-                <Link href={`/round/${roundId}`} className="underline text-indigo-300 text-sm">
-                  View your round
-                </Link>
-              )}
+            <div className="space-y-3">
+              <label className="text-sm text-slate-300">Category</label>
+              <div className="flex flex-wrap gap-2">
+                {categories.map((cat, i) => (
+                  <button
+                    key={cat.name}
+                    onClick={() => {
+                      setCatIdx(i)
+                      setTplIdx(0)
+                    }}
+                    className={`px-3 py-2 rounded text-sm font-medium ${
+                      i === catIdx
+                        ? 'bg-yellow-500 text-black'
+                        : 'bg-slate-700 text-slate-200 hover:bg-slate-600'
+                    }`}
+                  >
+                    {cat.name}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            <div className="pt-2">
-              <ShareBar
-                url={roundUrl}
-                text={shareText}
-                embedUrl={roundUrl}
-                og={{ screen: 'home', title: roundId ? `Round #${roundId}` : 'MadFill' }}
+            <div className="space-y-3">
+              <label className="text-sm text-slate-300">Template</label>
+              <div className="space-y-2">
+                {selectedCategory.templates.map((template, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setTplIdx(i)}
+                    className={`w-full p-3 text-left rounded border ${
+                      i === tplIdx
+                        ? 'border-yellow-500 bg-yellow-500/10'
+                        : 'border-slate-600 bg-slate-800/50 hover:bg-slate-800'
+                    }`}
+                  >
+                    <div className="text-sm">
+                      {buildPreviewSingle(template.parts, '', 0)}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-sm text-slate-300">Your word</label>
+              <input
+                value={word}
+                onChange={(e) => setWord(e.target.value)}
+                placeholder="Enter your word..."
+                className="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 text-white focus:border-yellow-500 focus:outline-none"
               />
             </div>
 
-            {logs.length > 0 && (
-              <div
-                className="text-green-200 text-xs mt-4 max-h-40 overflow-y-auto p-2 bg-black/40 border border-green-400 rounded"
-                ref={loggerRef}
+            <div className="space-y-3">
+              <label className="text-sm text-slate-300">Duration</label>
+              <select
+                value={duration}
+                onChange={(e) => setDuration(Number(e.target.value))}
+                className="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 text-white focus:border-yellow-500 focus:outline-none"
               >
-                {logs.map((m, i) => <div key={i}>→ {m}</div>)}
+                {durations.map((dur) => (
+                  <option key={dur.value} value={dur.value}>
+                    {dur.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-sm text-slate-300">Preview</label>
+              <div className="p-4 bg-slate-800/70 rounded border border-slate-700">
+                <div className="text-white font-medium">
+                  {preview || 'Enter a word to see preview...'}
+                </div>
+              </div>
+            </div>
+
+            <Button
+              onClick={handleCreateRound}
+              disabled={busy || !word.trim()}
+              className="w-full"
+            >
+              {busy ? 'Creating...' : 'Create Round'}
+            </Button>
+
+            {roundId && (
+              <div className="mt-4 p-4 bg-green-900/50 border border-green-700 rounded">
+                <div className="text-green-100 font-medium mb-2">
+                  Round #{roundId} created successfully!
+                </div>
+                <ShareBar url={roundUrl} title={shareText} />
               </div>
             )}
           </CardContent>
         </Card>
 
+        {/* Featured Rounds */}
         <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
           <CardHeader className="border-b border-slate-700 bg-slate-800/50">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold">Featured rounds</h2>
-              <Link href="/active" className="underline text-indigo-300 text-sm">
-                View all active
-              </Link>
-            </div>
+            <h2 className="text-xl font-bold">Recent Rounds</h2>
           </CardHeader>
           <CardContent className="p-5">
             {loadingFeatured ? (
-              <div className="rounded-xl bg-slate-900/70 p-6 animate-pulse text-slate-300">
-                Loading featured…
+              <div className="text-center py-8 text-slate-400">
+                Loading recent rounds...
               </div>
             ) : featured.length === 0 ? (
-              <div className="text-slate-300">No rounds yet. Be the first to create one!</div>
+              <div className="text-center py-8 text-slate-400">
+                No rounds yet. Be the first to create one!
+              </div>
             ) : (
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {featured.map((r) => {
-                  const rUrl = absoluteUrl(`/round/${r.id}`)
-                  const shareTxt = `Play MadFill Round #${r.id}!`
-                  return (
-                    <div key={r.id} className="rounded-xl bg-slate-800/60 border border-slate-700 p-4 flex flex-col gap-3">
-                      <div className="flex items-center justify-between">
-                        <div className="font-semibold">#{r.id} — {r.name}</div>
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800/80 border border-slate-700">
-                          {r.theme || 'General'}
-                        </span>
-                      </div>
-                      <div className="text-sm italic leading-relaxed line-clamp-4">
-                        {r.preview}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
-                        <span className="px-2 py-1 rounded bg-slate-900/60 border border-slate-700">
-                          Entrants: {r.entrants}
-                        </span>
-                        <span className="px-2 py-1 rounded bg-slate-900/60 border border-slate-700">
-                          Pool: {r.poolEth.toFixed(4)} ETH
-                        </span>
-                        <span className="px-2 py-1 rounded bg-slate-900/60 border border-slate-700">
-                          Ends: {new Date(r.deadline * 1000).toLocaleDateString()}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <Link href={`/round/${r.id}`} className="underline text-indigo-300 text-sm">
-                          Open
-                        </Link>
-                        <ShareBar
-                          url={rUrl}
-                          text={shareTxt}
-                          embedUrl={rUrl}
-                          small
-                          og={{ screen: 'round', roundId: String(r.id) }}
-                        />
-                      </div>
+              <div className="grid gap-4">
+                {featured.map((round) => (
+                  <div
+                    key={round.id}
+                    className="p-4 bg-slate-800/50 rounded border border-slate-600 hover:border-slate-500 transition"
+                  >
+                    <div className="flex justify-between items-start mb-2">
+                      <h3 className="font-medium">{round.name}</h3>
+                      <span className="text-xs text-slate-400">#{round.id}</span>
                     </div>
-                  )
-                })}
+                    <div className="text-sm text-slate-300 mb-2">
+                      {round.preview}
+                    </div>
+                    <div className="flex justify-between text-xs text-slate-400">
+                      <span>{round.entrants} entries</span>
+                      <span>{round.poolEth.toFixed(4)} ETH pool</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </CardContent>
         </Card>
-
-        <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
-          <CardHeader className="border-b border-slate-700 bg-slate-800/50">
-            <h2 className="text-xl font-bold">How fees work</h2>
-          </CardHeader>
-          <CardContent className="p-5 space-y-4 text-sm">
-            <div className="grid md:grid-cols-3 gap-4">
-              <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
-                <div className="text-2xl">🎟️</div>
-                <div className="font-semibold mt-1">Entry fee</div>
-                <div className="text-slate-300 mt-1">
-                  You set the entry fee when creating the round. Every entrant pays this to join.
-                </div>
-              </div>
-              <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
-                <div className="text-2xl">🏆</div>
-                <div className="font-semibold mt-1">Prize pool</div>
-                <div className="text-slate-300 mt-1">
-                  99.5% of each entry goes into the pool. Winner takes all when the round ends.
-                </div>
-              </div>
-              <div className="rounded-lg bg-slate-800/70 p-4 border border-slate-700">
-                <div className="text-2xl">⚙️</div>
-                <div className="font-semibold mt-1">Protocol fee</div>
-                <div className="text-sm">
-                  A tiny 0.5% keeps the lights on
-                </div>
-              </div>
-            </div>
-            <div className="text-xs text-slate-400">
-              All amounts are in ETH on Base. No slippage “buffer” is added — the contract takes its fee from what you send.
-            </div>
-          </CardContent>
-        </Card>
-
-        <Footer />
       </main>
+
+      <Footer />
     </Layout>
   )
 }
