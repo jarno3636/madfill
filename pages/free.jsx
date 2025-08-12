@@ -2,6 +2,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import Head from 'next/head'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useWindowSize } from 'react-use'
@@ -13,7 +14,7 @@ import ShareBar from '@/components/ShareBar'
 import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
-import Head from 'next/head'
+import Layout from '@/components/Layout'
 
 function sanitizeWord(raw) {
   return (raw || '')
@@ -38,7 +39,7 @@ function buildWordsParam(words, blanks) {
 }
 
 export default function FreeGame() {
-  useMiniAppReady() // ✅ Let Farcaster know this mini app is ready
+  useMiniAppReady() // Farcaster Mini: signal readiness
 
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
@@ -52,19 +53,22 @@ export default function FreeGame() {
   const category = categories[catIdx] || { name: 'General', templates: [] }
   const template = category.templates[tplIdx] || { parts: [], blanks: 0, name: 'Untitled' }
 
+  // Load Farcaster profile (if we stashed fid)
   useEffect(() => {
-    async function loadProfile() {
+    let cancelled = false
+    ;(async () => {
       try {
-        const fid = typeof window !== 'undefined' ? localStorage.getItem('fc_fid') : null
-        if (fid) {
-          const p = await fetchFarcasterProfile(fid)
-          setProfile(p)
-        }
+        if (typeof window === 'undefined') return
+        const fid = localStorage.getItem('fc_fid')
+        if (!fid) return
+        const p = await fetchFarcasterProfile(fid)
+        if (!cancelled) setProfile(p)
       } catch {}
-    }
-    loadProfile()
+    })()
+    return () => { cancelled = true }
   }, [])
 
+  // Initialize from URL params
   useEffect(() => {
     if (typeof window === 'undefined') return
     const u = new URL(window.location.href)
@@ -81,6 +85,7 @@ export default function FreeGame() {
     setWords(parseWordsParam(wordsParam, blanks))
   }, [])
 
+  // Keep URL in sync
   useEffect(() => {
     if (typeof window === 'undefined') return
     const blanks = template.blanks
@@ -91,9 +96,10 @@ export default function FreeGame() {
     window.history.replaceState({}, '', u.toString())
   }, [catIdx, tplIdx, words, template.blanks])
 
-  const allWordsFilled = useMemo(() => {
-    return Array.from({ length: template.blanks }).every((_, i) => !!sanitizeWord(words[i]))
-  }, [template.blanks, words])
+  const allWordsFilled = useMemo(
+    () => Array.from({ length: template.blanks }).every((_, i) => !!sanitizeWord(words[i])),
+    [template.blanks, words]
+  )
 
   const filledText = useMemo(() => {
     const out = []
@@ -116,17 +122,19 @@ export default function FreeGame() {
 
   const shareText = `I just played the Free MadFill Game!\n\n${filledText}\n\nPlay free:`
 
-  // SEO helpers
+  // SEO / Frames
   const pageUrl = absoluteUrl('/free')
-  const ogImage = useMemo(() => {
-    return buildOgUrl({
-      screen: 'free',
-      c: String(catIdx),
-      t: String(tplIdx),
-      w: buildWordsParam(words, template.blanks),
-      title: 'Free MadFill',
-    })
-  }, [catIdx, tplIdx, words, template.blanks])
+  const ogImage = useMemo(
+    () =>
+      buildOgUrl({
+        screen: 'free',
+        c: String(catIdx),
+        t: String(tplIdx),
+        w: buildWordsParam(words, template.blanks),
+        title: 'Free MadFill',
+      }),
+    [catIdx, tplIdx, words, template.blanks]
+  )
 
   function handleWordChange(i, val) {
     setWords((w) => ({ ...w, [i]: sanitizeWord(val) }))
@@ -145,9 +153,7 @@ export default function FreeGame() {
   function surpriseMe() {
     const tokens = ['neon', 'taco', 'llama', 'vibe', 'sprocket', 'laser', 'bop', 'glow', 'noodle', 'vortex', 'biscuit', 'snack', 'jazz', 'pixel', 'dino', 'meta']
     const next = {}
-    for (let i = 0; i < template.blanks; i++) {
-      next[i] = tokens[(Math.random() * tokens.length) | 0]
-    }
+    for (let i = 0; i < template.blanks; i++) next[i] = tokens[(Math.random() * tokens.length) | 0]
     setWords(next)
   }
 
@@ -172,20 +178,24 @@ export default function FreeGame() {
   }
 
   return (
-    <>
+    <Layout>
       <Head>
-         <meta property="fc:frame" content="vNext" />
-         <meta property="fc:frame:image" content={ogImage} />
-         <meta property="fc:frame:button:1" content="Play Free" />
-         <meta property="fc:frame:button:1:action" content="link" />
-         <meta property="fc:frame:button:1:target" content={permalink || pageUrl} />
-         <link rel="canonical" href={permalink || pageUrl} />
+        {/* Farcaster Mini App / Frame meta */}
+        <meta property="fc:frame" content="vNext" />
+        <meta property="fc:frame:image" content={ogImage} />
+        <meta property="fc:frame:button:1" content="Play Free" />
+        <meta property="fc:frame:button:1:action" content="link" />
+        <meta property="fc:frame:button:1:target" content={permalink || pageUrl} />
+        <link rel="canonical" href={permalink || pageUrl} />
       </Head>
+
       <SEO
         title="Free Game — MadFill"
         description="Create, laugh, and share your own fill-in-the-blank card. No wallet needed!"
         url={permalink || pageUrl}
         image={ogImage}
+        type="website"
+        twitterCard="summary_large_image"
       />
 
       {showConfetti && <Confetti width={width} height={height} />}
@@ -324,27 +334,24 @@ export default function FreeGame() {
                 </div>
 
                 <ShareBar
-                 url={permalink}
-                 text={shareText}
-                 embedUrl={permalink}
-                 og={{
-                   screen: 'free',
-                   c: String(catIdx),
-                   t: String(tplIdx),
-                   w: buildWordsParam(words, template.blanks),
-                   title: 'Free MadFill'
-                 }}
-               />
+                  url={permalink}
+                  text={`I just played the Free MadFill Game!\n\n${filledText}\n\nPlay free:`}
+                  embedUrl={permalink}
+                  og={{
+                    screen: 'free',
+                    c: String(catIdx),
+                    t: String(tplIdx),
+                    w: buildWordsParam(words, template.blanks),
+                    title: 'Free MadFill'
+                  }}
+                />
 
                 <div className="flex flex-wrap gap-2">
                   <Button onClick={handleRemix} className="bg-slate-700 hover:bg-slate-600" type="button">
                     🔁 Remix this card
                   </Button>
                   <Button
-                    onClick={() => {
-                      setWords({})
-                      setSubmitted(false)
-                    }}
+                    onClick={() => { setWords({}); setSubmitted(false) }}
                     className="bg-slate-700 hover:bg-slate-600"
                     type="button"
                   >
@@ -356,6 +363,6 @@ export default function FreeGame() {
           </CardContent>
         </Card>
       </main>
-    </>
+    </Layout>
   )
 }
