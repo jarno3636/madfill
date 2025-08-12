@@ -1,5 +1,8 @@
-import { useState, useEffect } from 'react'
-import { miniApp } from '@farcaster/miniapp-sdk'
+// hooks/useMiniAppReady.js
+'use client'
+
+import { useEffect, useState } from 'react'
+import { sdk } from '@farcaster/miniapp-sdk'
 
 export function useMiniAppReady() {
   const [isReady, setIsReady] = useState(false)
@@ -7,33 +10,22 @@ export function useMiniAppReady() {
   const [isInFarcaster, setIsInFarcaster] = useState(false)
 
   useEffect(() => {
-    async function initializeMiniApp() {
+    const inWarpcast =
+      typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent);
+    setIsInFarcaster(inWarpcast)
+
+    (async () => {
       try {
-        // Check if we're in a Farcaster environment
-        const inFarcaster = typeof window !== 'undefined' && 
-          (window.parent !== window || window.location !== window.parent.location)
-
-        setIsInFarcaster(inFarcaster)
-
-        if (inFarcaster) {
-          // We're in Farcaster - initialize the Mini App SDK
-          await miniApp.ready()
-          setIsReady(true)
-          console.log('Farcaster Mini App SDK initialized successfully')
-        } else {
-          // Development mode - simulate ready state
-          console.log('Development mode: MiniApp SDK not available, using fallback')
-          setIsReady(true)
+        if (inWarpcast) {
+          await sdk.ready()
         }
-      } catch (err) {
-        console.error('Failed to initialize Mini App:', err)
-        setError(err)
-        // Still set ready to true for development/fallback
         setIsReady(true)
+      } catch (err) {
+        console.error('Mini App ready failed:', err)
+        setError(err)
+        setIsReady(true) // allow web fallback
       }
-    }
-
-    initializeMiniApp()
+    })()
   }, [])
 
   return { isReady, error, isInFarcaster }
