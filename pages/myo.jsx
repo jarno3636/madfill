@@ -4,9 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import { ethers } from 'ethers'
-import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
-
 import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -15,6 +13,9 @@ import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useToast } from '@/components/Toast'
 import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
+import dynamic from 'next/dynamic'
+
+const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 // 🔹 NEW: bring in your curated presets
 import { categories as presetCategories } from '@/data/templates'
