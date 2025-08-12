@@ -1,113 +1,51 @@
-// components/Footer.jsx
-'use client'
-
-import Link from 'next/link'
-import { useMemo, useState } from 'react'
-
-const BASE_EXPLORER = 'https://basescan.org'
-
 export default function Footer() {
-  const [copied, setCopied] = useState(false)
-  const year = new Date().getFullYear()
-  const contract = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
-
-  const contractUrl = useMemo(() => {
-    if (!contract) return null
-    return `${BASE_EXPLORER}/address/${contract}`
-  }, [contract])
-
-  const siteUrl = typeof window !== 'undefined' ? window.location.origin : 'https://madfill.vercel.app'
-
-  async function copySiteLink() {
-    try {
-      await navigator.clipboard.writeText(siteUrl)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    } catch {
-      // fallback
-      const el = document.createElement('textarea')
-      el.value = siteUrl
-      document.body.appendChild(el)
-      el.select()
-      document.execCommand('copy')
-      document.body.removeChild(el)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    }
-  }
-
   return (
-    <footer className="mt-12">
-      <div className="h-px w-full bg-gradient-to-r from-transparent via-indigo-500/40 to-transparent" />
-      <div className="bg-gradient-to-br from-slate-950 via-indigo-950 to-purple-950 text-white">
-        <div className="max-w-5xl mx-auto px-4 py-8">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            {/* Left: brand / blurb */}
-            <div className="space-y-1">
-              <div className="text-lg font-extrabold tracking-tight">🧠 MadFill</div>
-              <p className="text-xs text-slate-300">
-                Made with 🤪 on Base. Fill the blank, win the bag.
-              </p>
-            </div>
-
-            {/* Middle: socials */}
-            <div className="flex flex-wrap items-center gap-2">
-              <Link
-                href="https://x.com/MadFillBase"
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="MadFill on X"
-                className="px-3 py-1.5 rounded-full bg-slate-900/70 border border-slate-700 hover:border-indigo-400 hover:bg-slate-900 transition text-sm"
-              >
-                🐦 X: @MadFillBase
-              </Link>
-              <Link
-                href="https://warpcast.com/madfill"
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="MadFill on Farcaster"
-                className="px-3 py-1.5 rounded-full bg-slate-900/70 border border-slate-700 hover:border-indigo-400 hover:bg-slate-900 transition text-sm"
-              >
-                🌀 Farcaster: @madfill
-              </Link>
-              {contractUrl && (
-                <Link
-                  href={contractUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label="View contract on Basescan"
-                  className="px-3 py-1.5 rounded-full bg-slate-900/70 border border-slate-700 hover:border-indigo-400 hover:bg-slate-900 transition text-sm"
-                >
-                  🔗 Contract
-                </Link>
-              )}
-              <button
-                onClick={copySiteLink}
-                className="px-3 py-1.5 rounded-full bg-slate-900/70 border border-slate-700 hover:border-indigo-400 hover:bg-slate-900 transition text-sm"
-                title="Copy site link"
-              >
-                {copied ? '✅ Copied' : '📋 Share link'}
-              </button>
-            </div>
-          </div>
-
-          {/* Bottom row */}
-          <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="text-xs text-slate-400">
-              © {year} MadFill — All fun, no refunds 😉
-            </div>
-            <div className="flex items-center gap-4 text-xs">
-              <Link href="/active" className="text-slate-300 hover:text-indigo-300">Active</Link>
-              <Link href="/vote" className="text-slate-300 hover:text-indigo-300">Vote</Link>
-              <Link href="/myrounds" className="text-slate-300 hover:text-indigo-300">My Rounds</Link>
-              <a
-                href="mailto:hello@madfill.app"
-                className="text-slate-300 hover:text-indigo-300"
-              >
-                Contact
+    <footer className="bg-slate-900/50 border-t border-purple-700 mt-auto">
+      <div className="max-w-6xl mx-auto px-4 py-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <div className="col-span-2">
+            <h3 className="text-xl font-bold text-white mb-4">🧠 MadFill</h3>
+            <p className="text-purple-200 text-sm mb-4">
+              Fill the blank. Make it funny. Win the pot. A social word game on Base with real rewards.
+            </p>
+            <div className="flex gap-3">
+              <a href="https://twitter.com/madfill" className="text-purple-300 hover:text-white transition">
+                Twitter
+              </a>
+              <a href="https://farcaster.xyz/madfill" className="text-purple-300 hover:text-white transition">
+                Farcaster
+              </a>
+              <a href="https://base.org" className="text-purple-300 hover:text-white transition">
+                Base
               </a>
             </div>
           </div>
+          
+          <div>
+            <h4 className="font-semibold text-white mb-3">Game</h4>
+            <ul className="space-y-2 text-sm">
+              <li><a href="/" className="text-purple-200 hover:text-white transition">Create Round</a></li>
+              <li><a href="/active" className="text-purple-200 hover:text-white transition">Active Rounds</a></li>
+              <li><a href="/vote" className="text-purple-200 hover:text-white transition">Community Vote</a></li>
+              <li><a href="/myo" className="text-purple-200 hover:text-white transition">Make Your Own</a></li>
+            </ul>
+          </div>
+          
+          <div>
+            <h4 className="font-semibold text-white mb-3">About</h4>
+            <ul className="space-y-2 text-sm">
+              <li><a href="/how-to-play" className="text-purple-200 hover:text-white transition">How to Play</a></li>
+              <li><a href="/faq" className="text-purple-200 hover:text-white transition">FAQ</a></li>
+              <li><a href="/terms" className="text-purple-200 hover:text-white transition">Terms</a></li>
+              <li><a href="/privacy" className="text-purple-200 hover:text-white transition">Privacy</a></li>
+            </ul>
+          </div>
+        </div>
+        
+        <div className="border-t border-purple-700 mt-8 pt-6 text-center">
+          <p className="text-purple-300 text-sm">
+            © 2024 MadFill. Built on Base. Powered by Farcaster.
+          </p>
         </div>
       </div>
     </footer>

@@ -1,20 +1,23 @@
-import { useMiniWallet } from '../hooks/useMiniWallet';
+import { useMiniWallet } from '../hooks/useMiniWallet'
 
 export default function MiniConnectButton({ className = '' }) {
-  const { address, isConnected, isLoading, connect, disconnect, error } = useMiniWallet();
+  const { address, isConnected, isLoading, connect, disconnect, error, isInFarcaster } = useMiniWallet()
 
   const handleClick = async () => {
     if (isConnected) {
-      await disconnect();
+      await disconnect()
     } else {
-      await connect();
+      await connect()
     }
-  };
+  }
 
   const formatAddress = (addr) => {
-    if (!addr) return '';
-    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-  };
+    if (!addr) return ''
+    return `${addr.slice(0, 6)}...${addr.slice(-4)}`
+  }
+
+  // Show connection type for development
+  const connectionType = isInFarcaster ? 'Farcaster' : 'Browser'
 
   return (
     <div className={`flex flex-col items-center space-y-2 ${className}`}>
@@ -23,8 +26,8 @@ export default function MiniConnectButton({ className = '' }) {
         disabled={isLoading}
         className={`
           px-6 py-3 rounded-lg font-semibold transition-all duration-200
-          ${isConnected 
-            ? 'bg-red-500 hover:bg-red-600 text-white' 
+          ${isConnected
+            ? 'bg-red-500 hover:bg-red-600 text-white'
             : 'bg-blue-500 hover:bg-blue-600 text-white'
           }
           ${isLoading ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105'}
@@ -39,21 +42,22 @@ export default function MiniConnectButton({ className = '' }) {
         ) : isConnected ? (
           `Disconnect ${formatAddress(address)}`
         ) : (
-          'Connect Wallet'
+          `Connect ${connectionType} Wallet`
         )}
       </button>
 
       {error && (
-        <div className="text-red-500 text-sm text-center">
+        <div className="text-red-500 text-sm text-center max-w-xs">
           Error: {error.message}
         </div>
       )}
 
       {isConnected && address && (
-        <div className="text-sm text-gray-600 text-center">
-          Connected: {formatAddress(address)}
+        <div className="text-sm text-gray-300 text-center">
+          <div>Connected via {connectionType}</div>
+          <div className="font-mono">{formatAddress(address)}</div>
         </div>
       )}
     </div>
-  );
+  )
 }

@@ -1,109 +1,103 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback } from 'react'
 
-// Toast component for showing notifications
-export function Toast({ message, type = 'info', duration = 5000, onClose }) {
-  const [isVisible, setIsVisible] = useState(true);
+const ToastContext = createContext()
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setIsVisible(false);
-      setTimeout(onClose, 300); // Wait for fade out animation
-    }, duration);
+export function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([])
 
-    return () => clearTimeout(timer);
-  }, [duration, onClose]);
+  const addToast = useCallback((toast) => {
+    const id = Date.now() + Math.random()
+    const newToast = { 
+      id, 
+      type: 'info', 
+      duration: 5000,
+      ...toast 
+    }
+    
+    setToasts(prev => [...prev, newToast])
 
-  const handleClose = () => {
-    setIsVisible(false);
-    setTimeout(onClose, 300);
-  };
+    // Auto remove toast after duration
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id))
+    }, newToast.duration)
+  }, [])
 
+  const removeToast = useCallback((id) => {
+    setToasts(prev => prev.filter(t => t.id !== id))
+  }, [])
+
+  return (
+    <ToastContext.Provider value={{ addToast, removeToast }}>
+      {children}
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
+    </ToastContext.Provider>
+  )
+}
+
+export function useToast() {
+  const context = useContext(ToastContext)
+  if (!context) {
+    throw new Error('useToast must be used within a ToastProvider')
+  }
+  return context
+}
+
+function ToastContainer({ toasts, onRemove }) {
+  if (toasts.length === 0) return null
+
+  return (
+    <div className="fixed top-4 right-4 z-50 space-y-2">
+      {toasts.map(toast => (
+        <Toast key={toast.id} toast={toast} onRemove={onRemove} />
+      ))}
+    </div>
+  )
+}
+
+function Toast({ toast, onRemove }) {
   const typeStyles = {
-    success: 'bg-green-500 border-green-600',
-    error: 'bg-red-500 border-red-600',
-    warning: 'bg-yellow-500 border-yellow-600',
-    info: 'bg-blue-500 border-blue-600'
-  };
+    success: 'bg-green-500 text-white',
+    error: 'bg-red-500 text-white',
+    warning: 'bg-yellow-500 text-black',
+    info: 'bg-blue-500 text-white'
+  }
 
   const icons = {
     success: '✅',
     error: '❌',
     warning: '⚠️',
     info: 'ℹ️'
-  };
-
-  return (
-    <div className={`
-      fixed top-4 right-4 z-50 max-w-sm
-      ${typeStyles[type]} 
-      border rounded-lg shadow-lg
-      transform transition-all duration-300 ease-in-out
-      ${isVisible ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'}
-    `}>
-      <div className="p-4 flex items-start space-x-3">
-        <span className="text-lg">{icons[type]}</span>
-        <div className="flex-1">
-          <p className="text-white text-sm font-medium">{message}</p>
-        </div>
-        <button
-          onClick={handleClose}
-          className="text-white hover:text-gray-200 transition-colors"
-        >
-          ✕
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// Toast context and hook
-import { createContext, useContext } from 'react';
-
-const ToastContext = createContext();
-
-export function ToastProvider({ children }) {
-  const [toasts, setToasts] = useState([]);
-
-  const addToast = useCallback((message, type = 'info', duration = 5000) => {
-    const id = Date.now().toString();
-    const toast = { id, message, type, duration };
-    
-    setToasts(prev => [...prev, toast]);
-    
-    return id;
-  }, []);
-
-  const removeToast = useCallback((id) => {
-    setToasts(prev => prev.filter(toast => toast.id !== id));
-  }, []);
-
-  const value = {
-    addToast,
-    removeToast
-  };
-
-  return (
-    <ToastContext.Provider value={value}>
-      {children}
-      <div className="fixed top-0 right-0 z-50 space-y-2 p-4">
-        {toasts.map(toast => (
-          <Toast
-            key={toast.id}
-            message={toast.message}
-            type={toast.type}
-            duration={toast.duration}
-            onClose={() => removeToast(toast.id)}
-          />
-        ))}
-      </div>
-    </ToastContext.Provider>
-  );
-}
-
-export function useToast() {
-  const context = useContext(ToastContext);
-  if (!context) {
-    throw new Error('useToast must be used within a ToastProvider');
   }
-  return context;
+
+  return (
+    <div
+      className={`
+        px-4 py-3 rounded-lg shadow-lg max-w-md
+        flex items-center justify-between
+        animate-in slide-in-from-right-full
+        ${typeStyles[toast.type] || typeStyles.info}
+      `}
+    >
+      <div className="flex items-center space-x-3">
+        <span className="text-lg">{icons[toast.type]}</span>
+        <div>
+          {toast.title && (
+            <div className="font-semibold">{toast.title}</div>
+          )}
+          {toast.message && (
+            <div className={toast.title ? 'text-sm opacity-90' : ''}>
+              {toast.message}
+            </div>
+          )}
+        </div>
+      </div>
+      
+      <button
+        onClick={() => onRemove(toast.id)}
+        className="ml-4 text-lg hover:opacity-70 transition-opacity"
+      >
+        ×
+      </button>
+    </div>
+  )
 }
