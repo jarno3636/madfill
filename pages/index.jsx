@@ -4,8 +4,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
-import { ethers } from 'ethers'
-import Confetti from 'react-confetti'
+import { ethers } from 'ethers'b
 import { useWindowSize } from 'react-use'
 import abi from '../abi/FillInStoryV3_ABI.json'
 import { Button } from '../components/ui/button'
@@ -17,6 +16,9 @@ import { fetchFarcasterProfile } from '../lib/neynar'
 import SEO from '../components/SEO'
 import { absoluteUrl, buildOgUrl } from '../lib/seo'
 import { useMiniAppReady } from '../hooks/useMiniAppReady'
+import dynamic from 'next/dynamic'
+
+const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 /** ---- Chain + contract ---- */
 const CONTRACT_ADDRESS =
