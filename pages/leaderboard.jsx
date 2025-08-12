@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import { useMiniWallet } from '../hooks/useMiniWallet';
 import { useContracts } from '../hooks/useContracts';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { formatAddress } from '../utils/validation';
+import { formatAddress } from '../lib/validation';
 
 export default function Leaderboard() {
   const router = useRouter();
