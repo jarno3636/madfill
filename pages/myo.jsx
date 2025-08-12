@@ -1,4 +1,4 @@
-// pages/MYO.jsx
+// pages/myo.jsx
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
