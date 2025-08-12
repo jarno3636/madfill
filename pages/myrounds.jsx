@@ -5,7 +5,6 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { ethers } from 'ethers'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import Link from 'next/link'
@@ -16,6 +15,9 @@ import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import Head from 'next/head'
 import Layout from '@/components/Layout'
+import dynamic from 'next/dynamic'
+
+const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
