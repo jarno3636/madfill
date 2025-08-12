@@ -2,27 +2,30 @@
 'use client'
 
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import { ethers } from 'ethers'
-import { Card, CardHeader, CardContent } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import abi from '@/abi/FillInStoryV3_ABI.json'
+import Head from 'next/head'
 import Link from 'next/link'
+import { useRouter } from 'next/router'
+import { ethers } from 'ethers'
 import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
-import { useRouter } from 'next/router'
-import { fetchFarcasterProfile } from '@/lib/neynar'
+
+import Layout from '@/components/Layout'                 // ✅ wrap each page
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
+import { Card, CardHeader, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+
+import abi from '@/abi/FillInStoryV3_ABI.json'
+import { fetchFarcasterProfile } from '@/lib/neynar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
-import Head from 'next/head'
 
 // Env
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // FillInStoryV3
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // FillInStoryV3 on Base mainnet
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
-const BASE_CHAIN_ID_HEX = '0x2105'
+const BASE_CHAIN_ID_HEX = '0x2105' // 8453
 
 // Defaults
 const DEFAULT_DURATION_SECONDS = 3 * 24 * 60 * 60
@@ -54,6 +57,7 @@ export default function ChallengePage() {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [showConfetti, setShowConfetti] = useState(false)
+
   const { width, height } = useWindowSize()
   const tickRef = useRef(null)
   const router = useRouter()
@@ -137,6 +141,7 @@ export default function ChallengePage() {
     const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
     if (!inWarpcast) return null
     try {
+      // MiniApp SDK provider (lazy import to avoid SSR issues)
       const mod = await import('@farcaster/miniapp-sdk')
       const prov = await mod.sdk.wallet.getEthereumProvider()
       miniProvRef.current = prov
@@ -151,7 +156,7 @@ export default function ChallengePage() {
     let cancelled = false
     ;(async () => {
       // injected first
-      if (window?.ethereum) {
+      if (typeof window !== 'undefined' && window.ethereum) {
         try {
           const accts = await window.ethereum.request({ method: 'eth_accounts' })
           if (!cancelled) setAddress(accts?.[0] || null)
@@ -255,12 +260,12 @@ export default function ChallengePage() {
         const provider = new ethers.JsonRpcProvider(BASE_RPC)
         const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
         const info = await ct.getPool1Info(BigInt(roundId))
-        const name = info[0]
-        const _parts = info[2]
-        const creator = info[5]
+        const name = info.name_ ?? info[0]
+        const _parts = info.parts_ ?? info[2]
+        const creator = info.creator_ ?? info[5]
 
         const sub = await ct.getPool1Submission(BigInt(roundId), creator)
-        const origWordRaw = sub[1]
+        const origWordRaw = sub.word_ ?? sub[1] // stored as "idx::word"
 
         if (cancelled) return
         setParts(Array.isArray(_parts) ? _parts : [])
@@ -296,7 +301,7 @@ export default function ChallengePage() {
     )
   }, [parts])
 
-  // ---------- submit ----------
+  // ---------- submit (Pool2) ----------
   async function handleSubmit() {
     try {
       const eip = await getEip1193()
@@ -318,14 +323,14 @@ export default function ChallengePage() {
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
-      const encodedWord = `${blankIndex}::${cleanWord}`
+      const encodedWord = `${blankIndex}::${cleanWord}`           // matches V3 read pattern
       const safeFee = Number.isFinite(feeEth) && feeEth >= 0 ? feeEth : DEFAULT_FEE_ETH
-      const feeBase = ethers.parseUnits(String(safeFee), 18)
+      const feeBase = ethers.parseUnits(String(safeFee), 18)      // ✅ feeBase (wei)
       const duration = BigInt(
         Number.isFinite(durationSec) ? durationSec : DEFAULT_DURATION_SECONDS
       )
 
-      // slight buffer on msg.value to avoid rounding reverts
+      // ✅ slight buffer on msg.value to avoid rounding reverts
       const value = (feeBase * 1005n) / 1000n
 
       const tx = await ct.createPool2(
@@ -339,7 +344,7 @@ export default function ChallengePage() {
 
       await tx.wait()
       setStatus(`Challenger submitted to Round #${roundId}`)
-      setShowConfetti(true)
+      setShowConfetti(true)                             // ✅ confetti patch
       setTimeout(() => setShowConfetti(false), 2200)
       setTimeout(() => router.push('/vote'), 1400)
     } catch (err) {
@@ -365,9 +370,9 @@ export default function ChallengePage() {
   const ogImage = buildOgUrl({ screen: 'challenge', title: 'Submit a Challenger' })
 
   return (
-    <>
+    <Layout>
+      {/* Farcaster Mini App / Frame meta */}
       <Head>
-        {/* Farcaster Mini App */}
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
         <meta property="fc:frame:button:1" content="Open Challenge" />
@@ -375,6 +380,7 @@ export default function ChallengePage() {
         <meta property="fc:frame:button:1:target" content={pageUrl} />
       </Head>
 
+      {/* Standard SEO */}
       <SEO
         title="Submit a Challenger — MadFill"
         description="Think you can out-funny the Original? Drop your one-word zinger and start a head-to-head vote on Base."
@@ -573,6 +579,6 @@ export default function ChallengePage() {
           </CardContent>
         </Card>
       </main>
-    </>
+    </Layout>
   )
 }
