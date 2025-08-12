@@ -493,7 +493,7 @@ export default function RoundDetailPage() {
   const ogImage = buildOgUrl({ screen: 'round', roundId: String(id || '') }) // stringify id
 
   return (
-    <>
+    <Layout>
       <Head>
         {/* Farcaster Mini App frame meta */}
         <meta property="fc:frame" content="vNext" />
@@ -764,6 +764,6 @@ export default function RoundDetailPage() {
           </>
         )}
       </main>
-    </>
+    </Layout>
   )
 }
