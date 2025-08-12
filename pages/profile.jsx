@@ -7,7 +7,7 @@ import { useToast } from '../components/Toast';
 import { useNotifications } from '../hooks/useNotifications';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ChainSwitcher from '../components/ChainSwitcher';
-import { formatAddress, formatTokenAmount } from '../utils/validation';
+import { formatAddress, formatTokenAmount } from '../lib/validation';
 
 export default function Profile() {
   const router = useRouter();
