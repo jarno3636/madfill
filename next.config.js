@@ -2,16 +2,14 @@
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
-  
-  // Enable standalone output for better deployment
   output: 'standalone',
   
-  // Configure images for Farcaster assets
   images: {
     domains: [
       'warpcast.com',
-      'imagedelivery.net',
-      'res.cloudinary.com'
+      'imagedelivery.net', 
+      'res.cloudinary.com',
+      'madfill.vercel.app'
     ],
     remotePatterns: [
       {
@@ -21,7 +19,6 @@ const nextConfig = {
     ],
   },
 
-  // Headers for Farcaster Mini App
   async headers() {
     return [
       {
@@ -34,6 +31,22 @@ const nextConfig = {
           {
             key: 'Content-Security-Policy',
             value: "frame-ancestors 'self' https://warpcast.com https://*.warpcast.com;"
+          },
+          {
+            key: 'X-Content-Type-Options',
+            value: 'nosniff'
+          },
+          {
+            key: 'X-XSS-Protection',
+            value: '1; mode=block'
+          },
+          {
+            key: 'Referrer-Policy',
+            value: 'origin-when-cross-origin'
+          },
+          {
+            key: 'Permissions-Policy',
+            value: 'geolocation=(), microphone=(), camera=()'
           }
         ],
       },
@@ -53,9 +66,7 @@ const nextConfig = {
     ];
   },
 
-  // Webpack configuration for better build optimization
   webpack: (config, { buildId, dev, isServer, defaultLoaders, webpack }) => {
-    // Optimize bundle size
     config.optimization = {
       ...config.optimization,
       splitChunks: {
@@ -70,40 +81,33 @@ const nextConfig = {
       },
     };
 
+    // Handle ethers.js
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      fs: false,
+      net: false,
+      tls: false,
+    };
+
     return config;
   },
 
-  // Environment variables that should be available on the client
   env: {
     NEXT_PUBLIC_APP_NAME: 'MadFill',
     NEXT_PUBLIC_APP_VERSION: '1.0.0',
   },
 
-  // Experimental features for better performance
   experimental: {
-    // Enable modern build features
     esmExternals: true,
-    // Better static optimization
     optimizeCss: true,
   },
 
-  // Configure redirects for better SEO
   async redirects() {
     return [
       {
         source: '/home',
         destination: '/',
         permanent: true,
-      },
-    ];
-  },
-
-  // Configure rewrites for API routes if needed
-  async rewrites() {
-    return [
-      {
-        source: '/api/health',
-        destination: '/api/health',
       },
     ];
   },
