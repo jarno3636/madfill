@@ -1,7 +1,7 @@
 // pages/index.jsx
 'use client'
 
-import React, { useState, useEffect, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import { ethers } from 'ethers'
@@ -11,20 +11,22 @@ import abi from '../abi/FillInStoryV3_ABI.json'
 import { Button } from '../components/ui/button'
 import { Card, CardHeader, CardContent } from '../components/ui/card'
 import { categories, durations } from '../data/templates'
-import Layout from '../components/Layout'
-import Footer from '../components/Footer'
 import ShareBar from '../components/ShareBar'
 import { fetchFarcasterProfile } from '../lib/neynar'
 import SEO from '../components/SEO'
 import { absoluteUrl, buildOgUrl } from '../lib/seo'
 import { useMiniAppReady } from '../hooks/useMiniAppReady'
 
-const CONTRACT_ADDRESS = 
-  process.env.NEXT_PUBLIC_FILLIN_ADDRESS || 
+/** ---- Chain + contract ---- */
+const CONTRACT_ADDRESS =
+  process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // FillInStoryV3 on Base
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+const BASE_CHAIN_ID = 8453n
+const BASE_CHAIN_ID_HEX = '0x2105'
 
+/** ---- Helpers ---- */
 const FEATURED_TAKE = 9
 
 const extractError = (e) =>
@@ -35,12 +37,76 @@ const extractError = (e) =>
   e?.message ||
   (typeof e === 'string' ? e : JSON.stringify(e))
 
+const needsSpaceBefore = (str) => {
+  if (!str) return false
+  const ch = str[0]
+  return !(/\s/.test(ch) || /[.,!?;:)"'\\\]]/.test(ch))
+}
+
+function buildPreviewSingle(parts, w, idx) {
+  const n = parts?.length || 0
+  if (n === 0) return ''
+  const blanks = Math.max(0, n - 1)
+  const iSel = Math.max(0, Math.min(Math.max(0, blanks - 1), Number(idx) || 0))
+  const out = []
+  for (let i = 0; i < n; i++) {
+    out.push(parts[i] || '')
+    if (i < n - 1) {
+      if (i === iSel) {
+        if (w) {
+          out.push(w)
+          if (needsSpaceBefore(parts[i + 1] || '')) out.push(' ')
+        } else {
+          out.push('____')
+        }
+      } else {
+        out.push('____')
+      }
+    }
+  }
+  return out.join('')
+}
+
+function sanitizeWord(raw) {
+  return (raw || '')
+    .trim()
+    .split(' ')[0]
+    .replace(/[^a-zA-Z0-9\-_]/g, '')
+    .slice(0, 16)
+}
+
+/** Prefer Mini App provider if present (Warpcast), else window.ethereum */
+function useEip1193() {
+  const miniProvRef = useRef(null)
+
+  const getProvider = useCallback(async () => {
+    // 1) injected (web)
+    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
+    // 2) Farcaster Mini wallet
+    if (miniProvRef.current) return miniProvRef.current
+    const inWarpcast =
+      typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+    if (!inWarpcast) return null
+    try {
+      const mod = await import('@farcaster/miniapp-sdk')
+      const prov = await mod.sdk.wallet.getEthereumProvider()
+      miniProvRef.current = prov
+      return prov
+    } catch {
+      return null
+    }
+  }, [])
+
+  return getProvider
+}
+
 export default function Home() {
   useMiniAppReady()
 
   const [status, setStatus] = useState('')
   const [logs, setLogs] = useState([])
   const loggerRef = useRef(null)
+
   const [address, setAddress] = useState(null)
   const [roundId, setRoundId] = useState('')
   const [roundName, setRoundName] = useState('')
@@ -49,7 +115,7 @@ export default function Home() {
   const [blankIndex, setBlankIndex] = useState(0)
   const [word, setWord] = useState('')
   const [duration, setDuration] = useState(durations[0].value) // days
-  const [feeEth, setFeeEth] = useState(0.01) // ETH on Base
+  const [feeEth, setFeeEth] = useState(0.01) // UI value, sent 1:1 as feeBase
   const [busy, setBusy] = useState(false)
   const [profile, setProfile] = useState(null)
   const [showConfetti, setShowConfetti] = useState(false)
@@ -57,6 +123,7 @@ export default function Home() {
   const [loadingFeatured, setLoadingFeatured] = useState(true)
 
   const { width, height } = useWindowSize()
+  const getEip1193 = useEip1193()
 
   const selectedCategory = categories[catIdx]
   const tpl = selectedCategory.templates[tplIdx]
@@ -68,70 +135,29 @@ export default function Home() {
     }, 30)
   }
 
-  const needsSpaceBefore = (str) => {
-    if (!str) return false
-    const ch = str[0]
-    return !(/\s/.test(ch) || /[.,!?;:)"'\]\\]/.test(ch))
-  }
-
-  function buildPreviewSingle(parts, w, idx) {
-    const n = parts?.length || 0
-    if (n === 0) return ''
-
-    const blanks = Math.max(0, n - 1)
-    const iSel = Math.max(0, Math.min(Math.max(0, blanks - 1), Number(idx) || 0))
-
-    const out = []
-    for (let i = 0; i < n; i++) {
-      out.push(parts[i] || '')
-      if (i < n - 1) {
-        if (i === iSel) {
-          if (w) {
-            out.push(w)
-            if (needsSpaceBefore(parts[i + 1] || '')) out.push(' ')
-          } else {
-            out.push('____')
-          }
-        } else {
-          out.push('____')
-        }
-      }
-    }
-    return out.join('')
-  }
-
-  function sanitizeWord(raw) {
-    return (raw || '')
-      .trim()
-      .split(' ')[0]
-      .replace(/[^a-zA-Z0-9\-\_]/g, '')
-      .slice(0, 16)
-  }
-
+  /** ---- wallet observe (passive) ---- */
   useEffect(() => {
-    if (!window?.ethereum) return
-
     let cancelled = false
     ;(async () => {
+      const eip = await getEip1193()
+      if (!eip) return
       try {
-        const accts = await window.ethereum.request?.({ method: 'eth_accounts' })
+        const accts = await eip.request?.({ method: 'eth_accounts' })
         if (!cancelled) setAddress(accts?.[0] || null)
       } catch {}
-
-      const onAcct = (accs) => setAddress(accs?.[0] || null)
-      window.ethereum.on?.('accountsChanged', onAcct)
-
-      return () => {
-        window.ethereum.removeListener?.('accountsChanged', onAcct)
+      // account changes (injected)
+      if (eip && eip.on && eip.removeListener) {
+        const onAcct = (accs) => setAddress(accs?.[0] || null)
+        eip.on('accountsChanged', onAcct)
+        return () => eip.removeListener('accountsChanged', onAcct)
       }
     })()
-
     return () => { cancelled = true }
-  }, [])
+  }, [getEip1193])
 
+  /** ---- Farcaster profile ---- */
   useEffect(() => {
     if (!address) return
-
     ;(async () => {
       try {
         const p = await fetchFarcasterProfile(address)
@@ -140,43 +166,36 @@ export default function Home() {
     })()
   }, [address])
 
+  /** ---- Featured (read-only) ---- */
   useEffect(() => {
     let cancelled = false
     setLoadingFeatured(true)
-
     ;(async () => {
       try {
         const provider = new ethers.JsonRpcProvider(BASE_RPC)
         const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
-
         const total = Number(await ct.pool1Count())
-
         if (total === 0) {
           if (!cancelled) setFeatured([])
           return
         }
-
         const start = Math.max(1, total - FEATURED_TAKE + 1)
         const rows = []
-
         for (let id = total; id >= start; id--) {
           const info = await ct.getPool1Info(BigInt(id))
           const name = info[0]
           const theme = info[1]
           const parts = info[2]
-          const feeBase = info[3] // not directly used here; left for future display
           const deadline = Number(info[4])
           const creator = info[5]
           const participants = info[6] || []
           const poolBalance = info[9]
-
           let creatorPreview = ''
           try {
             const sub = await ct.getPool1Submission(BigInt(id), creator)
             const stored = sub[1]
             creatorPreview = buildPreviewSingle(parts, stored, 0)
           } catch {}
-
           rows.push({
             id,
             name: name || `Round #${id}`,
@@ -185,10 +204,9 @@ export default function Home() {
             preview: creatorPreview || buildPreviewSingle(parts, '', 0),
             entrants: participants.length,
             poolEth: Number(ethers.formatEther(poolBalance || 0n)),
-            deadline
+            deadline,
           })
         }
-
         if (!cancelled) setFeatured(rows)
       } catch (e) {
         console.error('Featured fetch failed', e)
@@ -197,51 +215,97 @@ export default function Home() {
         if (!cancelled) setLoadingFeatured(false)
       }
     })()
-
     return () => { cancelled = true }
   }, [])
 
+  /** ---- Preview ---- */
   const preview = useMemo(
     () => buildPreviewSingle(tpl.parts, sanitizeWord(word), blankIndex),
     [tpl.parts, word, blankIndex]
   )
 
+  /** ---- Chain switch ---- */
+  const switchToBase = useCallback(async () => {
+    const eip = await getEip1193()
+    if (!eip) throw new Error('No wallet detected')
+    try {
+      await eip.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: BASE_CHAIN_ID_HEX }],
+      })
+    } catch (e) {
+      if (e?.code === 4902) {
+        await eip.request({
+          method: 'wallet_addEthereumChain',
+          params: [{
+            chainId: BASE_CHAIN_ID_HEX,
+            chainName: 'Base',
+            rpcUrls: [BASE_RPC],
+            nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+            blockExplorerUrls: ['https://basescan.org'],
+          }],
+        })
+      } else {
+        throw e
+      }
+    }
+  }, [getEip1193])
+
+  /** ---- Create round (feeBase‑accurate, better errors) ---- */
   async function handleCreateRound() {
     const cleanWord = sanitizeWord(word)
-
     if (!cleanWord) {
       setStatus('Enter one word (letters/numbers/_/-), up to 16 chars.')
       log('Invalid word')
       return
     }
 
+    // Parts must equal blanks + 1 (UI templates should satisfy this, but keep guard)
     if ((tpl?.parts?.length || 0) !== (tpl?.blanks || 0) + 1) {
       setStatus('Template error: parts must equal blanks + 1.')
       log('Template mismatch')
       return
     }
 
-    if (!window?.ethereum) {
-      setStatus('No wallet detected.')
+    // Fee guard (contract commonly requires > 0 and sane lower bound)
+    if (!(feeEth > 0)) {
+      setStatus('Entry fee must be greater than 0.')
+      return
+    }
+    if (feeEth < 0.001) {
+      setStatus('Minimum entry fee is 0.001 ETH.')
+      return
+    }
+
+    // Duration guard — if your contract enforces bounds, tweak here
+    if (duration <= 0) {
+      setStatus('Duration must be at least 1 day.')
       return
     }
 
     try {
       setBusy(true)
       setStatus('')
-      log('Connecting wallet...')
+      log('Connecting wallet…')
 
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      await provider.send('eth_requestAccounts', [])
-      
+      const eip = await getEip1193()
+      if (!eip) throw new Error('No wallet detected')
+
+      const provider = new ethers.BrowserProvider(eip)
+      await eip.request?.({ method: 'eth_requestAccounts' })
+      let signer = await provider.getSigner()
+
       const net = await provider.getNetwork()
-      if (net?.chainId !== 8453n) {
-        throw new Error('Please switch to Base network')
+      if (net?.chainId !== BASE_CHAIN_ID) {
+        setStatus('Switching to Base…')
+        await switchToBase()
+        const p2 = new ethers.BrowserProvider(await getEip1193())
+        signer = await p2.getSigner()
       }
 
-      const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
+      // 🔒 feeBase: exact on-chain value (no buffer). UI fee is ETH -> Wei.
       const feeBase = ethers.parseUnits(String(feeEth), 18)
       const value = feeBase
       const parts = tpl.parts.map((p) => p.trim())
@@ -251,20 +315,29 @@ export default function Home() {
       const durationSecs = BigInt(duration * 86400)
       const idx = Number(blankIndex) | 0
 
-      log(`Creating round "${name}"...`)
+      // Preflight to surface precise revert reasons
+      log(`Creating round "${name}" (preflight)…`)
+      try {
+        await ct.createPool1.staticCall(
+          name,
+          theme,
+          parts,
+          cleanWord,
+          username,
+          feeBase,
+          durationSecs,
+          idx,
+          { value }
+        )
+      } catch (err) {
+        const msg = extractError(err)
+        setStatus(`Preflight failed: ${msg}`)
+        log(`Preflight failed: ${msg}`)
+        setBusy(false)
+        return
+      }
 
-      await ct.createPool1.staticCall(
-        name,
-        theme,
-        parts,
-        cleanWord,
-        username,
-        feeBase,
-        durationSecs,
-        idx,
-        { value }
-      )
-
+      log('Sending transaction…')
       const tx = await ct.createPool1(
         name,
         theme,
@@ -277,15 +350,18 @@ export default function Home() {
         { value }
       )
 
+      setStatus('Waiting for confirmation…')
       const rc = await tx.wait()
 
       let newId = ''
       try {
+        // ethers v6 log parsing (if ABI includes event fragment names)
         const evt = rc.logs?.find((l) => l.fragment?.name === 'Pool1Created')
         if (evt?.args?.id) newId = evt.args.id.toString()
       } catch {}
 
       if (!newId) {
+        // Fallback to reading count after tx mines
         const rp = new ethers.JsonRpcProvider(BASE_RPC)
         const reader = new ethers.Contract(CONTRACT_ADDRESS, abi, rp)
         newId = String(await reader.pool1Count())
@@ -294,39 +370,31 @@ export default function Home() {
       setRoundId(newId)
       setShowConfetti(true)
       log(`Round #${newId} created.`)
-      setStatus('Success!')
-
+      setStatus('✅ Success!')
+      setTimeout(() => setShowConfetti(false), 1800)
     } catch (err) {
       console.error(err)
       const msg = extractError(err)
-      setStatus(msg)
+      setStatus(`❌ ${msg}`)
       log(`Create failed: ${msg}`)
+      setShowConfetti(false)
     } finally {
       setBusy(false)
-      setTimeout(() => setShowConfetti(false), 1800)
     }
   }
 
+  /** ---- SEO ---- */
   const origin = absoluteUrl('/')
   const roundUrl = roundId ? absoluteUrl(`/round/${roundId}`) : origin
   const shareText = roundId
     ? `I just created a MadFill round! Join Round #${roundId}.`
     : `Play MadFill on Base.`
-
-  const blankPill = (active) =>
-    [
-      'inline-flex items-center justify-center px-2 h-7 text-center border-b-2 font-bold cursor-pointer mx-1 rounded',
-      active
-        ? 'border-yellow-300 text-yellow-200 bg-yellow-300/10'
-        : 'border-slate-400 text-slate-200 bg-slate-700/40'
-    ].join(' ')
-
   const seoTitle = 'MadFill — Create or Join a Round'
   const seoDesc = 'MadFill on Base. Fill the blank, vote, and win the pool.'
   const ogImage = buildOgUrl({ screen: 'home', title: 'MadFill' })
 
   return (
-    <Layout>
+    <>
       <Head>
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
@@ -336,12 +404,7 @@ export default function Home() {
         <link rel="canonical" href={origin} />
       </Head>
 
-      <SEO
-        title={seoTitle}
-        description={seoDesc}
-        url={origin}
-        image={ogImage}
-      />
+      <SEO title={seoTitle} description={seoDesc} url={origin} image={ogImage} />
 
       {showConfetti && <Confetti width={width} height={height} />}
 
@@ -375,7 +438,13 @@ export default function Home() {
 
           <CardContent className="p-5 space-y-5">
             {status && (
-              <div className="rounded-lg bg-slate-800/70 border border-slate-700 p-2 text-sm">
+              <div className={`rounded-lg p-2 text-sm border ${
+                status.startsWith('✅')
+                  ? 'bg-emerald-500/10 border-emerald-500 text-emerald-200'
+                  : status.startsWith('❌')
+                  ? 'bg-rose-500/10 border-rose-500 text-rose-200'
+                  : 'bg-slate-800/70 border-slate-700 text-slate-200'
+              }`}>
                 {status}
               </div>
             )}
@@ -410,10 +479,7 @@ export default function Home() {
                 {categories.map((cat, i) => (
                   <button
                     key={cat.name}
-                    onClick={() => {
-                      setCatIdx(i)
-                      setTplIdx(0)
-                    }}
+                    onClick={() => { setCatIdx(i); setTplIdx(0) }}
                     className={`px-3 py-2 rounded text-sm font-medium ${
                       i === catIdx
                         ? 'bg-yellow-500 text-black'
@@ -465,9 +531,7 @@ export default function Home() {
                 className="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 text-white focus:border-yellow-500 focus:outline-none"
               >
                 {durations.map((dur) => (
-                  <option key={dur.value} value={dur.value}>
-                    {dur.label}
-                  </option>
+                  <option key={dur.value} value={dur.value}>{dur.label}</option>
                 ))}
               </select>
             </div>
@@ -481,12 +545,8 @@ export default function Home() {
               </div>
             </div>
 
-            <Button
-              onClick={handleCreateRound}
-              disabled={busy || !word.trim()}
-              className="w-full"
-            >
-              {busy ? 'Creating...' : 'Create Round'}
+            <Button onClick={handleCreateRound} disabled={busy || !word.trim()} className="w-full">
+              {busy ? 'Creating…' : 'Create Round'}
             </Button>
 
             {roundId && (
@@ -494,26 +554,22 @@ export default function Home() {
                 <div className="text-green-100 font-medium mb-2">
                   Round #{roundId} created successfully!
                 </div>
-                <ShareBar url={roundUrl} title={shareText} />
+                <ShareBar url={roundUrl} text={shareText} />
               </div>
             )}
           </CardContent>
         </Card>
 
-        {/* Featured Rounds */}
+        {/* Recent Rounds */}
         <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
           <CardHeader className="border-b border-slate-700 bg-slate-800/50">
             <h2 className="text-xl font-bold">Recent Rounds</h2>
           </CardHeader>
           <CardContent className="p-5">
             {loadingFeatured ? (
-              <div className="text-center py-8 text-slate-400">
-                Loading recent rounds...
-              </div>
+              <div className="text-center py-8 text-slate-400">Loading recent rounds…</div>
             ) : featured.length === 0 ? (
-              <div className="text-center py-8 text-slate-400">
-                No rounds yet. Be the first to create one!
-              </div>
+              <div className="text-center py-8 text-slate-400">No rounds yet. Be the first to create one!</div>
             ) : (
               <div className="grid gap-4">
                 {featured.map((round) => (
@@ -525,9 +581,7 @@ export default function Home() {
                       <h3 className="font-medium">{round.name}</h3>
                       <span className="text-xs text-slate-400">#{round.id}</span>
                     </div>
-                    <div className="text-sm text-slate-300 mb-2">
-                      {round.preview}
-                    </div>
+                    <div className="text-sm text-slate-300 mb-2">{round.preview}</div>
                     <div className="flex justify-between text-xs text-slate-400">
                       <span>{round.entrants} entries</span>
                       <span>{round.poolEth.toFixed(4)} ETH pool</span>
@@ -539,8 +593,6 @@ export default function Home() {
           </CardContent>
         </Card>
       </main>
-
-      <Footer />
-    </Layout>
+    </>
   )
 }
