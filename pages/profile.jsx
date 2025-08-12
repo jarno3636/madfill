@@ -4,13 +4,10 @@
 import { useState, useEffect, useMemo } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
-import Confetti from 'react-confetti'
 import { useWindowSize } from 'react-use'
-
 import Layout from '../components/Layout'
 import SEO from '../components/SEO'
 import { absoluteUrl, buildOgUrl } from '../lib/seo'
-
 import { useMiniWallet } from '../hooks/useMiniWallet'
 import { useContracts } from '../hooks/useContracts'
 import { useUserPreferences, useStoryDrafts } from '../hooks/useLocalStorage'
@@ -20,8 +17,11 @@ import LoadingSpinner from '../components/LoadingSpinner'
 import ChainSwitcher from '../components/ChainSwitcher'
 import { formatAddress } from '../lib/validation'
 import { useMiniAppReady } from '../hooks/useMiniAppReady'
-
 import { ethers } from 'ethers'
+
+import dynamic from 'next/dynamic'
+
+const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 // ---------- chain/env ----------
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
