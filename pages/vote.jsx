@@ -2,18 +2,20 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import Head from 'next/head'
+import Link from 'next/link'
 import { ethers } from 'ethers'
+import Confetti from 'react-confetti'
+import { useWindowSize } from 'react-use'
+
+import Layout from '@/components/Layout' // ✅ wrap each page (since _app doesn't)
+import SEO from '@/components/SEO'
+import ShareBar from '@/components/ShareBar'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import abi from '@/abi/FillInStoryV3_ABI.json'
-import { useWindowSize } from 'react-use'
-import Confetti from 'react-confetti'
-import Link from 'next/link'
-import SEO from '@/components/SEO'
-import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
-import Head from 'next/head'
 
 // ---- Config ----
 const CONTRACT_ADDRESS =
@@ -24,7 +26,7 @@ const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID = 8453n
 const BASE_CHAIN_ID_HEX = '0x2105' // Base
 
-// IMPORTANT: V3 does not expose Pool2 feeBase in views. Set it in env.
+// IMPORTANT: V3 does not expose Pool2 vote fee in views. Use env.
 // Fallback: 0.0005 ETH
 const DEFAULT_VOTE_FEE_WEI = ethers.parseUnits('0.0005', 18)
 const VOTE_FEE_WEI =
@@ -116,11 +118,11 @@ export default function VotePage() {
     return buildPreviewSingle(parts, word, index)
   }
 
-  // ---- wallet / chain (observe only; connect handled in header) ----
+  // ---- wallet / chain (observe only) ----
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      if (window?.ethereum) {
+      if (typeof window !== 'undefined' && window.ethereum) {
         try {
           const accts = await window.ethereum.request({ method: 'eth_accounts' })
           if (!cancelled) setAddress(accts?.[0] || null)
@@ -284,14 +286,14 @@ export default function VotePage() {
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
-      // small buffer
+      // ✅ send configured fee with tiny buffer to avoid rounding reverts
       const value = (VOTE_FEE_WEI * 1005n) / 1000n
 
       // V3: votePool2(uint256 id, bool voteChallenger) payable
       const tx = await ct.votePool2(BigInt(id), Boolean(voteChallenger), { value })
       await tx.wait()
       setStatus('✅ Vote recorded!')
-      setSuccess(true)
+      setSuccess(true) // ✅ confetti
       await reloadCard(id)
       setTimeout(() => setSuccess(false), 1500)
     } catch (e) {
@@ -414,7 +416,7 @@ export default function VotePage() {
 
   // ---- UI ----
   return (
-    <>
+    <Layout>
       <SEO
         title={ogTitle}
         description={ogDesc}
@@ -600,6 +602,6 @@ export default function VotePage() {
 
         {status && <div className="mt-6 text-center text-yellow-300">{status}</div>}
       </main>
-    </>
+    </Layout>
   )
 }
