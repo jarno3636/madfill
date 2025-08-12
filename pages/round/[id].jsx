@@ -8,6 +8,7 @@ import abi from '@/abi/FillInStoryV3_ABI.json' // V3 ABI
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import Confetti from 'react-confetti'
+import Layout from '@/components/Layout'
 import { useWindowSize } from 'react-use'
 import Link from 'next/link'
 import Head from 'next/head'
