@@ -10,7 +10,7 @@ import { ethers } from 'ethers'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Countdown } from '@/components/Countdown'
+import Countdown from '@/components/Countdown' // ✅ default export
 import ShareBar from '@/components/ShareBar'
 import SEO from '@/components/SEO'
 import { fetchFarcasterProfile } from '@/lib/neynar'
@@ -18,7 +18,9 @@ import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
-const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_FILLIN_ADDRESS || ''
+const CONTRACT_ADDRESS =
+  process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // ✅ sensible fallback
 
 // --- helpers ---
 const needsSpaceBefore = (str) => {
@@ -70,13 +72,13 @@ export default function ActivePools() {
   })
   const roundsPerPage = 6
 
-  const provider = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [])
+  const provider = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [BASE_RPC])
   const contract = useMemo(() => {
     if (!CONTRACT_ADDRESS) return null
     return new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
-  }, [provider])
+  }, [CONTRACT_ADDRESS, provider])
 
-  // Load BASE/ETH price (Coinbase -> CoinGecko -> Alchemy -> hard fallback)
+  // Load ETH price (Coinbase → CoinGecko → Alchemy → hard fallback)
   const loadPrice = async (signal) => {
     let price = 0
     try {
@@ -149,13 +151,13 @@ export default function ActivePools() {
       if (signal?.aborted) break
       try {
         const info = await contract.getPool1Info(BigInt(i))
-        const name = info.name_ || info[0]
-        const theme = info.theme_ || info[1]
-        const parts = info.parts_ || info[2]
+        const name = info.name_ ?? info[0]
+        const theme = info.theme_ ?? info[1]
+        const parts = info.parts_ ?? info[2]
         const feeBaseWei = info.feeBase_ ?? info[3] ?? 0n
-        const feeBase = Number(ethers.formatEther(feeBaseWei))
+        const feeBase = Number(ethers.formatEther(feeBaseWei)) // ✅ ETH value used consistently
         const deadline = Number(info.deadline_ ?? info[4])
-        const participants = info.participants_ || info[6] || []
+        const participants = info.participants_ ?? info[6] ?? []
         const claimed = Boolean(info.claimed_ ?? info[8])
 
         if (!claimed && deadline > now) {
@@ -235,7 +237,8 @@ export default function ActivePools() {
       controller.abort()
       clearInterval(interval)
     }
-  }, [contract])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contract]) // provider/addr changes rebuild contract which retriggers
 
   useEffect(() => {
     setPage(1)
@@ -255,7 +258,7 @@ export default function ActivePools() {
       const matchesSearch = r.name.toLowerCase().includes(search.toLowerCase())
       const matchesFilter =
         filter === 'all' ||
-        filter === 'unclaimed' ||
+        filter === 'unclaimed' || // kept for future toggle
         (filter === 'high' && parseFloat(r.usd) >= 5)
       return matchesSearch && matchesFilter
     })
@@ -278,14 +281,14 @@ export default function ActivePools() {
   const ogImage = buildOgUrl({ screen: 'active', title: 'Active Rounds' })
 
   return (
-    <>
+    <Layout>
       {/* Farcaster Mini App / Frame meta */}
       <Head>
-        <meta name="fc:frame" content="vNext" />
-        <meta name="fc:frame:image" content={ogImage} />
-        <meta name="fc:frame:button:1" content="View Rounds" />
-        <meta name="fc:frame:button:1:action" content="link" />
-        <meta name="fc:frame:button:1:target" content={pageUrl} />
+        <meta property="fc:frame" content="vNext" />
+        <meta property="fc:frame:image" content={ogImage} />
+        <meta property="fc:frame:button:1" content="View Rounds" />
+        <meta property="fc:frame:button:1:action" content="link" />
+        <meta property="fc:frame:button:1:target" content={pageUrl} />
       </Head>
 
       {/* Standard SEO (OG/Twitter) */}
@@ -396,7 +399,7 @@ export default function ActivePools() {
                       <ShareBar
                         url={rUrl}
                         text={shareTxt}
-                        og={{ screen: 'round', roundId: r.id }}
+                        og={{ screen: 'round', roundId: String(r.id) }}
                         small
                       />
                     </div>
@@ -476,10 +479,10 @@ export default function ActivePools() {
           </div>
         )}
       </main>
-    </>
+    </Layout>
   )
 }
 
-// Tell _app.jsx we already render SEO here and want to use the global Layout only once
-ActivePools.usesOwnSEO = true     // avoid duplicate <Head> from _app if you used that pattern
-ActivePools.disableLayout = false // keep Layout from _app; set true if this file wraps its own Layout
+// (Optional hints for your app wrapper; safe to keep or remove)
+ActivePools.usesOwnSEO = true
+ActivePools.disableLayout = false
