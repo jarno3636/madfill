@@ -4,7 +4,7 @@
 import { useRouter } from 'next/router'
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { ethers } from 'ethers'
-import abi from '@/abi/FillInStoryV3_ABI.json'
+import abi from '@/abi/FillInStoryV3_ABI.json' // V3 ABI
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import Confetti from 'react-confetti'
@@ -23,10 +23,19 @@ const CONTRACT_ADDRESS =
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID_HEX = '0x2105' // 8453
 
+// ---------- error surfacing ----------
+const extractError = (e) =>
+  e?.shortMessage ||
+  e?.reason ||
+  e?.error?.message ||
+  e?.data?.message ||
+  e?.message ||
+  'Transaction failed'
+
 export default function RoundDetailPage() {
   useMiniAppReady()
   const router = useRouter()
-  const isReady = router?.isReady // 🔧 guard
+  const isReady = router?.isReady // guard for dynamic routes
   const idParam = isReady ? router.query?.id : undefined
   const id = useMemo(() => (Array.isArray(idParam) ? idParam[0] : idParam), [idParam])
 
@@ -53,7 +62,7 @@ export default function RoundDetailPage() {
   const [shareUrl, setShareUrl] = useState('')
 
   const { width, height } = useWindowSize()
-  const tickRef = useRef(null)
+  const [tick, setTick] = useState(0) // steady, explicit ticker for countdown
 
   // in-app EIP-1193 provider stash (Warpcast Mini wallet)
   const miniProvRef = useRef(null)
@@ -65,7 +74,9 @@ export default function RoundDetailPage() {
       if (wei == null) return 0
       const bi = typeof wei === 'bigint' ? wei : BigInt(wei.toString())
       return Number(ethers.formatEther(bi))
-    } catch { return 0 }
+    } catch {
+      return 0
+    }
   }
   const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
   const explorer = (path) => `https://basescan.org/${path}`
@@ -127,7 +138,7 @@ export default function RoundDetailPage() {
     if (h > 0) return `${h}h ${m}m ${sec}s`
     if (m > 0) return `${m}m ${sec}s`
     return `${sec}s`
-  }, [round?.deadline, status])
+  }, [round?.deadline, tick])
 
   const blanksCount = useMemo(() => Math.max(0, (round?.parts?.length || 0) - 1), [round?.parts])
 
@@ -145,7 +156,7 @@ export default function RoundDetailPage() {
     const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
     if (!inWarpcast) return null
     try {
-      // 🔧 try the mini app SDK; fail gracefully at runtime if unavailable
+      // try the mini app SDK; fail gracefully at runtime if unavailable
       const mod = await import('@farcaster/miniapp-sdk')
       const prov = await mod.sdk.wallet.getEthereumProvider()
       miniProvRef.current = prov
@@ -157,7 +168,7 @@ export default function RoundDetailPage() {
 
   // ---------- wallet + chain (observe only) ----------
   useEffect(() => {
-    if (!isReady) return // 🔧 wait for router
+    if (!isReady) return // wait for router
     let cancelled = false
     ;(async () => {
       if (window?.ethereum) {
@@ -191,10 +202,14 @@ export default function RoundDetailPage() {
           if (!cancelled) setAddress(addr || null)
           const net = await p.getNetwork()
           if (!cancelled) setIsOnBase(net?.chainId === 8453n)
-        } catch { /* noop */ }
+        } catch {
+          /* noop */
+        }
       }
     })()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [getEip1193, isReady])
 
   async function switchToBase() {
@@ -211,13 +226,15 @@ export default function RoundDetailPage() {
         try {
           await eip.request({
             method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: BASE_CHAIN_ID_HEX,
-              chainName: 'Base',
-              rpcUrls: [BASE_RPC],
-              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-              blockExplorerUrls: ['https://basescan.org'],
-            }],
+            params: [
+              {
+                chainId: BASE_CHAIN_ID_HEX,
+                chainName: 'Base',
+                rpcUrls: [BASE_RPC],
+                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+                blockExplorerUrls: ['https://basescan.org'],
+              },
+            ],
           })
           setIsOnBase(true)
         } catch (err) {
@@ -229,7 +246,7 @@ export default function RoundDetailPage() {
 
   // ---------- price + share url + ticker ----------
   useEffect(() => {
-    if (!isReady) return // 🔧
+    if (!isReady) return
     ;(async () => {
       try {
         const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
@@ -240,13 +257,13 @@ export default function RoundDetailPage() {
       }
     })()
     setShareUrl(absoluteUrl(router.asPath || `/round/${id || ''}`))
-    tickRef.current = setInterval(() => setStatus((s) => (s ? s : '')), 1000)
-    return () => clearInterval(tickRef.current)
+    const intId = setInterval(() => setTick((t) => t + 1), 1000)
+    return () => clearInterval(intId)
   }, [router.asPath, id, isReady])
 
   // ---------- load pool1 from V3 ----------
   useEffect(() => {
-    if (!isReady || !id) return // 🔧
+    if (!isReady || !id) return
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -286,7 +303,7 @@ export default function RoundDetailPage() {
 
         if (subms.length === 0 && (participants?.length || 0) > 0) {
           subms = await Promise.all(
-            participants.map(async (addr) => {
+            (participants || []).map(async (addr) => {
               try {
                 const s = await ct.getPool1Submission(BigInt(id), addr)
                 const username = s?.[0] || ''
@@ -333,7 +350,9 @@ export default function RoundDetailPage() {
       }
     })()
 
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [id, isReady])
 
   // ---------- input handling ----------
@@ -378,13 +397,27 @@ export default function RoundDetailPage() {
 
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
+
       const fee = round?.feeBase ?? 0n
+      if (fee <= 0n) throw new Error('Entry fee not available yet, try again.')
       const value = typeof fee === 'bigint' ? fee : BigInt(fee.toString())
+
+      const cleanWord = sanitizeWord(wordInput)
+      const username = (usernameInput || '').trim().slice(0, 32)
+
+      // Preflight for clearer reverts
+      await ct.joinPool1.staticCall(
+        BigInt(id),
+        cleanWord,
+        username,
+        Number(selectedBlank),
+        { value }
+      )
 
       const tx = await ct.joinPool1(
         BigInt(id),
-        sanitizeWord(wordInput),
-        (usernameInput || '').trim(),
+        cleanWord,
+        username,
         Number(selectedBlank),
         { value }
       )
@@ -394,7 +427,7 @@ export default function RoundDetailPage() {
       router.replace(router.asPath)
     } catch (e) {
       console.error(e)
-      const msg = e?.shortMessage || e?.reason || e?.message || 'Join failed'
+      const msg = extractError(e)
       setStatus(msg.split('\n')[0])
       setShowConfetti(false)
     } finally {
@@ -418,6 +451,10 @@ export default function RoundDetailPage() {
       }
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
+
+      // Preflight
+      await ct.claimPool1.staticCall(BigInt(id))
+
       const tx = await ct.claimPool1(BigInt(id))
       await tx.wait()
       setStatus('Payout executed')
@@ -426,7 +463,7 @@ export default function RoundDetailPage() {
       setTimeout(() => router.replace(router.asPath), 1500)
     } catch (e) {
       console.error(e)
-      const msg = e?.shortMessage || e?.reason || e?.message || 'Finalize failed'
+      const msg = extractError(e)
       setStatus(msg.split('\n')[0])
       setShowConfetti(false)
     } finally {
@@ -435,8 +472,8 @@ export default function RoundDetailPage() {
   }
 
   // ---------- render ----------
-  const feeEth = toEth(round?.feeBase)
-  const poolEth = toEth(round?.poolBalance)
+  const feeEth = useMemo(() => toEth(round?.feeBase), [round?.feeBase])
+  const poolEth = useMemo(() => toEth(round?.poolBalance), [round?.poolBalance])
   const feeUsd = feeEth * priceUsd
   const poolUsd = poolEth * priceUsd
   const canJoin =
@@ -453,17 +490,17 @@ export default function RoundDetailPage() {
   const pageTitle = round?.name ? `${round.name} — MadFill` : id ? `MadFill Round #${id}` : 'MadFill Round'
   const pageDesc = 'Join a MadFill round on Base. Fill the blank, compete, and win the pot.'
   const pageUrl = shareUrl || absoluteUrl(`/round/${id || ''}`)
-  const ogImage = buildOgUrl({ screen: 'round', roundId: String(id || '') }) // 🔧 stringify
+  const ogImage = buildOgUrl({ screen: 'round', roundId: String(id || '') }) // stringify id
 
   return (
     <>
       <Head>
         {/* Farcaster Mini App frame meta */}
-        <meta name="fc:frame" content="vNext" />
-        <meta name="fc:frame:image" content={ogImage} />
-        <meta name="fc:frame:button:1" content="Open Round" />
-        <meta name="fc:frame:button:1:action" content="link" />
-        <meta name="fc:frame:button:1:target" content={pageUrl} />
+        <meta property="fc:frame" content="vNext" />
+        <meta property="fc:frame:image" content={ogImage} />
+        <meta property="fc:frame:button:1" content="Open Round" />
+        <meta property="fc:frame:button:1:action" content="link" />
+        <meta property="fc:frame:button:1:target" content={pageUrl} />
       </Head>
       <SEO title={pageTitle} description={pageDesc} url={pageUrl} image={ogImage} />
 
@@ -504,7 +541,9 @@ export default function RoundDetailPage() {
                 <CardContent className="p-5 min-h-[140px]">
                   <p className="text-center italic text-lg leading-relaxed">
                     {(() => {
-                      const creatorSub = submissions.find(s => s.addr?.toLowerCase?.() === round.creator?.toLowerCase?.())
+                      const creatorSub = submissions.find(
+                        (s) => s.addr?.toLowerCase?.() === round.creator?.toLowerCase?.()
+                      )
                       return creatorSub?.preview || buildPreviewSingle(round.parts, '', 0)
                     })()}
                   </p>
@@ -561,7 +600,7 @@ export default function RoundDetailPage() {
                                     ? 'bg-slate-800/40 border-slate-700 text-slate-500 cursor-not-allowed'
                                     : isActive
                                     ? 'bg-indigo-600 border-indigo-500 text-white'
-                                    : 'bg-slate-800/70 border-slate-700 text-slate-200 hover:bg-slate-700/70'
+                                    : 'bg-slate-800/70 border-slate-700 text-slate-200 hover:bg-slate-700/70',
                                 ].join(' ')}
                                 title={isTaken ? 'Already taken by another entry' : `Insert into Blank #${i + 1}`}
                               >
@@ -635,9 +674,7 @@ export default function RoundDetailPage() {
                       >
                         {busy ? 'Submitting…' : 'Join Round'}
                       </Button>
-                      <span className="text-xs text-slate-400">
-                        USD is informational. Fees handled on-chain.
-                      </span>
+                      <span className="text-xs text-slate-400">USD is informational. Fees handled on-chain.</span>
                     </div>
 
                     {status && <div className="text-yellow-300 text-sm">{status}</div>}
@@ -665,12 +702,7 @@ export default function RoundDetailPage() {
                   {round.claimed && round.winner && (
                     <span className="text-sm text-green-400">
                       Winner:{' '}
-                      <a
-                        className="underline decoration-dotted"
-                        href={explorer(`address/${round.winner}`)}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
+                      <a className="underline decoration-dotted" href={explorer(`address/${round.winner}`)} target="_blank" rel="noreferrer">
                         {shortAddr(round.winner)}
                       </a>
                     </span>
@@ -697,18 +729,15 @@ export default function RoundDetailPage() {
                           width={28}
                           height={28}
                           className="rounded-full ring-1 ring-slate-700"
-                          onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
+                          onError={(e) => {
+                            e.currentTarget.src = '/Capitalize.PNG'
+                          }}
                         />
                         <div className="truncate text-sm">{s.username || shortAddr(s.addr)}</div>
                       </div>
                       <div className="mt-2 text-xs italic line-clamp-3">{s.preview}</div>
                       <div className="mt-2 flex items-center gap-3 text-[11px]">
-                        <a
-                          className="underline text-slate-300"
-                          target="_blank"
-                          rel="noreferrer"
-                          href={explorer(`address/${s.addr}`)}
-                        >
+                        <a className="underline text-slate-300" target="_blank" rel="noreferrer" href={explorer(`address/${s.addr}`)}>
                           Explorer
                         </a>
                       </div>
@@ -721,11 +750,7 @@ export default function RoundDetailPage() {
             {/* Social & nav */}
             <div className="mt-6 rounded-xl bg-slate-900/70 border border-slate-700 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <ShareBar
-                  url={pageUrl}
-                  text={`Join my MadFill round: ${round?.name || ''}`}
-                  og={{ screen: 'round', roundId: String(id) }}
-                />
+                <ShareBar url={pageUrl} text={`Join my MadFill round: ${round?.name || ''}`} og={{ screen: 'round', roundId: String(id) }} />
                 {/* ensures an image embed */}
                 <Link href="/active" className="underline text-indigo-300">
                   ← Back to Active Rounds
@@ -733,7 +758,9 @@ export default function RoundDetailPage() {
               </div>
             </div>
 
-            {(showConfetti || (youWon && (round.claimed || claimedNow))) && <Confetti width={width} height={height} />}
+            {(showConfetti || (youWon && (round.claimed || claimedNow))) && width > 0 && height > 0 && (
+              <Confetti width={width} height={height} />
+            )}
           </>
         )}
       </main>
