@@ -4,7 +4,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
-import { ethers } from 'ethers'b
+import { ethers } from 'ethers'
 import { useWindowSize } from 'react-use'
 import abi from '../abi/FillInStoryV3_ABI.json'
 import { Button } from '../components/ui/button'
