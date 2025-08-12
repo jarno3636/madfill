@@ -1,4 +1,4 @@
-// components/CountdownRing.jsx
+// components/Countdown.jsx
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
