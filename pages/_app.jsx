@@ -10,7 +10,7 @@ import '@/styles/globals.css'
 export default function App({ Component, pageProps }) {
   const router = useRouter()
 
-  // Track page views (guard in case events is undefined during hydration)
+  // Track page views
   useEffect(() => {
     const handleRouteChange = (url) => {
       try { pageview(url) } catch {}
@@ -19,7 +19,7 @@ export default function App({ Component, pageProps }) {
     return () => router.events?.off('routeChangeComplete', handleRouteChange)
   }, [router.events])
 
-  // Runtime error + unhandled rejection tracking (what we previously had in _document)
+  // Client-side error tracking
   useEffect(() => {
     if (typeof window === 'undefined') return
 
@@ -31,6 +31,7 @@ export default function App({ Component, pageProps }) {
         })
       }
     }
+
     const onRejection = (e) => {
       if (window.gtag) {
         window.gtag('event', 'exception', {
@@ -39,4 +40,47 @@ export default function App({ Component, pageProps }) {
         })
       }
     }
-   
+
+    window.addEventListener('error', onError)
+    window.addEventListener('unhandledrejection', onRejection)
+    return () => {
+      window.removeEventListener('error', onError)
+      window.removeEventListener('unhandledrejection', onRejection)
+    }
+  }, [])
+
+  // Cleanup
+  useEffect(() => {
+    return () => {
+      try { performanceMonitor.cleanup?.() } catch {}
+    }
+  }, [])
+
+  return (
+    <ErrorBoundary>
+      {GA_TRACKING_ID ? (
+        <>
+          <Script
+            strategy="afterInteractive"
+            src={`https://www.googletagmanager.com/gtag/js?id=${GA_TRACKING_ID}`}
+          />
+          <Script
+            id="gtag-init"
+            strategy="afterInteractive"
+            dangerouslySetInnerHTML={{
+              __html: `
+                window.dataLayer = window.dataLayer || [];
+                function gtag(){ dataLayer.push(arguments); }
+                gtag('js', new Date());
+                gtag('config', '${GA_TRACKING_ID}', { page_path: window.location.pathname });
+              `,
+            }}
+          />
+        </>
+      ) : null}
+
+      <Script strategy="afterInteractive" src="/_vercel/insights/script.js" />
+      <Component {...pageProps} />
+    </ErrorBoundary>
+  )
+}
