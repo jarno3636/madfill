@@ -37,6 +37,7 @@ const extractError = (e) =>
 
 export default function RoundDetailPage() {
   useMiniAppReady()
+
   const router = useRouter()
   const isReady = router?.isReady // guard for dynamic routes
   const idParam = isReady ? router.query?.id : undefined
@@ -156,7 +157,8 @@ export default function RoundDetailPage() {
   const getEip1193 = useCallback(async () => {
     if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
     if (miniProvRef.current) return miniProvRef.current
-    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+    const inWarpcast =
+      typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
     if (!inWarpcast) return null
     try {
       // try the mini app SDK; fail gracefully at runtime if unavailable
@@ -174,7 +176,7 @@ export default function RoundDetailPage() {
     if (!isReady) return // wait for router
     let cancelled = false
     ;(async () => {
-      if (window?.ethereum) {
+      if (typeof window !== 'undefined' && window.ethereum) {
         try {
           const accts = await window.ethereum.request({ method: 'eth_accounts' })
           if (!cancelled) setAddress(accts?.[0] || null)
@@ -186,7 +188,9 @@ export default function RoundDetailPage() {
         } catch {
           if (!cancelled) setIsOnBase(true)
         }
-        const onChain = () => location.reload()
+        const onChain = () => {
+          if (typeof window !== 'undefined') window.location.reload()
+        }
         const onAcct = (accs) => setAddress(accs?.[0] || null)
         window.ethereum.on?.('chainChanged', onChain)
         window.ethereum.on?.('accountsChanged', onAcct)
@@ -252,7 +256,9 @@ export default function RoundDetailPage() {
     if (!isReady) return
     ;(async () => {
       try {
-        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
+        const r = await fetch(
+          'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd'
+        )
         const j = await r.json()
         setPriceUsd(j?.ethereum?.usd || 3800)
       } catch {
@@ -281,7 +287,7 @@ export default function RoundDetailPage() {
         const theme = info.theme_ ?? info[1]
         const parts = info.parts_ ?? info[2]
         const feeBase = info.feeBase_ ?? info[3]
-        const deadline = Number(info.deadline_ ?? info[4])
+        const deadline = Number(info.deadline_ ?? info[4]
         const creator = info.creator_ ?? info[5]
         const participants = info.participants_ ?? info[6]
         const winner = info.winner_ ?? info[7]
