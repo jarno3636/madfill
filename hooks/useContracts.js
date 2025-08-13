@@ -1,254 +1,301 @@
-import { useState, useEffect, useCallback } from 'react';
-import { ethers } from 'ethers';
-import { useMiniWallet } from './useMiniWallet';
+'use client'
 
-// Contract addresses from environment variables
-const CONTRACT_ADDRESSES = {
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { ethers } from 'ethers'
+import { useMiniWallet } from './useMiniWallet'
+
+/**
+ * ENV + constants
+ */
+const ADDRS = {
   FILL_IN_STORY: process.env.NEXT_PUBLIC_FILLIN_ADDRESS || '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b',
-  MAD_FILL_NFT: process.env.NEXT_PUBLIC_MADFILL_NFT_ADDRESS || '0x0F22124A86F8893990fA4763393E46d97F4AF8E0c'
-};
+  // ⬇️ you told me this exact address/name earlier — using it here
+  MADFILL_TEMPLATE_NFT: process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS || '0x0F22124A86F8893990fA4763393E46d97F429442',
+}
+const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+const CHAIN_ID = Number(process.env.NEXT_PUBLIC_CHAIN_ID || '8453')
 
-const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org';
-const CHAIN_ID = parseInt(process.env.NEXT_PUBLIC_CHAIN_ID || '8453');
-
-// Import ABIs
-let FILL_IN_STORY_ABI, MAD_FILL_NFT_ABI;
-
-// Dynamically import ABIs
-async function loadABIs() {
-  try {
-    const [fillInStoryABI, madFillNFTABI] = await Promise.all([
-      import('../abi/FillInStoryV3_ABI.json'),
-      import('../abi/MadFillTemplateNFT_ABI.json')
-    ]);
-    
-    FILL_IN_STORY_ABI = fillInStoryABI.default || fillInStoryABI;
-    MAD_FILL_NFT_ABI = madFillNFTABI.default || madFillNFTABI;
-  } catch (error) {
-    console.error('Failed to load ABIs:', error);
-    // Fallback minimal ABI
-    FILL_IN_STORY_ABI = [
-      "function createPool1(string memory name, string memory theme, string[] memory parts, string memory word, string memory username, uint256 entryFee, uint256 duration, uint256 blankIndex) external payable",
-      "function joinPool1(uint256 poolId, string memory word, uint256 blankIndex) external payable",
-      "function getPool1Info(uint256 poolId) external view returns (string, string, string[], uint256, uint256, address, address[], uint256, uint256, uint256)",
-      "function pool1Count() external view returns (uint256)",
-      "event Pool1Created(uint256 indexed id, address indexed creator, string name)"
-    ];
-    
-    MAD_FILL_NFT_ABI = [
-      "function mint(address to, string memory tokenURI) external",
-      "function tokenURI(uint256 tokenId) external view returns (string)",
-      "function balanceOf(address owner) external view returns (uint256)",
-      "function tokenOfOwnerByIndex(address owner, uint256 index) external view returns (uint256)"
-    ];
-  }
+/**
+ * ABIs (loaded once)
+ * You can also import JSON directly; keeping dynamic import to avoid any SSR pitfalls.
+ */
+let V3_ABI, TEMPLATE_NFT_ABI
+async function loadAbis() {
+  if (V3_ABI && TEMPLATE_NFT_ABI) return
+  const [v3, nft] = await Promise.all([
+    import('../abi/FillInStoryV3_ABI.json'),
+    import('../abi/MadFillTemplateNFT_ABI.json'),
+  ])
+  V3_ABI = v3.default || v3
+  TEMPLATE_NFT_ABI = nft.default || nft
 }
 
+/**
+ * Helpers
+ */
+const toBigInt = (x) => (typeof x === 'bigint' ? x : BigInt(x?.toString?.() ?? '0'))
+
+const extractError = (e) =>
+  e?.shortMessage || e?.reason || e?.error?.message || e?.data?.message || e?.message || 'Transaction failed'
+
+/**
+ * Hook
+ */
 export function useContracts() {
-  const { address, isConnected } = useMiniWallet();
-  const [contracts, setContracts] = useState(null);
-  const [provider, setProvider] = useState(null);
-  const [signer, setSigner] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [abiLoaded, setAbiLoaded] = useState(false);
+  const { address, isConnected } = useMiniWallet()
+  const [provider, setProvider] = useState(null)          // read-only
+  const [signer, setSigner] = useState(null)              // connected signer (if available)
+  const [contracts, setContracts] = useState(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [isReady, setIsReady] = useState(false)
 
-  // Load ABIs on mount
+  // init provider (always)
   useEffect(() => {
-    loadABIs().then(() => setAbiLoaded(true));
-  }, []);
+    const rp = new ethers.JsonRpcProvider(BASE_RPC)
+    setProvider(rp)
+  }, [])
 
-  // Initialize provider and contracts
+  // load ABIs once
   useEffect(() => {
-    async function initializeContracts() {
-      if (!abiLoaded) return;
-      
+    let cancelled = false
+    ;(async () => {
       try {
-        setIsLoading(true);
-        setError(null);
-
-        // Always initialize read-only provider
-        const readProvider = new ethers.JsonRpcProvider(BASE_RPC);
-        setProvider(readProvider);
-
-        let ethSigner = null;
-
-        // If connected, try to get signer
-        if (isConnected && address) {
-          try {
-            if (typeof window !== 'undefined' && window.ethereum) {
-              const browserProvider = new ethers.BrowserProvider(window.ethereum);
-              
-              // Check if we're on the correct network
-              const network = await browserProvider.getNetwork();
-              if (Number(network.chainId) !== CHAIN_ID) {
-                try {
-                  await window.ethereum.request({
-                    method: 'wallet_switchEthereumChain',
-                    params: [{ chainId: `0x${CHAIN_ID.toString(16)}` }],
-                  });
-                } catch (switchError) {
-                  console.warn('Failed to switch network:', switchError);
-                }
-              }
-              
-              ethSigner = await browserProvider.getSigner();
-              setSigner(ethSigner);
-            }
-          } catch (signerError) {
-            console.warn('Failed to get signer:', signerError);
-            // Continue with read-only mode
-          }
-        }
-
-        // Initialize contracts
-        const contractProvider = ethSigner || readProvider;
-        
-        const fillInStoryContract = new ethers.Contract(
-          CONTRACT_ADDRESSES.FILL_IN_STORY,
-          FILL_IN_STORY_ABI,
-          contractProvider
-        );
-
-        const madFillNFTContract = new ethers.Contract(
-          CONTRACT_ADDRESSES.MAD_FILL_NFT,
-          MAD_FILL_NFT_ABI,
-          contractProvider
-        );
-
-        setContracts({
-          fillInStory: fillInStoryContract,
-          madFillNFT: madFillNFTContract
-        });
-
-      } catch (err) {
-        console.error('Failed to initialize contracts:', err);
-        setError(err);
-      } finally {
-        setIsLoading(false);
+        await loadAbis()
+        if (!cancelled) setIsReady(true)
+      } catch (e) {
+        console.error('ABI load failed:', e)
+        if (!cancelled) setError(e)
       }
-    }
+    })()
+    return () => { cancelled = true }
+  }, [])
 
-    initializeContracts();
-  }, [isConnected, address, abiLoaded]);
+  // signer (if connected)
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      if (!(isConnected && address)) {
+        setSigner(null)
+        return
+      }
+      try {
+        if (typeof window !== 'undefined' && window.ethereum) {
+          const browserProvider = new ethers.BrowserProvider(window.ethereum)
+          const net = await browserProvider.getNetwork()
+          if (Number(net.chainId) !== CHAIN_ID) {
+            try {
+              await window.ethereum.request({
+                method: 'wallet_switchEthereumChain',
+                params: [{ chainId: `0x${CHAIN_ID.toString(16)}` }],
+              })
+            } catch (switchErr) {
+              console.warn('Network switch failed (continuing in read-only):', switchErr)
+            }
+          }
+          const s = await browserProvider.getSigner()
+          if (!cancelled) setSigner(s)
+        } else {
+          setSigner(null)
+        }
+      } catch (e) {
+        console.warn('Failed to get signer, continuing read-only:', e)
+        if (!cancelled) setSigner(null)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [isConnected, address])
 
-  // Helper function for error handling
-  const handleContractError = useCallback((error, operation) => {
-    console.error(`${operation} failed:`, error);
-    
-    let message = 'Transaction failed';
-    if (error.reason) {
-      message = error.reason;
-    } else if (error.message?.includes('user rejected')) {
-      message = 'Transaction cancelled by user';
-    } else if (error.message?.includes('insufficient funds')) {
-      message = 'Insufficient funds for transaction';
-    }
-    
-    throw new Error(message);
-  }, []);
-
-  // Contract interaction methods
-  const createPool1 = useCallback(async (name, theme, parts, word, username, entryFee, duration, blankIndex) => {
-    if (!contracts?.fillInStory || !signer) {
-      throw new Error('Wallet not connected or contracts not initialized');
-    }
-
+  // build contract instances (prefer signer else provider)
+  useEffect(() => {
+    if (!isReady || !provider) return
+    let cancelled = false
+    setIsLoading(true)
+    setError(null)
     try {
-      const feeWei = ethers.parseEther(entryFee.toString());
-      const durationSeconds = BigInt(duration * 86400); // Convert days to seconds
-      
-      const tx = await contracts.fillInStory.createPool1(
-        name,
-        theme,
-        parts,
-        word,
-        username,
-        feeWei,
-        durationSeconds,
-        blankIndex,
-        { value: feeWei }
-      );
-      
-      const receipt = await tx.wait();
-      return { tx, receipt };
-    } catch (error) {
-      handleContractError(error, 'Create Pool');
+      const runner = signer || provider
+      const fillInStory = new ethers.Contract(ADDRS.FILL_IN_STORY, V3_ABI, runner)
+      const templateNft = new ethers.Contract(ADDRS.MADFILL_TEMPLATE_NFT, TEMPLATE_NFT_ABI, runner)
+      if (!cancelled) setContracts({ fillInStory, templateNft })
+    } catch (e) {
+      console.error('Contract init failed:', e)
+      if (!cancelled) setError(e)
+    } finally {
+      setIsLoading(false)
     }
-  }, [contracts, signer, handleContractError]);
+    return () => { cancelled = true }
+  }, [isReady, provider, signer])
 
-  const joinPool1 = useCallback(async (poolId, word, blankIndex, entryFee) => {
-    if (!contracts?.fillInStory || !signer) {
-      throw new Error('Wallet not connected or contracts not initialized');
-    }
-
-    try {
-      const feeWei = ethers.parseEther(entryFee.toString());
-      
-      const tx = await contracts.fillInStory.joinPool1(
-        poolId,
-        word,
-        blankIndex,
-        { value: feeWei }
-      );
-      
-      const receipt = await tx.wait();
-      return { tx, receipt };
-    } catch (error) {
-      handleContractError(error, 'Join Pool');
-    }
-  }, [contracts, signer, handleContractError]);
-
+  /**
+   * ---------- V3 Pool (feeBase consistency) ----------
+   * NOTE: V3 getPool1Info returns (from your page code):
+   * [name, theme, parts, feeBase, deadline, creator, participants, winner, claimed, poolBalance]
+   */
   const getPool1Info = useCallback(async (poolId) => {
-    if (!contracts?.fillInStory) {
-      throw new Error('Contracts not initialized');
-    }
-
+    if (!contracts?.fillInStory) throw new Error('Contracts not ready')
     try {
-      const info = await contracts.fillInStory.getPool1Info(poolId);
+      const info = await contracts.fillInStory.getPool1Info(toBigInt(poolId))
+      // Normalize by named keys used across the app
       return {
-        name: info[0],
-        theme: info[1],
-        parts: info[2],
-        entryFee: info[3],
-        deadline: info[4],
-        creator: info[5],
-        participants: info[6],
-        currentParticipants: info[7],
-        maxParticipants: info[8],
-        poolBalance: info[9]
-      };
-    } catch (error) {
-      handleContractError(error, 'Get Pool Info');
+        name: info.name_ ?? info[0],
+        theme: info.theme_ ?? info[1],
+        parts: info.parts_ ?? info[2],
+        feeBase: toBigInt(info.feeBase_ ?? info[3]),
+        deadline: Number(info.deadline_ ?? info[4]),
+        creator: info.creator_ ?? info[5],
+        participants: info.participants_ ?? info[6],
+        winner: info.winner_ ?? info[7],
+        claimed: Boolean(info.claimed_ ?? info[8]),
+        poolBalance: toBigInt(info.poolBalance_ ?? info[9]),
+      }
+    } catch (e) {
+      throw new Error(extractError(e))
     }
-  }, [contracts, handleContractError]);
+  }, [contracts])
 
-  const getPool1Count = useCallback(async () => {
-    if (!contracts?.fillInStory) {
-      throw new Error('Contracts not initialized');
-    }
-
+  const joinPool1 = useCallback(async (poolId, word, username, blankIndex, feeBaseWei) => {
+    if (!contracts?.fillInStory || !signer) throw new Error('Wallet not connected or contracts not initialized')
     try {
-      const count = await contracts.fillInStory.pool1Count();
-      return Number(count);
-    } catch (error) {
-      handleContractError(error, 'Get Pool Count');
+      const id = toBigInt(poolId)
+      const value = toBigInt(feeBaseWei) // feeBase is authoritative (chain-calculated)
+
+      // Preflight for better errors
+      await contracts.fillInStory.joinPool1.staticCall(
+        id,
+        String(word),
+        String(username || '').slice(0, 32),
+        Number(blankIndex),
+        { value }
+      )
+
+      const tx = await contracts.fillInStory.joinPool1(
+        id,
+        String(word),
+        String(username || '').slice(0, 32),
+        Number(blankIndex),
+        { value }
+      )
+      const receipt = await tx.wait()
+      return { tx, receipt }
+    } catch (e) {
+      throw new Error(extractError(e))
     }
-  }, [contracts, handleContractError]);
+  }, [contracts, signer])
+
+  // Optional: createPool1 (if the UI needs it); uses entryFee only as value
+  const createPool1 = useCallback(async ({
+    name, theme, parts, word, username, entryFeeWei, durationSeconds, blankIndex
+  }) => {
+    if (!contracts?.fillInStory || !signer) throw new Error('Wallet not connected or contracts not initialized')
+    try {
+      const value = toBigInt(entryFeeWei ?? 0n)
+      const dur = toBigInt(durationSeconds ?? 0n)
+
+      await contracts.fillInStory.createPool1.staticCall(
+        String(name), String(theme), parts, String(word), String(username || '').slice(0,32),
+        value, dur, Number(blankIndex), { value }
+      )
+      const tx = await contracts.fillInStory.createPool1(
+        String(name), String(theme), parts, String(word), String(username || '').slice(0,32),
+        value, dur, Number(blankIndex), { value }
+      )
+      const receipt = await tx.wait()
+      return { tx, receipt }
+    } catch (e) {
+      throw new Error(extractError(e))
+    }
+  }, [contracts, signer])
+
+  /**
+   * ---------- Template NFT wiring ----------
+   * From your ABI:
+   * - getMintPriceWei() -> uint256
+   * - mintTemplate(title, description, theme, parts[]) payable
+   * - plus view helpers (BLANK, etc.)
+   */
+  const getTemplateMintPrice = useCallback(async () => {
+    if (!contracts?.templateNft) throw new Error('Contracts not ready')
+    try {
+      const p = await contracts.templateNft.getMintPriceWei()
+      return toBigInt(p)
+    } catch (e) {
+      throw new Error(extractError(e))
+    }
+  }, [contracts])
+
+  const mintTemplate = useCallback(async ({ title, description, theme, parts }) => {
+    if (!contracts?.templateNft || !signer) throw new Error('Wallet not connected or contracts not initialized')
+    try {
+      const price = await contracts.templateNft.getMintPriceWei()
+      const value = toBigInt(price)
+
+      // Preflight
+      await contracts.templateNft.mintTemplate.staticCall(
+        String(title), String(description || ''), String(theme || ''), parts, { value }
+      )
+
+      const tx = await contracts.templateNft.mintTemplate(
+        String(title), String(description || ''), String(theme || ''), parts, { value }
+      )
+      const receipt = await tx.wait()
+      return { tx, receipt }
+    } catch (e) {
+      throw new Error(extractError(e))
+    }
+  }, [contracts, signer])
+
+  /**
+   * getUserNFTs (no ERC721Enumerable in your ABI)
+   * We’ll derive by scanning Transfer logs TO the user. You can optimize by
+   * setting NEXT_PUBLIC_TEMPLATE_NFT_DEPLOY_BLOCK to narrow the scan range.
+   */
+  const getUserNFTs = useCallback(async (owner) => {
+    const o = (owner || address)
+    if (!o) return []
+    if (!provider) return []
+    const contract = new ethers.Contract(ADDRS.MADFILL_TEMPLATE_NFT, TEMPLATE_NFT_ABI, provider)
+
+    const iface = new ethers.Interface([
+      'event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)'
+    ])
+    const transferTopic = iface.getEvent('Transfer').topicHash
+    const fromBlock = Number(process.env.NEXT_PUBLIC_TEMPLATE_NFT_DEPLOY_BLOCK || '0') || 0
+
+    // All transfers to owner
+    const logs = await provider.getLogs({
+      address: ADDRS.MADFILL_TEMPLATE_NFT,
+      fromBlock,
+      toBlock: 'latest',
+      topics: [transferTopic, null, ethers.zeroPadValue(o, 32)],
+    })
+
+    // reconstruct current balance set (include later transfers out)
+    const owned = new Set()
+    for (const log of logs) {
+      const parsed = iface.parseLog(log)
+      const { from, to, tokenId } = parsed.args
+      const id = Number(tokenId)
+      if (to.toLowerCase() === o.toLowerCase()) owned.add(id)
+      if (from.toLowerCase() === o.toLowerCase()) owned.delete(id)
+    }
+    return Array.from(owned).sort((a,b)=>a-b)
+  }, [address, provider])
 
   return {
-    contracts,
-    provider,
-    signer,
-    isLoading,
-    error,
-    isReady: abiLoaded && contracts !== null,
-    // Contract methods
-    createPool1,
-    joinPool1,
+    // status
+    provider, signer, contracts, isLoading, error, isReady: Boolean(contracts),
+
+    // V3 Pool
     getPool1Info,
-    getPool1Count,
-    // Contract addresses for reference
-    addresses: CONTRACT_ADDRESSES
-  };
+    joinPool1,
+    createPool1, // optional if needed by UI
+
+    // Template NFT
+    getTemplateMintPrice,
+    mintTemplate,
+    getUserNFTs,
+
+    // addresses
+    addresses: { ...ADDRS, chainId: CHAIN_ID },
+  }
 }
