@@ -7,7 +7,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { ethers } from 'ethers'
 import { useWindowSize } from 'react-use'
-import Layout from '@/components/Layout'                 // ✅ wrap each page
+import Layout from '@/components/Layout'
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -168,7 +168,9 @@ export default function ChallengePage() {
         } catch {
           if (!cancelled) setIsOnBase(true)
         }
-        const onChain = () => location.reload()
+        const onChain = () => {
+          try { window.location.reload() } catch {}
+        }
         const onAcct = (accs) => setAddress(accs?.[0] || null)
         window.ethereum.on?.('chainChanged', onChain)
         window.ethereum.on?.('accountsChanged', onAcct)
@@ -199,7 +201,7 @@ export default function ChallengePage() {
     ;(async () => {
       try {
         const p = await fetchFarcasterProfile(address)
-        if (p?.username) setUsername((u) => u || p.username)
+        if (p?.username) setUsername((u) => (u ? u : p.username.slice(0, 32)))
       } catch {}
     })()
   }, [address])
@@ -239,7 +241,9 @@ export default function ChallengePage() {
   // ---------- ticks / UX ----------
   useEffect(() => {
     tickRef.current = setInterval(() => setStatus((s) => (s ? s : '')), 1200)
-    return () => clearInterval(tickRef.current)
+    return () => {
+      if (tickRef.current) clearInterval(tickRef.current)
+    }
   }, [])
 
   // ---------- load target round info ----------
@@ -252,6 +256,7 @@ export default function ChallengePage() {
       return
     }
     let cancelled = false
+    const controller = new AbortController()
     setLoadingRound(true)
     setStatus('')
 
@@ -260,14 +265,16 @@ export default function ChallengePage() {
         const provider = new ethers.JsonRpcProvider(BASE_RPC)
         const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
         const info = await ct.getPool1Info(BigInt(roundId))
+        if (cancelled || controller.signal.aborted) return
+
         const name = info.name_ ?? info[0]
         const _parts = info.parts_ ?? info[2]
         const creator = info.creator_ ?? info[5]
 
         const sub = await ct.getPool1Submission(BigInt(roundId), creator)
+        if (cancelled || controller.signal.aborted) return
         const origWordRaw = sub.word_ ?? sub[1] // stored as "idx::word"
 
-        if (cancelled) return
         setParts(Array.isArray(_parts) ? _parts : [])
         setCreatorAddr(creator)
         setOriginalWordRaw(origWordRaw || '')
@@ -289,7 +296,10 @@ export default function ChallengePage() {
       }
     })()
 
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
   }, [roundId])
 
   // Clamp blank index whenever parts change
@@ -308,6 +318,7 @@ export default function ChallengePage() {
       if (!eip) throw new Error('No wallet detected')
       if (!roundId || !/^\d+$/.test(String(roundId))) throw new Error('Invalid Round ID')
       if (!parts.length) throw new Error('Round has no template loaded yet')
+
       const cleanWord = sanitizeWord(word)
       if (!cleanWord || wordError) throw new Error(wordError || 'Invalid word')
 
@@ -323,20 +334,20 @@ export default function ChallengePage() {
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
-      const encodedWord = `${blankIndex}::${cleanWord}`           // matches V3 read pattern
+      const encodedWord = `${blankIndex}::${cleanWord}`
       const safeFee = Number.isFinite(feeEth) && feeEth >= 0 ? feeEth : DEFAULT_FEE_ETH
-      const feeBase = ethers.parseUnits(String(safeFee), 18)      // ✅ feeBase (wei)
+      const feeBase = ethers.parseUnits(String(safeFee), 18) // wei
       const duration = BigInt(
-        Number.isFinite(durationSec) ? durationSec : DEFAULT_DURATION_SECONDS
+        Number.isFinite(durationSec) && durationSec > 0 ? durationSec : DEFAULT_DURATION_SECONDS
       )
 
-      // ✅ slight buffer on msg.value to avoid rounding reverts
+      // Slight buffer to avoid rounding reverts
       const value = (feeBase * 1005n) / 1000n
 
       const tx = await ct.createPool2(
         BigInt(roundId),
         encodedWord,
-        username || '',
+        (username || '').slice(0, 32),
         feeBase,
         duration,
         { value }
@@ -344,7 +355,7 @@ export default function ChallengePage() {
 
       await tx.wait()
       setStatus(`Challenger submitted to Round #${roundId}`)
-      setShowConfetti(true)                             // ✅ confetti patch
+      setShowConfetti(true)
       setTimeout(() => setShowConfetti(false), 2200)
       setTimeout(() => router.push('/vote'), 1400)
     } catch (err) {
@@ -566,7 +577,7 @@ export default function ChallengePage() {
 
             {status && <div className="text-sm text-yellow-300">{status}</div>}
 
-            {status.toLowerCase().includes('submitted') && (
+            {String(status).toLowerCase().includes('submitted') && (
               <div className="text-sm mt-4 flex items-center justify-between">
                 <ShareBar
                   url={`${origin}/vote`}
