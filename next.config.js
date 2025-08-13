@@ -3,19 +3,16 @@ const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
   output: 'standalone',
-  
+
   images: {
     domains: [
       'warpcast.com',
-      'imagedelivery.net', 
+      'imagedelivery.net',
       'res.cloudinary.com',
-      'madfill.vercel.app'
+      'madfill.vercel.app',
     ],
     remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: '**',
-      },
+      { protocol: 'https', hostname: '**' },
     ],
   },
 
@@ -24,49 +21,38 @@ const nextConfig = {
       {
         source: '/(.*)',
         headers: [
-          {
-            key: 'X-Frame-Options',
-            value: 'ALLOWALL'
-          },
+          { key: 'X-Frame-Options', value: 'ALLOWALL' },
           {
             key: 'Content-Security-Policy',
-            value: "frame-ancestors 'self' https://warpcast.com https://*.warpcast.com;"
+            value: "frame-ancestors 'self' https://warpcast.com https://*.warpcast.com;",
           },
-          {
-            key: 'X-Content-Type-Options',
-            value: 'nosniff'
-          },
-          {
-            key: 'X-XSS-Protection',
-            value: '1; mode=block'
-          },
-          {
-            key: 'Referrer-Policy',
-            value: 'origin-when-cross-origin'
-          },
-          {
-            key: 'Permissions-Policy',
-            value: 'geolocation=(), microphone=(), camera=()'
-          }
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'X-XSS-Protection', value: '1; mode=block' },
+          { key: 'Referrer-Policy', value: 'origin-when-cross-origin' },
+          { key: 'Permissions-Policy', value: 'geolocation=(), microphone=(), camera=()' },
         ],
       },
       {
         source: '/.well-known/farcaster.json',
         headers: [
-          {
-            key: 'Content-Type',
-            value: 'application/json'
-          },
-          {
-            key: 'Cache-Control',
-            value: 'public, max-age=300'
-          }
+          { key: 'Content-Type', value: 'application/json' },
+          { key: 'Cache-Control', value: 'public, max-age=300' },
         ],
-      }
-    ];
+      },
+    ]
   },
 
   webpack: (config, { buildId, dev, isServer, defaultLoaders, webpack }) => {
+    // ----- Fix: make `self` safe on the server to avoid SSR crashes from client libs -----
+    if (isServer) {
+      config.plugins.push(
+        new webpack.DefinePlugin({
+          self: 'globalThis',
+        })
+      )
+    }
+
+    // Your existing optimization split chunk
     config.optimization = {
       ...config.optimization,
       splitChunks: {
@@ -79,17 +65,17 @@ const nextConfig = {
           },
         },
       },
-    };
+    }
 
-    // Handle ethers.js
+    // Handle ethers.js polyfills
     config.resolve.fallback = {
       ...config.resolve.fallback,
       fs: false,
       net: false,
       tls: false,
-    };
+    }
 
-    return config;
+    return config
   },
 
   env: {
@@ -109,8 +95,8 @@ const nextConfig = {
         destination: '/',
         permanent: true,
       },
-    ];
+    ]
   },
-};
+}
 
-module.exports = nextConfig;
+module.exports = nextConfig
