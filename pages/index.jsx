@@ -43,7 +43,7 @@ const extractError = (e) =>
 const needsSpaceBefore = (str) => {
   if (!str) return false
   const ch = str[0]
-  return !(/\s/.test(ch) || /[.,!?;:)"'\\\]]/.test(ch))
+  return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
 }
 
 function buildPreviewSingle(parts, w, idx) {
@@ -70,6 +70,17 @@ function buildPreviewSingle(parts, w, idx) {
   return out.join('')
 }
 
+function parseStoredIdxWord(stored) {
+  if (!stored || typeof stored !== 'string') return { idx: 0, word: '' }
+  const sep = stored.indexOf('::')
+  if (sep > -1) {
+    const idx = Math.max(0, Math.min(99, Number.parseInt(stored.slice(0, sep), 10) || 0))
+    const word = stored.slice(sep + 2) || ''
+    return { idx, word }
+  }
+  return { idx: 0, word: stored }
+}
+
 function sanitizeWord(raw) {
   return (raw || '')
     .trim()
@@ -83,21 +94,26 @@ function useEip1193() {
   const miniProvRef = useRef(null)
 
   const getProvider = useCallback(async () => {
-    // 1) injected (web)
-    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
-    // 2) Farcaster Mini wallet
-    if (miniProvRef.current) return miniProvRef.current
     const inWarpcast =
       typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
-    if (!inWarpcast) return null
-    try {
-      const mod = await import('@farcaster/miniapp-sdk')
-      const prov = await mod.sdk.wallet.getEthereumProvider()
-      miniProvRef.current = prov
-      return prov
-    } catch {
-      return null
+
+    // 1) Farcaster Mini wallet first (if in app)
+    if (inWarpcast) {
+      if (miniProvRef.current) return miniProvRef.current
+      try {
+        const mod = await import('@farcaster/miniapp-sdk')
+        const prov = await mod.sdk.wallet.getEthereumProvider()
+        miniProvRef.current = prov
+        return prov
+      } catch {
+        // fall through to injected
+      }
     }
+
+    // 2) injected (web)
+    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
+
+    return null
   }, [])
 
   return getProvider
@@ -148,8 +164,7 @@ export default function Home() {
         const accts = await eip.request?.({ method: 'eth_accounts' })
         if (!cancelled) setAddress(accts?.[0] || null)
       } catch {}
-      // account changes (injected)
-      if (eip && eip.on && eip.removeListener) {
+      if (eip?.on && eip?.removeListener) {
         const onAcct = (accs) => setAddress(accs?.[0] || null)
         eip.on('accountsChanged', onAcct)
         return () => eip.removeListener('accountsChanged', onAcct)
@@ -186,19 +201,22 @@ export default function Home() {
         const rows = []
         for (let id = total; id >= start; id--) {
           const info = await ct.getPool1Info(BigInt(id))
-          const name = info[0]
-          const theme = info[1]
-          const parts = info[2]
-          const deadline = Number(info[4])
-          const creator = info[5]
-          const participants = info[6] || []
-          const poolBalance = info[9]
+          const name = info.name_ ?? info[0]
+          const theme = info.theme_ ?? info[1]
+          const parts = info.parts_ ?? info[2]
+          const deadline = Number(info.deadline_ ?? info[4])
+          const creator = info.creator_ ?? info[5]
+          const participants = info.participants_ ?? info[6] || []
+          const poolBalance = info.poolBalance_ ?? info[9]
+
           let creatorPreview = ''
           try {
             const sub = await ct.getPool1Submission(BigInt(id), creator)
-            const stored = sub[1]
-            creatorPreview = buildPreviewSingle(parts, stored, 0)
+            const stored = sub.word_ ?? sub[1] // "idx::word"
+            const parsed = parseStoredIdxWord(stored)
+            creatorPreview = buildPreviewSingle(parts, parsed.word, parsed.idx)
           } catch {}
+
           rows.push({
             id,
             name: name || `Round #${id}`,
@@ -254,7 +272,7 @@ export default function Home() {
     }
   }, [getEip1193])
 
-  /** ---- Create round (feeBase‑accurate, better errors) ---- */
+  /** ---- Create round (feeBase-accurate, better errors) ---- */
   async function handleCreateRound() {
     const cleanWord = sanitizeWord(word)
     if (!cleanWord) {
@@ -397,7 +415,7 @@ export default function Home() {
   const ogImage = buildOgUrl({ screen: 'home', title: 'MadFill' })
 
   return (
-    <>
+    <Layout>
       <Head>
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
@@ -596,6 +614,6 @@ export default function Home() {
           </CardContent>
         </Card>
       </main>
-    </>
+    </Layout>
   )
 }
