@@ -9,36 +9,50 @@ import '@/styles/globals.css'
 
 export default function App({ Component, pageProps }) {
   const router = useRouter()
+  // Sanitize GA id for inline script safety
+  const GA_ID_SAFE =
+    typeof GA_TRACKING_ID === 'string'
+      ? GA_TRACKING_ID.replace(/[^A-Za-z0-9_-]/g, '')
+      : ''
 
   // Track page views
   useEffect(() => {
     const handleRouteChange = (url) => {
-      try { pageview(url) } catch {}
+      try {
+        // Only attempt if GA is configured and available
+        if (GA_ID_SAFE && typeof window !== 'undefined' && window.gtag) {
+          pageview(url)
+        }
+      } catch {}
     }
     router.events?.on('routeChangeComplete', handleRouteChange)
     return () => router.events?.off('routeChangeComplete', handleRouteChange)
-  }, [router.events])
+  }, [router, GA_ID_SAFE])
 
   // Client-side error tracking
   useEffect(() => {
     if (typeof window === 'undefined') return
 
     const onError = (e) => {
-      if (window.gtag) {
-        window.gtag('event', 'exception', {
-          description: e?.error ? String(e.error) : String(e?.message),
-          fatal: false,
-        })
-      }
+      try {
+        if (window.gtag) {
+          window.gtag('event', 'exception', {
+            description: e?.error ? String(e.error) : String(e?.message),
+            fatal: false,
+          })
+        }
+      } catch {}
     }
 
     const onRejection = (e) => {
-      if (window.gtag) {
-        window.gtag('event', 'exception', {
-          description: 'Unhandled Promise Rejection: ' + String(e?.reason),
-          fatal: false,
-        })
-      }
+      try {
+        if (window.gtag) {
+          window.gtag('event', 'exception', {
+            description: 'Unhandled Promise Rejection: ' + String(e?.reason),
+            fatal: false,
+          })
+        }
+      } catch {}
     }
 
     window.addEventListener('error', onError)
@@ -49,20 +63,22 @@ export default function App({ Component, pageProps }) {
     }
   }, [])
 
-  // Cleanup
+  // Cleanup performance observers on unmount
   useEffect(() => {
     return () => {
-      try { performanceMonitor.cleanup?.() } catch {}
+      try {
+        performanceMonitor.cleanup?.()
+      } catch {}
     }
   }, [])
 
   return (
     <ErrorBoundary>
-      {GA_TRACKING_ID ? (
+      {GA_ID_SAFE ? (
         <>
           <Script
             strategy="afterInteractive"
-            src={`https://www.googletagmanager.com/gtag/js?id=${GA_TRACKING_ID}`}
+            src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID_SAFE}`}
           />
           <Script
             id="gtag-init"
@@ -72,7 +88,7 @@ export default function App({ Component, pageProps }) {
                 window.dataLayer = window.dataLayer || [];
                 function gtag(){ dataLayer.push(arguments); }
                 gtag('js', new Date());
-                gtag('config', '${GA_TRACKING_ID}', { page_path: window.location.pathname });
+                gtag('config', '${GA_ID_SAFE}', { page_path: window.location.pathname });
               `,
             }}
           />
