@@ -3,29 +3,46 @@
 
 import React, { useMemo } from 'react'
 
+/** Returns true if a space should be inserted before the next string (i.e., it starts with a word char). */
 function needsSpaceBefore(str = '') {
   if (!str) return false
   const ch = str[0]
+  // No space if next token starts with whitespace or punctuation that typically binds to the previous word
   return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
 }
 
+/** Sanitize a single word token: trim, collapse, take first token, clamp length. */
 function sanitizeOneWord(s, maxLen = 16) {
   if (typeof s !== 'string') return ''
-  // collapse whitespace, keep first token only, clamp length
   const token = s.trim().replace(/\s+/g, ' ').split(' ')[0] || ''
   return token.slice(0, maxLen)
 }
 
+/**
+ * StyledCard
+ * Renders a sentence built from `parts` with up to `blanks` inline word slots.
+ *
+ * Props:
+ * - parts: string[] sentence parts (length >= blanks, typically parts.length = blanks + 1)
+ * - blanks: number count of interactive word slots (0..parts.length-1)
+ * - words: Record<number, string> mapping blank index -> user word
+ * - sanitize: boolean whether to sanitize tokens for display
+ * - highlightIndex: number|null index to visually highlight a specific blank
+ * - takenIndices: number[] indices considered "locked" (rendered as crossed-out)
+ * - className: string extra classes for container
+ * - wordClassName: string extra classes for each word badge
+ * - maxLen: number maximum token length (default 16)
+ */
 export default function StyledCard({
   parts = [],
   blanks = 0,
-  words = {},                 // { [i]: string }
-  sanitize = false,           // sanitize word tokens
-  highlightIndex = null,      // number | null
-  takenIndices = [],          // number[] of already-used blanks
+  words = {},
+  sanitize = false,
+  highlightIndex = null,
+  takenIndices = [],
   className = '',
   wordClassName = '',
-  maxLen = 16,                // NEW: keep consistent with other pages (was 32 here)
+  maxLen = 16,
 }) {
   const takenSet = useMemo(() => new Set(takenIndices || []), [takenIndices])
 
@@ -51,20 +68,23 @@ export default function StyledCard({
 
   const nodes = useMemo(() => {
     const arr = []
+    const safeBlanks = Math.max(0, Math.min(Number.isFinite(blanks) ? blanks : 0, parts.length))
+
     for (let i = 0; i < parts.length; i++) {
-      const part = parts[i] || ''
+      const part = (parts[i] ?? '').toString()
       arr.push(
         <span key={`p-${i}`} className="whitespace-pre-wrap">
           {part}
         </span>
       )
 
-      if (i < blanks) {
+      if (i < safeBlanks) {
         // Add the user word (or blank)
         arr.push(renderWord(i))
 
-        // Insert a space if the next part starts with a letter/number
-        const nextPart = parts[i + 1] || ''
+        // Insert a space if the next part starts with a word character and
+        // the rendered word is not empty/locked (i.e., will show a token)
+        const nextPart = (parts[i + 1] ?? '').toString()
         const rawWord = words?.[i]
         const showWord = takenSet.has(i) ? '' : (sanitize ? sanitizeOneWord(rawWord, maxLen) : rawWord)
         if (showWord && needsSpaceBefore(nextPart)) {
