@@ -6,7 +6,9 @@ import Head from 'next/head'
 import Link from 'next/link'
 import { ethers } from 'ethers'
 import { useWindowSize } from 'react-use'
-import Layout from '@/components/Layout' // ✅ wrap each page (since _app doesn't)
+import dynamic from 'next/dynamic'
+
+import Layout from '@/components/Layout'
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -14,7 +16,6 @@ import { Button } from '@/components/ui/button'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
-import dynamic from 'next/dynamic'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -86,11 +87,13 @@ export default function VotePage() {
     }
     return { index: 0, word: stored }
   }
+
   const needsSpaceBefore = (str) => {
     if (!str) return false
     const ch = str[0]
     return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
   }
+
   function buildPreviewSingle(parts, word, blankIndex) {
     const n = parts?.length || 0
     if (n === 0) return ''
@@ -114,6 +117,7 @@ export default function VotePage() {
     }
     return out.join('')
   }
+
   function buildPreviewFromStored(parts, stored) {
     const { index, word } = parseStoredWord(stored)
     return buildPreviewSingle(parts, word, index)
@@ -465,6 +469,7 @@ export default function VotePage() {
               className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-indigo-400"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
+              aria-label="Filter voting rounds"
             >
               <option value="all">All</option>
               <option value="active">Active</option>
@@ -479,6 +484,7 @@ export default function VotePage() {
               className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-indigo-400"
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
+              aria-label="Sort voting rounds"
             >
               <option value="recent">Newest</option>
               <option value="votes">Top Votes</option>
@@ -486,7 +492,7 @@ export default function VotePage() {
             </select>
           </div>
           {!isOnBase && (
-            <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600 text-sm">
+            <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600 text-sm" aria-label="Switch to Base">
               Switch to Base
             </Button>
           )}
@@ -522,6 +528,7 @@ export default function VotePage() {
                       href={explorer(`address/${CONTRACT_ADDRESS}`)}
                       target="_blank"
                       rel="noreferrer"
+                      title="View contract on BaseScan"
                     >
                       Contract
                     </a>
@@ -601,7 +608,7 @@ export default function VotePage() {
           </div>
         )}
 
-        {status && <div className="mt-6 text-center text-yellow-300">{status}</div>}
+        {status && <div className="mt-6 text-center text-yellow-300" aria-live="polite">{status}</div>}
       </main>
     </Layout>
   )
