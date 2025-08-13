@@ -1,22 +1,26 @@
+// tests/lib/validation.test.js
+
 import {
   validateGameWord,
   validateEthValue,
   validateTemplate,
   addressSchema,
-  createRoundSchema
+  createRoundSchema,
 } from '../../lib/validation'
 
 describe('validation utilities', () => {
   describe('validateGameWord', () => {
-    it('should clean and truncate words correctly', () => {
+    it('cleans and truncates words correctly', () => {
       expect(validateGameWord('hello')).toBe('hello')
       expect(validateGameWord('hello world')).toBe('hello')
       expect(validateGameWord('test-word_123')).toBe('test-word_123')
       expect(validateGameWord('hello@#$%')).toBe('hello')
-      expect(validateGameWord('verylongwordthatshouldbetruncated')).toBe('verylongwordthat')
+      expect(validateGameWord('verylongwordthatshouldbetruncated')).toBe(
+        'verylongwordthat'
+      )
     })
 
-    it('should handle empty or invalid inputs', () => {
+    it('returns empty string for empty or invalid inputs', () => {
       expect(validateGameWord('')).toBe('')
       expect(validateGameWord(null)).toBe('')
       expect(validateGameWord(undefined)).toBe('')
@@ -24,43 +28,47 @@ describe('validation utilities', () => {
   })
 
   describe('validateEthValue', () => {
-    it('should validate ETH values correctly', () => {
+    it('validates and normalizes ETH values', () => {
       expect(validateEthValue('1')).toBe(1)
       expect(validateEthValue('0.001')).toBe(0.001)
-      expect(validateEthValue('1.2345')).toBe(1.235) // Rounded to 3 decimals
-      expect(validateEthValue('-1')).toBe(0) // Negative becomes 0
-      expect(validateEthValue('1000')).toBe(100) // Capped at 100
+      expect(validateEthValue('1.2345')).toBe(1.235) // rounded to 3 decimals
+      expect(validateEthValue('-1')).toBe(0) // negative becomes 0
+      expect(validateEthValue('1000')).toBe(100) // capped at 100
       expect(validateEthValue('invalid')).toBe(0) // NaN becomes 0
     })
   })
 
   describe('validateTemplate', () => {
-    it('should validate valid templates', () => {
+    it('accepts valid templates', () => {
       const validTemplate = {
-        parts: ['Hello ', ' world', '!']
+        parts: ['Hello ', ' world', '!'],
       }
       expect(() => validateTemplate(validTemplate)).not.toThrow()
     })
 
-    it('should reject invalid templates', () => {
+    it('rejects invalid templates', () => {
       expect(() => validateTemplate(null)).toThrow('Invalid template object')
-      expect(() => validateTemplate({})).toThrow('Template must have parts array')
-      expect(() => validateTemplate({ parts: ['single'] })).toThrow('Template must have at least 2 parts')
+      expect(() => validateTemplate({})).toThrow(
+        'Template must have parts array'
+      )
+      expect(() => validateTemplate({ parts: ['single'] })).toThrow(
+        'Template must have at least 2 parts'
+      )
     })
   })
 
   describe('addressSchema', () => {
-    it('should validate Ethereum addresses', () => {
+    it('validates Ethereum addresses', () => {
       const validAddress = '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
       expect(() => addressSchema.parse(validAddress)).not.toThrow()
-      
+
       expect(() => addressSchema.parse('invalid')).toThrow()
       expect(() => addressSchema.parse('0xinvalid')).toThrow()
     })
   })
 
   describe('createRoundSchema', () => {
-    it('should validate round creation data', () => {
+    it('accepts valid round creation data', () => {
       const validRound = {
         name: 'Test Round',
         theme: 'Test Theme',
@@ -68,13 +76,13 @@ describe('validation utilities', () => {
         word: 'test',
         entryFee: 0.01,
         duration: 7,
-        blankIndex: 0
+        blankIndex: 0,
       }
-      
+
       expect(() => createRoundSchema.parse(validRound)).not.toThrow()
     })
 
-    it('should reject invalid round data', () => {
+    it('rejects invalid round creation data', () => {
       const invalidRound = {
         name: '',
         theme: 'Test',
@@ -82,9 +90,9 @@ describe('validation utilities', () => {
         word: 'test@invalid',
         entryFee: 0,
         duration: 0,
-        blankIndex: -1
+        blankIndex: -1,
       }
-      
+
       expect(() => createRoundSchema.parse(invalidRound)).toThrow()
     })
   })
