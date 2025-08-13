@@ -1,15 +1,14 @@
-const nextJest = require('next/jest')
+// jest.config.js
+const nextJest = require('next/jest');
 
 const createJestConfig = nextJest({
-  // Provide the path to your Next.js app to load next.config.js and .env files
+  // Load next.config.js and .env files for the app
   dir: './',
-})
+});
 
-// Add any custom config to be passed to Jest
 const customJestConfig = {
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
-  moduleNameMapping: {
-    // Handle module aliases (this will be automatically configured for you based on your tsconfig.json paths)
+  moduleNameMapper: {
     '^@/components/(.*)$': '<rootDir>/components/$1',
     '^@/pages/(.*)$': '<rootDir>/pages/$1',
     '^@/lib/(.*)$': '<rootDir>/lib/$1',
@@ -19,6 +18,7 @@ const customJestConfig = {
     '^@/styles/(.*)$': '<rootDir>/styles/$1',
   },
   testEnvironment: 'jest-environment-jsdom',
+  clearMocks: true,
   collectCoverageFrom: [
     'components/**/*.{js,jsx}',
     'pages/**/*.{js,jsx}',
@@ -27,7 +27,13 @@ const customJestConfig = {
     '!**/*.d.ts',
     '!**/node_modules/**',
   ],
-  testPathIgnorePatterns: ['<rootDir>/.next/', '<rootDir>/node_modules/'],
+  testPathIgnorePatterns: [
+    '<rootDir>/.next/',
+    '<rootDir>/node_modules/',
+  ],
+  transformIgnorePatterns: [
+    '/node_modules/(?!(ethers|@farcaster)/)', // Allow Jest to transform ESM packages
+  ],
   coverageThreshold: {
     global: {
       branches: 70,
@@ -36,7 +42,6 @@ const customJestConfig = {
       statements: 70,
     },
   },
-}
+};
 
-// createJestConfig is exported this way to ensure that next/jest can load the Next.js config which is async
-module.exports = createJestConfig(customJestConfig)
+module.exports = createJestConfig(customJestConfig);
