@@ -287,7 +287,7 @@ export default function RoundDetailPage() {
         const theme = info.theme_ ?? info[1]
         const parts = info.parts_ ?? info[2]
         const feeBase = info.feeBase_ ?? info[3]
-        const deadline = Number(info.deadline_ ?? info[4]
+        const deadline = Number(info.deadline_ ?? info[4]) // ✅ fixed missing ')'
         const creator = info.creator_ ?? info[5]
         const participants = info.participants_ ?? info[6]
         const winner = info.winner_ ?? info[7]
