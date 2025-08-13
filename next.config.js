@@ -15,9 +15,7 @@ const nextConfig = {
       'res.cloudinary.com',
       'madfill.vercel.app',
     ],
-    remotePatterns: [
-      { protocol: 'https', hostname: '**' },
-    ],
+    remotePatterns: [{ protocol: 'https', hostname: '**' }],
   },
 
   async headers() {
@@ -28,12 +26,16 @@ const nextConfig = {
           { key: 'X-Frame-Options', value: 'ALLOWALL' },
           {
             key: 'Content-Security-Policy',
-            value: "frame-ancestors 'self' https://warpcast.com https://*.warpcast.com;",
+            value:
+              "frame-ancestors 'self' https://warpcast.com https://*.warpcast.com;",
           },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'X-XSS-Protection', value: '1; mode=block' },
           { key: 'Referrer-Policy', value: 'origin-when-cross-origin' },
-          { key: 'Permissions-Policy', value: 'geolocation=(), microphone=(), camera=()' },
+          {
+            key: 'Permissions-Policy',
+            value: 'geolocation=(), microphone=(), camera=()',
+          },
         ],
       },
       {
@@ -47,7 +49,11 @@ const nextConfig = {
   },
 
   webpack: (config, { isServer }) => {
-    // ----- code splitting (keep your previous settings) -----
+    // Ensure UMD builds use globalThis (avoids "self is not defined" in SSR)
+    config.output = config.output || {};
+    config.output.globalObject = 'globalThis';
+
+    // Code splitting (unchanged)
     config.optimization = {
       ...config.optimization,
       splitChunks: {
@@ -62,7 +68,7 @@ const nextConfig = {
       },
     };
 
-    // polyfills for node core modules some libs try to import
+    // Node core polyfills
     config.resolve.fallback = {
       ...config.resolve.fallback,
       fs: false,
@@ -70,28 +76,44 @@ const nextConfig = {
       tls: false,
     };
 
-    // Provide `self` as an identifier on the server (compile-time)
+    // Compile-time replace: turn bare `self` into `globalThis` on server
     if (isServer) {
       config.plugins.push(
         new webpackLib.DefinePlugin({
           self: 'globalThis',
         })
       );
+
+      // Runtime prelude BEFORE any vendor code executes
+      config.plugins.push(
+        new webpackLib.BannerPlugin({
+          raw: true,
+          entryOnly: false,
+          banner:
+            'try{if(typeof globalThis!=="undefined"&&typeof globalThis.self==="undefined"){globalThis.self=globalThis}}catch(e){}',
+        })
+      );
     }
 
-    // Server-only aliases to prevent browser-only libs from entering the server bundle
+    // Stub browser-only deps on the server
     config.resolve.alias = {
       ...(config.resolve.alias || {}),
       ...(isServer
         ? {
-            'react-confetti': path.resolve(__dirname, 'stubs/ConfettiStub.js'),
-            'canvas-confetti': path.resolve(__dirname, 'stubs/empty-module.js'),
+            'react-confetti': path.resolve(
+              __dirname,
+              'stubs/ConfettiStub.js'
+            ),
+            'canvas-confetti': path.resolve(
+              __dirname,
+              'stubs/empty-module.js'
+            ),
             'dom-confetti': path.resolve(__dirname, 'stubs/empty-module.js'),
           }
         : {}),
     };
 
-    // Inject a tiny runtime shim early on server entries (belt & suspenders)
+    // Also prepend our shim to server entries (belt & suspenders)
     const originalEntry = config.entry;
     config.entry = async () => {
       const entries = await originalEntry();
@@ -123,9 +145,7 @@ const nextConfig = {
   },
 
   async redirects() {
-    return [
-      { source: '/home', destination: '/', permanent: true },
-    ];
+    return [{ source: '/home', destination: '/', permanent: true }];
   },
 };
 
