@@ -1,8 +1,10 @@
+// tests/components/ErrorBoundary.test.jsx
+
 import { render, screen } from '@testing-library/react'
 import ErrorBoundary from '../../components/ErrorBoundary'
 
-// Mock component that throws an error
-const ErrorComponent = ({ shouldError }) => {
+// Component that throws during render to trigger the boundary
+const Boom = ({ shouldError }) => {
   if (shouldError) {
     throw new Error('Test error')
   }
@@ -10,30 +12,42 @@ const ErrorComponent = ({ shouldError }) => {
 }
 
 describe('ErrorBoundary', () => {
+  let consoleErrorSpy
+
+  beforeEach(() => {
+    // Silence React error output for intentional throw in tests
+    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore()
+  })
+
   it('renders children when there is no error', () => {
     render(
       <ErrorBoundary>
-        <ErrorComponent shouldError={false} />
+        <Boom shouldError={false} />
       </ErrorBoundary>
     )
-    
+
     expect(screen.getByText('No error')).toBeInTheDocument()
+    expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument()
   })
 
-  it('renders error UI when there is an error', () => {
-    // Suppress console.error for this test
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {})
-    
+  it('renders fallback UI when a child throws', () => {
     render(
       <ErrorBoundary>
-        <ErrorComponent shouldError={true} />
+        <Boom shouldError />
       </ErrorBoundary>
     )
-    
-    expect(screen.getByText('Something went wrong')).toBeInTheDocument()
-    expect(screen.getByText('Try again')).toBeInTheDocument()
-    expect(screen.getByText('Go to homepage')).toBeInTheDocument()
-    
-    consoleSpy.mockRestore()
+
+    // Be a bit flexible on copy but assert core affordances exist
+    expect(screen.getByText(/something went wrong/i)).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /try again/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('link', { name: /home|homepage/i })
+    ).toBeInTheDocument()
   })
 })
