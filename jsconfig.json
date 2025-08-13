@@ -7,8 +7,14 @@
       "@/abi/*": ["abi/*"],
       "@/data/*": ["data/*"],
       "@/lib/*": ["lib/*"],
-      "@/hooks/*": ["hooks/*"]   // ✅ Added hooks path
+      "@/hooks/*": ["hooks/*"]
     },
     "jsx": "react-jsx"
-  }
+  },
+  "exclude": [
+    "node_modules",
+    ".next",
+    "dist",
+    "coverage"
+  ]
 }
