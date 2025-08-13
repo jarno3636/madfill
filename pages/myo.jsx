@@ -15,9 +15,10 @@ import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import dynamic from 'next/dynamic'
 
+// Client-only confetti
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
-// 🔹 NEW: bring in your curated presets
+// 🔹 Preset templates
 import { categories as presetCategories } from '@/data/templates'
 
 // ---- Chain / Contract ----
@@ -26,9 +27,9 @@ const BASE_CHAIN_ID = 8453n
 const BASE_CHAIN_ID_HEX = '0x2105'
 const TEMPLATE_ADDR =
   process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS ||
-  '0x0F22124A86F8893990fA4763393E46d97F429442' // your provided address
+  '0x0F22124A86F8893990fA4763393E46d97F429442' // fallback
 
-// Minimal ABI we need (from the ABI you shared)
+// Minimal ABI
 const ABI = [
   { inputs: [], name: 'MAX_PARTS', outputs: [{ internalType: 'uint256', name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_PART_BYTES', outputs: [{ internalType: 'uint256', name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' },
@@ -119,7 +120,10 @@ export default function MYO() {
 
   const switchToBase = useCallback(async () => {
     const prov = (typeof window !== 'undefined' && window.ethereum) || null
-    if (!prov) return
+    if (!prov) {
+      addToast({ type: 'error', title: 'No Wallet', message: 'No wallet provider found.' })
+      return
+    }
     try {
       await prov.request({
         method: 'wallet_switchEthereumChain',
@@ -143,6 +147,8 @@ export default function MYO() {
         } catch {
           addToast({ type: 'error', title: 'Switch Failed', message: 'Could not add/switch to Base.' })
         }
+      } else {
+        addToast({ type: 'error', title: 'Switch Failed', message: e?.message || 'Could not switch to Base.' })
       }
     }
   }, [addToast])
@@ -309,7 +315,7 @@ export default function MYO() {
   useEffect(() => () => clearTimeout(confettiTimer.current), [])
 
   // ---- SEO / Farcaster ----
-  const pageUrl = absoluteUrl('/MYO')
+  const pageUrl = absoluteUrl('/myo')
   const ogImage = buildOgUrl({ screen: 'myo', title: 'Make Your Own' })
   const mintPriceEth = useMemo(() => Number(ethers.formatEther(mintPriceWei || 0n)), [mintPriceWei])
 
@@ -327,14 +333,14 @@ export default function MYO() {
 
       <SEO
         title="Make Your Own Templates — MadFill"
-        description="Start from curated prompts or your own idea and mint as an NFT on Base. Price is set on-chain via Chainlink."
+        description="Start from curated prompts or your own idea and mint as an NFT on Base. Price is set on-chain."
         url={pageUrl}
         image={ogImage}
         type="website"
         twitterCard="summary_large_image"
       />
 
-      {showConfetti && <Confetti width={width} height={height} />}
+      {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
       <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900">
         {/* Header */}
@@ -402,8 +408,8 @@ export default function MYO() {
                     className="w-full px-3 py-2 rounded-lg bg-white/20 text-white border border-purple-300 focus:border-yellow-500 focus:outline-none"
                   >
                     {presetCategories.map((c, i) => (
-                      <option key={c.name} value={i} className="bg-purple-900 text-white">
-                        {c.name}
+                      <option key={c.name || i} value={i} className="bg-purple-900 text-white">
+                        {c.name || `Category ${i + 1}`}
                       </option>
                     ))}
                   </select>
@@ -415,8 +421,8 @@ export default function MYO() {
                     className="w-full px-3 py-2 rounded-lg bg-white/20 text-white border border-purple-300 focus:border-yellow-500 focus:outline-none"
                   >
                     {currentTemplates.map((t, i) => (
-                      <option key={t.id} value={i} className="bg-purple-900 text-white">
-                        {t.name} ({t.blanks} blanks)
+                      <option key={t.id ?? i} value={i} className="bg-purple-900 text-white">
+                        {(t.name || `Template ${i + 1}`)} ({t.blanks} blanks)
                       </option>
                     ))}
                   </select>
