@@ -5,14 +5,14 @@ import { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import { useWindowSize } from 'react-use'
-import Layout from '../components/Layout'
-import SEO from '../components/SEO'
-import { absoluteUrl, buildOgUrl } from '../lib/seo'
-import { useMiniWallet } from '../hooks/useMiniWallet'
-import { useContracts } from '../hooks/useContracts'
-import LoadingSpinner from '../components/LoadingSpinner'
-import { formatAddress } from '../lib/validation'
-import { useMiniAppReady } from '../hooks/useMiniAppReady'
+import Layout from '@/components/Layout'
+import SEO from '@/components/SEO'
+import { absoluteUrl, buildOgUrl } from '@/lib/seo'
+import { useMiniWallet } from '@/hooks/useMiniWallet'
+import { useContracts } from '@/hooks/useContracts'
+import LoadingSpinner from '@/components/LoadingSpinner'
+import { formatAddress } from '@/lib/validation'
+import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import dynamic from 'next/dynamic'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
@@ -21,7 +21,7 @@ export default function Leaderboard() {
   useMiniAppReady()
 
   const router = useRouter()
-  const { address, isConnected } = useMiniWallet()
+  const { address } = useMiniWallet() // removed unused isConnected
   const { contracts } = useContracts() || {}
 
   const [leaderboardData, setLeaderboardData] = useState([])
@@ -40,7 +40,7 @@ export default function Leaderboard() {
       try {
         setLoading(true)
 
-        // Mock data (replace with backend/contract reads when ready)
+        // TODO(backend): replace mock data with contract/API reads.
         const mockLeaderboard = [
           {
             address: '0x1234567890123456789012345678901234567890',
@@ -173,15 +173,15 @@ export default function Leaderboard() {
 
       <Head>
         {/* Farcaster Mini App / Frame meta */}
-        <meta name="fc:frame" content="vNext" />
-        <meta name="fc:frame:image" content={ogImage} />
-        <meta name="fc:frame:button:1" content="Open Leaderboard" />
-        <meta name="fc:frame:button:1:action" content="link" />
-        <meta name="fc:frame:button:1:target" content={pageUrl} />
+        <meta property="fc:frame" content="vNext" />
+        <meta property="fc:frame:image" content={ogImage} />
+        <meta property="fc:frame:button:1" content="Open Leaderboard" />
+        <meta property="fc:frame:button:1:action" content="link" />
+        <meta property="fc:frame:button:1:target" content={pageUrl} />
         <link rel="canonical" href={pageUrl} />
       </Head>
 
-      {showConfetti && <Confetti width={width} height={height} />}
+      {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
       <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900">
         <div className="container mx-auto px-4 py-8">
