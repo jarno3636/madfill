@@ -1,113 +1,107 @@
-import { useState, useEffect, useCallback } from 'react';
+'use client'
+
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 export function useLocalStorage(key, initialValue) {
-  // Get value from localStorage or use initial value
+  const isClient = typeof window !== 'undefined'
+  const initial = useRef(initialValue)
+
   const [storedValue, setStoredValue] = useState(() => {
-    if (typeof window === 'undefined') {
-      return initialValue;
-    }
-
+    if (!isClient) return initial.current
     try {
-      const item = window.localStorage.getItem(key);
-      return item ? JSON.parse(item) : initialValue;
-    } catch (error) {
-      console.error(`Error reading localStorage key "${key}":`, error);
-      return initialValue;
+      const item = window.localStorage.getItem(key)
+      return item ? JSON.parse(item) : initial.current
+    } catch (e) {
+      console.error(`Error reading localStorage key "${key}":`, e)
+      return initial.current
     }
-  });
+  })
 
-  // Update localStorage when value changes
+  // write-through setter (supports functional updates)
   const setValue = useCallback((value) => {
-    try {
-      // Allow value to be a function so we have the same API as useState
-      const valueToStore = value instanceof Function ? value(storedValue) : value;
-      setStoredValue(valueToStore);
-
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(key, JSON.stringify(valueToStore));
+    setStoredValue((prev) => {
+      const valueToStore = value instanceof Function ? value(prev) : value
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(key, JSON.stringify(valueToStore))
+        }
+      } catch (e) {
+        console.error(`Error setting localStorage key "${key}":`, e)
       }
-    } catch (error) {
-      console.error(`Error setting localStorage key "${key}":`, error);
-    }
-  }, [key, storedValue]);
+      return valueToStore
+    })
+  }, [key])
 
-  // Remove item from localStorage
+  // remove key
   const removeValue = useCallback(() => {
     try {
-      setStoredValue(initialValue);
+      setStoredValue(initial.current)
       if (typeof window !== 'undefined') {
-        window.localStorage.removeItem(key);
+        window.localStorage.removeItem(key)
       }
-    } catch (error) {
-      console.error(`Error removing localStorage key "${key}":`, error);
+    } catch (e) {
+      console.error(`Error removing localStorage key "${key}":`, e)
     }
-  }, [key, initialValue]);
+  }, [key])
 
-  return [storedValue, setValue, removeValue];
+  // keep in sync across tabs
+  useEffect(() => {
+    if (!isClient) return
+    const onStorage = (e) => {
+      if (e.key !== key) return
+      try {
+        const next = e.newValue ? JSON.parse(e.newValue) : initial.current
+        setStoredValue(next)
+      } catch {
+        setStoredValue(initial.current)
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [isClient, key])
+
+  return [storedValue, setValue, removeValue]
 }
 
-// Hook for managing user preferences
+// ---- preferences
 export function useUserPreferences() {
   const [preferences, setPreferences, removePreferences] = useLocalStorage('madfill_preferences', {
     theme: 'dark',
     defaultEntryFee: '0.01',
     notifications: true,
     autoConnect: false,
-    preferredChainId: 8453 // Base
-  });
+    preferredChainId: 8453,
+  })
 
-  const updatePreference = useCallback((key, value) => {
-    setPreferences(prev => ({
-      ...prev,
-      [key]: value
-    }));
-  }, [setPreferences]);
+  const updatePreference = useCallback((k, v) => {
+    setPreferences((prev) => ({ ...prev, [k]: v }))
+  }, [setPreferences])
 
-  return {
-    preferences,
-    updatePreference,
-    resetPreferences: removePreferences
-  };
+  return { preferences, updatePreference, resetPreferences: removePreferences }
 }
 
-// Hook for managing story drafts
+// ---- drafts
 export function useStoryDrafts() {
-  const [drafts, setDrafts, removeDrafts] = useLocalStorage('madfill_story_drafts', []);
+  const [drafts, setDrafts, clearAllDrafts] = useLocalStorage('madfill_story_drafts', [])
 
   const saveDraft = useCallback((draft) => {
-    const newDraft = {
-      id: Date.now().toString(),
-      ...draft,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-
-    setDrafts(prev => [newDraft, ...prev.slice(0, 9)]); // Keep max 10 drafts
-    return newDraft.id;
-  }, [setDrafts]);
+    const now = new Date().toISOString()
+    const newDraft = { id: Date.now().toString(), ...draft, createdAt: now, updatedAt: now }
+    setDrafts((prev) => [newDraft, ...prev.slice(0, 9)])
+    return newDraft.id
+  }, [setDrafts])
 
   const updateDraft = useCallback((id, updates) => {
-    setDrafts(prev => prev.map(draft => 
-      draft.id === id 
-        ? { ...draft, ...updates, updatedAt: new Date().toISOString() }
-        : draft
-    ));
-  }, [setDrafts]);
+    setDrafts((prev) =>
+      prev.map((d) => (d.id === id ? { ...d, ...updates, updatedAt: new Date().toISOString() } : d))
+    )
+  }, [setDrafts])
 
   const deleteDraft = useCallback((id) => {
-    setDrafts(prev => prev.filter(draft => draft.id !== id));
-  }, [setDrafts]);
+    setDrafts((prev) => prev.filter((d) => d.id !== id))
+  }, [setDrafts])
 
-  const getDraft = useCallback((id) => {
-    return drafts.find(draft => draft.id === id);
-  }, [drafts]);
+  const getDraft = useCallback((id) => drafts.find((d) => d.id === id), [drafts])
 
-  return {
-    drafts,
-    saveDraft,
-    updateDraft,
-    deleteDraft,
-    getDraft,
-    clearAllDrafts: removeDrafts
-  };
+  return { drafts, saveDraft, updateDraft, deleteDraft, getDraft, clearAllDrafts }
 }
