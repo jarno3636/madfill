@@ -72,12 +72,14 @@ export default function ShareButton({
   const doShareFarcaster = useCallback(async () => {
     setBusy(true)
     try {
-      const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+      const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+      const inWarpcast = /Warpcast/i.test(ua)
 
       if (inWarpcast) {
         try {
+          // Try Frame SDK first
           const mod = await import('@farcaster/frame-sdk')
-          const { sdk } = mod
+          const { sdk } = mod || {}
           if (sdk?.actions?.share) {
             await sdk.actions.share({ text: baseText, embeds: embed ? [embed] : [] })
             return
@@ -87,19 +89,21 @@ export default function ShareButton({
             return
           }
         } catch {
-          // fall through
+          // fall through to compose link
         }
       }
 
-      const win = window.open(
-        warpcastComposeUrl({ text: baseText, url: safeUrl, embed }),
-        '_blank',
-        'noopener,noreferrer'
-      )
-      if (!win && navigator?.clipboard?.writeText) {
-        await navigator.clipboard.writeText(
-          warpcastComposeUrl({ text: baseText, url: safeUrl, embed })
-        )
+      const compose = warpcastComposeUrl({ text: baseText, url: safeUrl, embed })
+      if (typeof window !== 'undefined' && window.open) {
+        const win = window.open(compose, '_blank', 'noopener,noreferrer')
+        if (!win && typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(compose)
+          // TODO: replace alert with toast/snackbar
+          alert('Composer link copied to clipboard ✅')
+        }
+      } else if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(compose)
+        // TODO: replace alert with toast/snackbar
         alert('Composer link copied to clipboard ✅')
       }
     } finally {
@@ -109,17 +113,21 @@ export default function ShareButton({
 
   const doShareTwitter = useCallback(() => {
     const t = encodeURIComponent(baseText)
-    window.open(
-      `https://twitter.com/intent/tweet?text=${t}`,
-      '_blank',
-      'noopener,noreferrer'
-    )
+    const href = `https://twitter.com/intent/tweet?text=${t}`
+    if (typeof window !== 'undefined' && window.open) {
+      window.open(href, '_blank', 'noopener,noreferrer')
+    } else if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(decodeURIComponent(t))
+    }
   }, [baseText])
 
   const doCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(baseText)
-      alert('Link copied to clipboard ✅')
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(baseText)
+        // TODO: replace alert with toast/snackbar
+        alert('Link copied to clipboard ✅')
+      }
     } catch {
       alert('Copy failed. Please try again.')
     }
