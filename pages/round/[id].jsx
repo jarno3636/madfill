@@ -175,7 +175,10 @@ export default function RoundDetailPage() {
   useEffect(() => {
     if (!isReady) return // wait for router
     let cancelled = false
+    let removeListeners = () => {}
+
     ;(async () => {
+      // Injected wallet branch
       if (typeof window !== 'undefined' && window.ethereum) {
         try {
           const accts = await window.ethereum.request({ method: 'eth_accounts' })
@@ -188,34 +191,54 @@ export default function RoundDetailPage() {
         } catch {
           if (!cancelled) setIsOnBase(true)
         }
-        const onChain = () => {
-          if (typeof window !== 'undefined') window.location.reload()
-        }
-        const onAcct = (accs) => setAddress(accs?.[0] || null)
-        window.ethereum.on?.('chainChanged', onChain)
-        window.ethereum.on?.('accountsChanged', onAcct)
-        return () => {
-          window.ethereum.removeListener?.('chainChanged', onChain)
-          window.ethereum.removeListener?.('accountsChanged', onAcct)
-        }
-      }
 
-      const mini = await getEip1193()
-      if (mini && !cancelled) {
-        try {
-          const p = new ethers.BrowserProvider(mini)
-          const signer = await p.getSigner().catch(() => null)
-          const addr = await signer?.getAddress().catch(() => null)
-          if (!cancelled) setAddress(addr || null)
-          const net = await p.getNetwork()
-          if (!cancelled) setIsOnBase(net?.chainId === 8453n)
-        } catch {
-          /* noop */
+        const onChainChanged = async () => {
+          try {
+            const provider = new ethers.BrowserProvider(window.ethereum)
+            const net = await provider.getNetwork()
+            if (!cancelled) setIsOnBase(net?.chainId === 8453n)
+          } catch {
+            if (!cancelled) setIsOnBase(false)
+          }
+        }
+        const onAccountsChanged = async (accs) => {
+          const a = accs?.[0] || null
+          setAddress(a)
+          if (a) {
+            try {
+              const p = new ethers.BrowserProvider(window.ethereum)
+              await p.getSigner()
+            } catch {}
+          }
+        }
+
+        window.ethereum.on?.('chainChanged', onChainChanged)
+        window.ethereum.on?.('accountsChanged', onAccountsChanged)
+        removeListeners = () => {
+          window.ethereum?.removeListener?.('chainChanged', onChainChanged)
+          window.ethereum?.removeListener?.('accountsChanged', onAccountsChanged)
+        }
+      } else {
+        // Mini app provider branch
+        const mini = await getEip1193()
+        if (mini && !cancelled) {
+          try {
+            const p = new ethers.BrowserProvider(mini)
+            const signer = await p.getSigner().catch(() => null)
+            const addr = await signer?.getAddress().catch(() => null)
+            if (!cancelled) setAddress(addr || null)
+            const net = await p.getNetwork()
+            if (!cancelled) setIsOnBase(net?.chainId === 8453n)
+          } catch {
+            /* noop */
+          }
         }
       }
     })()
+
     return () => {
       cancelled = true
+      try { removeListeners() } catch {}
     }
   }, [getEip1193, isReady])
 
@@ -287,7 +310,7 @@ export default function RoundDetailPage() {
         const theme = info.theme_ ?? info[1]
         const parts = info.parts_ ?? info[2]
         const feeBase = info.feeBase_ ?? info[3]
-        const deadline = Number(info.deadline_ ?? info[4]) // ✅ fixed missing ')'
+        const deadline = Number(info.deadline_ ?? info[4])
         const creator = info.creator_ ?? info[5]
         const participants = info.participants_ ?? info[6]
         const winner = info.winner_ ?? info[7]
@@ -386,7 +409,7 @@ export default function RoundDetailPage() {
     try {
       const eip = await getEip1193()
       if (!eip) throw new Error('Wallet not found')
-      if (!round) throw new Error('Round not ready')
+      if (round == null) throw new Error('Round not ready')
       if (ended) throw new Error('Round ended')
       if (!wordInput.trim()) throw new Error('Please enter one word')
       if (inputError) throw new Error(inputError)
@@ -448,7 +471,7 @@ export default function RoundDetailPage() {
     try {
       const eip = await getEip1193()
       if (!eip) throw new Error('Wallet not found')
-      if (!round) throw new Error('Round not ready')
+      if (round == null) throw new Error('Round not ready')
       setBusy(true)
       setStatus('Finalizing and paying out…')
 
@@ -524,7 +547,7 @@ export default function RoundDetailPage() {
             <span className="mx-2">•</span>
             <span className="mr-2">⌛ {round ? (ended ? 'Ended' : `Time left: ${timeLeft}`) : '—'}</span>
             <span className="mx-2">•</span>
-            <a className="underline decoration-dotted" href={explorer(`address/${CONTRACT_ADDRESS}`)} target="_blank" rel="noreferrer">
+            <a className="underline decoration-dotted" href={explorer(`address/${CONTRACT_ADDRESS}`)} target="_blank" rel="noopener noreferrer">
               View Contract
             </a>
           </div>
@@ -562,7 +585,7 @@ export default function RoundDetailPage() {
                       className="underline decoration-dotted"
                       href={explorer(`address/${round.creator}`)}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                     >
                       {shortAddr(round.creator)}
                     </a>
@@ -711,7 +734,7 @@ export default function RoundDetailPage() {
                   {round.claimed && round.winner && (
                     <span className="text-sm text-green-400">
                       Winner:{' '}
-                      <a className="underline decoration-dotted" href={explorer(`address/${round.winner}`)} target="_blank" rel="noreferrer">
+                      <a className="underline decoration-dotted" href={explorer(`address/${round.winner}`)} target="_blank" rel="noopener noreferrer">
                         {shortAddr(round.winner)}
                       </a>
                     </span>
@@ -746,7 +769,7 @@ export default function RoundDetailPage() {
                       </div>
                       <div className="mt-2 text-xs italic line-clamp-3">{s.preview}</div>
                       <div className="mt-2 flex items-center gap-3 text-[11px]">
-                        <a className="underline text-slate-300" target="_blank" rel="noreferrer" href={explorer(`address/${s.addr}`)}>
+                        <a className="underline text-slate-300" target="_blank" rel="noopener noreferrer" href={explorer(`address/${s.addr}`)}>
                           Explorer
                         </a>
                       </div>
