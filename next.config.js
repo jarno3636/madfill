@@ -5,15 +5,8 @@ const nextConfig = {
   output: 'standalone',
 
   images: {
-    domains: [
-      'warpcast.com',
-      'imagedelivery.net',
-      'res.cloudinary.com',
-      'madfill.vercel.app',
-    ],
-    remotePatterns: [
-      { protocol: 'https', hostname: '**' },
-    ],
+    domains: ['warpcast.com', 'imagedelivery.net', 'res.cloudinary.com', 'madfill.vercel.app'],
+    remotePatterns: [{ protocol: 'https', hostname: '**' }],
   },
 
   async headers() {
@@ -39,20 +32,29 @@ const nextConfig = {
           { key: 'Cache-Control', value: 'public, max-age=300' },
         ],
       },
-    ]
+    ];
   },
 
-  webpack: (config, { buildId, dev, isServer, defaultLoaders, webpack }) => {
-    // ----- Fix: make `self` safe on the server to avoid SSR crashes from client libs -----
-    if (isServer) {
-      config.plugins.push(
-        new webpack.DefinePlugin({
-          self: 'globalThis',
-        })
-      )
-    }
+  webpack: (config, { isServer }) => {
+    // ---- Inject `self` shim into all server entries (runs before vendors) ----
+    const originalEntry = config.entry;
+    config.entry = async () => {
+      const entries = await originalEntry();
+      if (isServer) {
+        const shim = './polyfills/self.js';
+        for (const k of Object.keys(entries)) {
+          const v = entries[k];
+          if (Array.isArray(v)) {
+            if (!v.includes(shim)) entries[k].unshift(shim);
+          } else if (typeof v === 'string') {
+            entries[k] = [shim, v];
+          }
+        }
+      }
+      return entries;
+    };
 
-    // Your existing optimization split chunk
+    // Split vendors (your existing optimization)
     config.optimization = {
       ...config.optimization,
       splitChunks: {
@@ -65,17 +67,17 @@ const nextConfig = {
           },
         },
       },
-    }
+    };
 
-    // Handle ethers.js polyfills
+    // Ethers/Node core fallbacks
     config.resolve.fallback = {
       ...config.resolve.fallback,
       fs: false,
       net: false,
       tls: false,
-    }
+    };
 
-    return config
+    return config;
   },
 
   env: {
@@ -89,14 +91,8 @@ const nextConfig = {
   },
 
   async redirects() {
-    return [
-      {
-        source: '/home',
-        destination: '/',
-        permanent: true,
-      },
-    ]
+    return [{ source: '/home', destination: '/', permanent: true }];
   },
-}
+};
 
-module.exports = nextConfig
+module.exports = nextConfig;
