@@ -72,11 +72,11 @@ export default function ActivePools() {
   })
   const roundsPerPage = 6
 
-  const provider = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [BASE_RPC])
+  const provider = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [])
   const contract = useMemo(() => {
     if (!CONTRACT_ADDRESS) return null
     return new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
-  }, [CONTRACT_ADDRESS, provider])
+  }, [provider])
 
   // Load ETH price (Coinbase → CoinGecko → Alchemy → hard fallback)
   const loadPrice = async (signal) => {
@@ -109,26 +109,29 @@ export default function ActivePools() {
     } catch {}
 
     try {
-      const alchemyRes = await fetch(
-        `https://eth-mainnet.g.alchemy.com/v2/${process.env.NEXT_PUBLIC_ALCHEMY_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: 1,
-            jsonrpc: '2.0',
-            method: 'alchemy_getTokenMetadata',
-            params: ['0x4200000000000000000000000000000000000006'],
-          }),
-          signal,
+      const apiKey = process.env.NEXT_PUBLIC_ALCHEMY_KEY
+      if (apiKey) {
+        const alchemyRes = await fetch(
+          `https://eth-mainnet.g.alchemy.com/v2/${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: 1,
+              jsonrpc: '2.0',
+              method: 'alchemy_getTokenMetadata',
+              params: ['0x4200000000000000000000000000000000000006'],
+            }),
+            signal,
+          }
+        )
+        const data = await alchemyRes.json()
+        price = data?.result?.price?.usd
+        if (price && price > 0.5) {
+          setBaseUsd(price)
+          setFallbackPrice(false)
+          return price
         }
-      )
-      const data = await alchemyRes.json()
-      price = data?.result?.price?.usd
-      if (price && price > 0.5) {
-        setBaseUsd(price)
-        setFallbackPrice(false)
-        return price
       }
       throw new Error('Invalid Alchemy price')
     } catch {
@@ -145,12 +148,22 @@ export default function ActivePools() {
     const now = Math.floor(Date.now() / 1000)
     const all = []
 
-    const countRaw = await contract.pool1Count()
-    const count = Number(countRaw || 0n)
+    let count = 0
+    try {
+      const countRaw = await contract.pool1Count()
+      count = Number(countRaw || 0n)
+    } catch {
+      // If count fails, bail gracefully
+      setRounds([])
+      return
+    }
+
     for (let i = 1; i <= count; i++) {
       if (signal?.aborted) break
       try {
         const info = await contract.getPool1Info(BigInt(i))
+        if (signal?.aborted) break
+
         const name = info.name_ ?? info[0]
         const theme = info.theme_ ?? info[1]
         const parts = info.parts_ ?? info[2]
@@ -169,17 +182,18 @@ export default function ActivePools() {
                 return {
                   address: addr,
                   avatar: res?.pfp_url || '/Capitalize.PNG',
-                  fallbackUsername: res?.username || addr.slice(2, 6).toUpperCase(),
+                  fallbackUsername: res?.username || (typeof addr === 'string' ? addr.slice(2, 6).toUpperCase() : 'USER'),
                 }
               } catch {
                 return {
                   address: addr,
                   avatar: '/Capitalize.PNG',
-                  fallbackUsername: addr.slice(2, 6).toUpperCase(),
+                  fallbackUsername: typeof addr === 'string' ? addr.slice(2, 6).toUpperCase() : 'USER',
                 }
               }
             })
           )
+          if (signal?.aborted) break
 
           // submissions (V3)
           const submissions = await Promise.all(
@@ -217,18 +231,22 @@ export default function ActivePools() {
           })
         }
       } catch (e) {
+        if (signal?.aborted) break
         console.warn(`Error loading round ${i}`, e)
+        // continue with next
       }
     }
 
-    setRounds(all)
+    if (!signal?.aborted) setRounds(all)
   }
 
   useEffect(() => {
     if (!CONTRACT_ADDRESS) return
     const controller = new AbortController()
     const tick = async () => {
+      if (controller.signal.aborted) return
       const price = await loadPrice(controller.signal)
+      if (controller.signal.aborted) return
       await loadRounds(price, controller.signal)
     }
     tick()
@@ -417,11 +435,14 @@ export default function ActivePools() {
                       <div className="bg-slate-700 p-2 rounded text-xs text-slate-100 max-h-48 overflow-y-auto space-y-2">
                         {r.submissions.map((s, idx) => {
                           const p = r.participants.find(
-                            (p) => p.address.toLowerCase() === s.address.toLowerCase()
+                            (p) =>
+                              typeof p.address === 'string' &&
+                              typeof s.address === 'string' &&
+                              p.address.toLowerCase() === s.address.toLowerCase()
                           )
                           const likeKey = `${r.id}-${idx}`
                           const displayName =
-                            s.username || p?.fallbackUsername || s.address.slice(2, 6).toUpperCase()
+                            s.username || p?.fallbackUsername || (typeof s.address === 'string' ? s.address.slice(2, 6).toUpperCase() : 'USER')
                           return (
                             <div key={`${s.address}-${idx}`} className="flex items-start gap-2">
                               <img
