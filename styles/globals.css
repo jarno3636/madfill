@@ -1,7 +1,10 @@
+/* styles/globals.css */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* Theme tokens (HSL so Tailwind's hsl(var(--...)) works nicely) */
 :root {
   --background: 222.2 84% 4.9%;
   --foreground: 210 40% 98%;
@@ -21,12 +24,18 @@
   --destructive-foreground: 210 40% 98%;
   --border: 217.2 32.6% 17.5%;
   --input: 217.2 32.6% 17.5%;
-  --ring: 224.3 76.3% 94.0%;
+  --ring: 224.3 76.3% 94%;
   --radius: 0.75rem;
 }
 
+/* Base element tweaks – low specificity so Tailwind utilities still win */
 * {
   border-color: hsl(var(--border));
+  box-sizing: border-box; /* (Tailwind preflight sets this; kept for clarity) */
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
@@ -35,42 +44,29 @@ body {
   font-feature-settings: "rlig" 1, "calt" 1;
 }
 
-/* Performance optimizations */
-* {
-  box-sizing: border-box;
-}
-
+/* Media elements */
 img {
   max-width: 100%;
   height: auto;
 }
 
-/* Smooth scrolling */
-html {
-  scroll-behavior: smooth;
-}
-
-/* Focus styles for accessibility */
+/* Focus styles for accessibility (works alongside Tailwind's ring utilities) */
 *:focus-visible {
   outline: 2px solid hsl(var(--ring));
   outline-offset: 2px;
 }
 
-/* Loading states */
+/* Loading helper */
 .loading {
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 @keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: .5;
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: .5; }
 }
 
-/* Custom scrollbar */
+/* Custom scrollbar (WebKit) */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -89,10 +85,21 @@ html {
   background: hsl(var(--accent-foreground));
 }
 
-/* Print styles */
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Print styles (fixes autoprefixer deprecation: use print-color-adjust) */
 @media print {
   * {
     -webkit-print-color-adjust: exact;
-    color-adjust: exact;
+    print-color-adjust: exact;
   }
 }
