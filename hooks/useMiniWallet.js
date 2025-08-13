@@ -1,4 +1,3 @@
-// hooks/useMiniWallet.js
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -34,12 +33,21 @@ export function useMiniWallet() {
     return await getMiniProvider()
   }, [getMiniProvider])
 
-  // passive observe
+  // passive observe + attach listeners (with proper cleanup)
   useEffect(() => {
     let cancelled = false
+    let eip = null
+    const acctHandler = (accs) => {
+      const a = accs?.[0] || null
+      setAddress(a)
+      setIsConnected(!!a)
+    }
+    const chainHandler = () => { /* noop */ }
+
     ;(async () => {
-      const eip = await getEip1193()
+      eip = await getEip1193()
       if (!eip) return
+
       try {
         const provider = new ethers.BrowserProvider(eip)
         const signer = await provider.getSigner().catch(() => null)
@@ -49,23 +57,20 @@ export function useMiniWallet() {
           setIsConnected(true)
         }
       } catch {}
-      // react to wallet events if injected
+
       if (eip?.on) {
-        const onAcct = (accs) => {
-          const a = accs?.[0] || null
-          setAddress(a)
-          setIsConnected(!!a)
-        }
-        const onChain = () => {} // no-op; page code can reload if needed
-        eip.on('accountsChanged', onAcct)
-        eip.on('chainChanged', onChain)
-        return () => {
-          eip.removeListener?.('accountsChanged', onAcct)
-          eip.removeListener?.('chainChanged', onChain)
-        }
+        eip.on('accountsChanged', acctHandler)
+        eip.on('chainChanged', chainHandler)
       }
     })()
-    return () => { cancelled = true }
+
+    return () => {
+      cancelled = true
+      if (eip?.removeListener) {
+        eip.removeListener('accountsChanged', acctHandler)
+        eip.removeListener('chainChanged', chainHandler)
+      }
+    }
   }, [getEip1193])
 
   const connect = useCallback(async () => {
@@ -73,13 +78,16 @@ export function useMiniWallet() {
     try {
       const eip = await getEip1193()
       if (!eip) throw new Error('No wallet found')
+
       await eip.request?.({ method: 'eth_requestAccounts' })
       const provider = new ethers.BrowserProvider(eip)
       const net = await provider.getNetwork()
       if (net?.chainId !== BASE_CHAIN_ID) {
-        // try switch/add Base
         try {
-          await eip.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] })
+          await eip.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: BASE_CHAIN_ID_HEX }],
+          })
         } catch (e) {
           if (e?.code === 4902) {
             await eip.request({
@@ -108,7 +116,6 @@ export function useMiniWallet() {
   }, [getEip1193])
 
   const disconnect = useCallback(async () => {
-    // nothing to do for injected/mini wallets—just clear state
     setAddress(null)
     setIsConnected(false)
   }, [])
