@@ -1,7 +1,7 @@
 // hooks/useContracts.js
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { ethers } from 'ethers'
 import { useMiniWallet } from './useMiniWallet'
 
@@ -20,7 +20,10 @@ const ADDR = {
 }
 
 // Hard cap when brute-forcing token IDs client-side
-const NFT_SCAN_CAP = Number(process.env.NEXT_PUBLIC_NFT_SCAN_CAP || 500)
+const NFT_SCAN_CAP_RAW = Number(process.env.NEXT_PUBLIC_NFT_SCAN_CAP || 500)
+const NFT_SCAN_CAP = Number.isFinite(NFT_SCAN_CAP_RAW)
+  ? Math.min(Math.max(0, NFT_SCAN_CAP_RAW), 5_000) // hard-ceiling for safety
+  : 500
 
 // ------- ABI loading (dynamic for SSR safety) -------
 let FILL_ABI, NFT_ABI
@@ -57,9 +60,27 @@ async function loadAbis() {
   }
 }
 
+// ------- utils -------
+const normalizeError = (e, fallback = 'Transaction failed') => {
+  return new Error(
+    e?.shortMessage ||
+      e?.data?.message ||
+      e?.reason ||
+      e?.message ||
+      fallback
+  )
+}
+
+const toWeiSafe = (ethStr) => {
+  const n = Number(ethStr)
+  if (!Number.isFinite(n) || n < 0) throw new Error('Invalid ETH amount')
+  return ethers.parseEther(String(n))
+}
+
 // ------- hook -------
 export function useContracts() {
   const { isConnected } = useMiniWallet()
+  const mounted = useRef(false)
 
   const [provider, setProvider] = useState(null)
   const [signer, setSigner] = useState(null)
@@ -67,6 +88,13 @@ export function useContracts() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const isReady = useMemo(() => !!contracts, [contracts])
+
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
 
   // init provider + contracts
   useEffect(() => {
@@ -79,7 +107,7 @@ export function useContracts() {
 
         // Always have a read provider
         const readProv = new ethers.JsonRpcProvider(BASE_RPC)
-        if (!cancelled) setProvider(readProv)
+        if (!cancelled && mounted.current) setProvider(readProv)
 
         // Optional signer (only client + wallet)
         let signerLocal = null
@@ -88,7 +116,7 @@ export function useContracts() {
             const browserProv = new ethers.BrowserProvider(window.ethereum)
             const net = await browserProv.getNetwork()
             if (Number(net.chainId) !== CHAIN_ID) {
-              // best effort switch
+              // best effort switch (non-fatal)
               try {
                 await window.ethereum.request({
                   method: 'wallet_switchEthereumChain',
@@ -101,19 +129,19 @@ export function useContracts() {
             console.warn('Signer init failed:', e)
           }
         }
-        if (!cancelled) setSigner(signerLocal)
+        if (!cancelled && mounted.current) setSigner(signerLocal)
 
         const providerForContracts = signerLocal || readProv
 
         const fill = new ethers.Contract(ADDR.FILL_IN_STORY, FILL_ABI, providerForContracts)
-        const nft = new ethers.Contract(ADDR.MADFILL_NFT, NFT_ABI, providerForContracts)
+        const nft = new ethers.Contract(ADDR.MADFILL_NFT,    NFT_ABI,  providerForContracts)
 
-        if (!cancelled) setContracts({ fillInStory: fill, madfillNft: nft })
+        if (!cancelled && mounted.current) setContracts({ fillInStory: fill, madfillNft: nft })
       } catch (e) {
-        if (!cancelled) setError(e)
+        if (!cancelled && mounted.current) setError(e)
         console.error('useContracts init error:', e)
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled && mounted.current) setLoading(false)
       }
     })()
     return () => {
@@ -126,24 +154,27 @@ export function useContracts() {
     async (name, theme, parts, word, username, entryFeeEth, durationDays, blankIndex) => {
       if (!contracts?.fillInStory || !signer) throw new Error('Wallet not connected')
       try {
-        const feeWei = ethers.parseEther(String(entryFeeEth))
-        const duration = BigInt(Math.max(0, Number(durationDays)) * 86400)
+        const feeWei = toWeiSafe(entryFeeEth)
+        const duration = BigInt(Math.max(0, Math.floor(Number(durationDays) || 0)) * 86400)
+        const idx = Math.max(0, Number(blankIndex) || 0)
+
         const tx = await contracts.fillInStory.createPool1(
-          name,
-          theme,
-          parts,
-          word,
-          username,
+          String(name ?? ''),
+          String(theme ?? ''),
+          Array.isArray(parts) ? parts.map(String) : [],
+          String(word ?? ''),
+          String(username ?? ''),
           feeWei,
           duration,
-          Number(blankIndex),
+          idx,
           { value: feeWei }
         )
         const receipt = await tx.wait()
         return { tx, receipt }
       } catch (e) {
-        console.error('createPool1 failed:', e)
-        throw e
+        const err = normalizeError(e, 'Create round failed')
+        console.error('createPool1 failed:', err)
+        throw err
       }
     },
     [contracts, signer]
@@ -153,27 +184,32 @@ export function useContracts() {
     async (id, word, username, blankIndex, entryFeeEth) => {
       if (!contracts?.fillInStory || !signer) throw new Error('Wallet not connected')
       try {
-        const feeWei = ethers.parseEther(String(entryFeeEth))
+        const feeWei = toWeiSafe(entryFeeEth)
+        const idx = Math.max(0, Number(blankIndex) || 0)
+        const poolId = BigInt(id)
+
         // preflight for clearer reverts
         await contracts.fillInStory.joinPool1.staticCall(
-          BigInt(id),
-          String(word),
-          String(username || ''),
-          Number(blankIndex),
+          poolId,
+          String(word ?? ''),
+          String(username ?? ''),
+          idx,
           { value: feeWei }
         )
+
         const tx = await contracts.fillInStory.joinPool1(
-          BigInt(id),
-          String(word),
-          String(username || ''),
-          Number(blankIndex),
+          poolId,
+          String(word ?? ''),
+          String(username ?? ''),
+          idx,
           { value: feeWei }
         )
         const receipt = await tx.wait()
         return { tx, receipt }
       } catch (e) {
-        console.error('joinPool1 failed:', e)
-        throw e
+        const err = normalizeError(e, 'Join failed')
+        console.error('joinPool1 failed:', err)
+        throw err
       }
     },
     [contracts, signer]
@@ -259,7 +295,9 @@ export function useContracts() {
       if (!ids.length) return []
       // Optionally fetch tokenURIs too
       try {
-        const nft = contracts?.madfillNft || new ethers.Contract(ADDR.MADFILL_NFT, NFT_ABI, provider || new ethers.JsonRpcProvider(BASE_RPC))
+        const nft =
+          contracts?.madfillNft ||
+          new ethers.Contract(ADDR.MADFILL_NFT, NFT_ABI, provider || new ethers.JsonRpcProvider(BASE_RPC))
         const withUris = await Promise.all(
           ids.map(async (id) => {
             try {
