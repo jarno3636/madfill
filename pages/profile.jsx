@@ -1,25 +1,25 @@
 // pages/profile.jsx
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import { useWindowSize } from 'react-use'
-import Layout from '../components/Layout'
-import SEO from '../components/SEO'
-import { absoluteUrl, buildOgUrl } from '../lib/seo'
-import { useMiniWallet } from '../hooks/useMiniWallet'
-import { useContracts } from '../hooks/useContracts'
-import { useUserPreferences, useStoryDrafts } from '../hooks/useLocalStorage'
-import { useToast } from '../components/Toast'
-import { useNotifications } from '../hooks/useNotifications'
-import LoadingSpinner from '../components/LoadingSpinner'
-import ChainSwitcher from '../components/ChainSwitcher'
-import { formatAddress } from '../lib/validation'
-import { useMiniAppReady } from '../hooks/useMiniAppReady'
+import dynamic from 'next/dynamic'
 import { ethers } from 'ethers'
 
-import dynamic from 'next/dynamic'
+import Layout from '@/components/Layout'
+import SEO from '@/components/SEO'
+import { absoluteUrl, buildOgUrl } from '@/lib/seo'
+import { useMiniWallet } from '@/hooks/useMiniWallet'
+import { useContracts } from '@/hooks/useContracts'
+import { useUserPreferences, useStoryDrafts } from '@/hooks/useLocalStorage'
+import { useToast } from '@/components/Toast'
+import { useNotifications } from '@/hooks/useNotifications'
+import LoadingSpinner from '@/components/LoadingSpinner'
+import ChainSwitcher from '@/components/ChainSwitcher'
+import { formatAddress } from '@/lib/validation'
+import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -31,10 +31,10 @@ const NFT_ADDRESS =
 
 // Minimal ABI slice we actually use on this page (ownerOf, totalSupply, tokenURI, balanceOf)
 const TEMPLATE_ABI = [
-  { "inputs":[{"internalType":"uint256","name":"tokenId","type":"uint256"}],"name":"ownerOf","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function" },
-  { "inputs":[],"name":"totalSupply","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function" },
-  { "inputs":[{"internalType":"uint256","name":"tokenId","type":"uint256"}],"name":"tokenURI","outputs":[{"internalType":"string","name":"","type":"string"}],"stateMutability":"view","type":"function" },
-  { "inputs":[{"internalType":"address","name":"owner","type":"address"}],"name":"balanceOf","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function" }
+  { inputs:[{ internalType:'uint256', name:'tokenId', type:'uint256' }], name:'ownerOf', outputs:[{ internalType:'address', name:'', type:'address' }], stateMutability:'view', type:'function' },
+  { inputs:[], name:'totalSupply', outputs:[{ internalType:'uint256', name:'', type:'uint256' }], stateMutability:'view', type:'function' },
+  { inputs:[{ internalType:'uint256', name:'tokenId', type:'uint256' }], name:'tokenURI', outputs:[{ internalType:'string', name:'', type:'string' }], stateMutability:'view', type:'function' },
+  { inputs:[{ internalType:'address', name:'owner', type:'address' }], name:'balanceOf', outputs:[{ internalType:'uint256', name:'', type:'uint256' }], stateMutability:'view', type:'function' }
 ]
 
 // hard cap so we don't brute force huge collections in browser
@@ -146,6 +146,11 @@ export default function Profile() {
   }
 
   // ----- actions -----
+  const triggerConfetti = () => {
+    setShowConfetti(true)
+    setTimeout(() => setShowConfetti(false), 1500)
+  }
+
   const handleDisconnect = async () => {
     try {
       await disconnect()
@@ -174,7 +179,7 @@ export default function Profile() {
   }
 
   const handleClearDrafts = () => {
-    if (window.confirm('Clear all story drafts? This cannot be undone.')) {
+    if (typeof window !== 'undefined' && window.confirm('Clear all story drafts? This cannot be undone.')) {
       clearAllDrafts()
       addToast('All drafts cleared', 'success')
       triggerConfetti()
@@ -182,16 +187,10 @@ export default function Profile() {
   }
 
   const handleResetPreferences = () => {
-    if (window.confirm('Reset preferences to default?')) {
+    if (typeof window !== 'undefined' && window.confirm('Reset preferences to default?')) {
       resetPreferences()
       addToast('Preferences reset to default', 'success')
     }
-  }
-
-  // tiny confetti patch (de-duped, auto-hide)
-  const triggerConfetti = () => {
-    setShowConfetti(true)
-    setTimeout(() => setShowConfetti(false), 1500)
   }
 
   if (!isConnected) {
@@ -259,6 +258,7 @@ export default function Profile() {
             <button
               onClick={() => router.push('/')}
               className="text-purple-200 hover:text-white transition-colors"
+              aria-label="Back to home"
             >
               ← Back to Home
             </button>
@@ -266,6 +266,7 @@ export default function Profile() {
             <button
               onClick={handleDisconnect}
               className="text-red-400 hover:text-red-300 transition-colors"
+              aria-label="Disconnect wallet"
             >
               Disconnect Wallet
             </button>
@@ -311,6 +312,7 @@ export default function Profile() {
                       ? 'bg-yellow-500 text-black font-semibold'
                       : 'text-white hover:bg-white/10'
                   }`}
+                  aria-pressed={activeTab === tab.key}
                 >
                   {tab.label}
                 </button>
@@ -393,6 +395,10 @@ export default function Profile() {
                           key={nftId}
                           onClick={() => router.push(`/nft/${nftId}`)}
                           className="card-hover cursor-pointer"
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => { if (e.key === 'Enter') router.push(`/nft/${nftId}`) }}
+                          aria-label={`Open NFT ${nftId}`}
                         >
                           <div className="aspect-square bg-gradient-to-br from-purple-400 to-pink-400 rounded-lg mb-4 flex items-center justify-center">
                             <span className="text-white text-2xl font-bold">#{nftId}</span>
@@ -477,13 +483,14 @@ export default function Profile() {
                             ? 'bg-green-500 text-black'
                             : 'bg-gray-500 text-white'
                         } disabled:opacity-50`}
+                        aria-disabled={!isSupported}
                       >
                         {!isSupported ? 'Not Supported' :
                           permission === 'granted' && preferences.notifications ? 'Enabled' : 'Disabled'}
                       </button>
                     </div>
 
-                    {/* Default Entry Fee (just a local pref; Pool1 feeBase handled on create pages) */}
+                    {/* Default Entry Fee (local pref only) */}
                     <div className="p-4 bg-white/10 rounded-lg">
                       <h3 className="text-white font-medium mb-2">Default Entry Fee</h3>
                       <input
@@ -492,6 +499,7 @@ export default function Profile() {
                         value={preferences.defaultEntryFee}
                         onChange={(e) => updatePreference('defaultEntryFee', e.target.value)}
                         className="input-primary w-32"
+                        aria-label="Default entry fee"
                       />
                       <p className="text-purple-200 text-sm mt-1">
                         Your preferred entry fee for new story pools
@@ -513,6 +521,7 @@ export default function Profile() {
                             ? 'bg-green-500 text-black'
                             : 'bg-gray-500 text-white'
                         }`}
+                        aria-pressed={Boolean(preferences.autoConnect)}
                       >
                         {preferences.autoConnect ? 'Enabled' : 'Disabled'}
                       </button>
