@@ -37,10 +37,8 @@ const nextConfig = {
     ];
   },
 
-  // IMPORTANT: remove aggressive webpack mutations for server bundles.
-  // Next 14 already handles chunking/polyfills correctly.
-  webpack: (config, { isServer }) => {
-    // Keep only minimal safe fallbacks; do NOT change splitChunks/globalObject/plugins
+  // Keep webpack minimal; do not mutate server chunking/polyfills
+  webpack: (config) => {
     config.resolve = config.resolve || {};
     config.resolve.fallback = {
       ...(config.resolve.fallback || {}),
@@ -56,13 +54,17 @@ const nextConfig = {
     NEXT_PUBLIC_APP_VERSION: '1.0.0',
   },
 
+  // Remove optimizeCss (pulls in critters during export)
   experimental: {
     esmExternals: true,
-    optimizeCss: true,
+    // optimizeCss: true, // ❌ remove; causes “Cannot find module 'critters'”
   },
 
   async redirects() {
-    return [{ source: '/home', destination: '/', permanent: true }];
+    return [
+      { source: '/home', destination: '/', permanent: true },
+      { source: '/leaderboard', destination: '/', permanent: true }, // remove dead route
+    ];
   },
 };
 
