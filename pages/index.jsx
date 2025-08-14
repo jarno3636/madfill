@@ -1,619 +1,697 @@
 // pages/index.jsx
 'use client'
 
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
 import Head from 'next/head'
-import Link from 'next/link'
 import { ethers } from 'ethers'
 import { useWindowSize } from 'react-use'
-import abi from '../abi/FillInStoryV3_ABI.json'
-import { Button } from '../components/ui/button'
-import { Card, CardHeader, CardContent } from '../components/ui/card'
-import { categories, durations } from '../data/templates'
-import ShareBar from '../components/ShareBar'
-import Layout from '@/components/Layout'
-import { fetchFarcasterProfile } from '../lib/neynar'
-import SEO from '../components/SEO'
-import { absoluteUrl, buildOgUrl } from '../lib/seo'
-import { useMiniAppReady } from '../hooks/useMiniAppReady'
-import dynamic from 'next/dynamic'
 
+import Layout from '@/components/Layout'
+import SEO from '@/components/SEO'
+import { Card, CardHeader, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import StyledCard from '@/components/StyledCard'
+import { useMiniAppReady } from '@/hooks/useMiniAppReady'
+import { useMiniWallet } from '@/hooks/useMiniWallet'
+import { useToast } from '@/components/Toast'
+import { absoluteUrl, buildOgUrl } from '@/lib/seo'
+
+// Client-only confetti
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
-/** ---- Chain + contract ---- */
-const CONTRACT_ADDRESS =
-  process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // FillInStoryV3 on Base
-
+/* ===============================
+   Pools Contract (Pool1/Pool2 ABI)
+=================================*/
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID = 8453n
 const BASE_CHAIN_ID_HEX = '0x2105'
 
-/** ---- Helpers ---- */
-const FEATURED_TAKE = 9
+// Replace with your deployed Pools contract
+const POOLS_ADDR =
+  process.env.NEXT_PUBLIC_POOLS_ADDRESS ||
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // fallback (update to your Pools)
 
-const extractError = (e) =>
-  e?.shortMessage ||
-  e?.reason ||
-  e?.error?.message ||
-  e?.data?.message ||
-  e?.message ||
-  (typeof e === 'string' ? e : JSON.stringify(e))
+const POOLS_ABI = [
+  // --- minimal reads we might use (optional) ---
+  { inputs: [], name: 'FEE_BPS', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'BPS_DENOMINATOR', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
 
-const needsSpaceBefore = (str) => {
-  if (!str) return false
-  const ch = str[0]
-  return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
-}
-
-function buildPreviewSingle(parts, w, idx) {
-  const n = parts?.length || 0
-  if (n === 0) return ''
-  const blanks = Math.max(0, n - 1)
-  const iSel = Math.max(0, Math.min(Math.max(0, blanks - 1), Number(idx) || 0))
-  const out = []
-  for (let i = 0; i < n; i++) {
-    out.push(parts[i] || '')
-    if (i < n - 1) {
-      if (i === iSel) {
-        if (w) {
-          out.push(w)
-          if (needsSpaceBefore(parts[i + 1] || '')) out.push(' ')
-        } else {
-          out.push('____')
-        }
-      } else {
-        out.push('____')
-      }
-    }
+  // --- writes we need ---
+  {
+    inputs: [
+      { type: 'string', name: 'name' },
+      { type: 'string', name: 'theme' },
+      { type: 'string[]', name: 'parts' },
+      { type: 'string', name: 'word' },
+      { type: 'string', name: 'username' },
+      { type: 'uint256', name: 'feeBase' },
+      { type: 'uint256', name: 'duration' },
+      { type: 'uint8', name: 'blankIndex' }
+    ],
+    name: 'createPool1',
+    outputs: [],
+    stateMutability: 'payable',
+    type: 'function'
   }
-  return out.join('')
-}
+]
 
-function parseStoredIdxWord(stored) {
-  if (!stored || typeof stored !== 'string') return { idx: 0, word: '' }
-  const sep = stored.indexOf('::')
-  if (sep > -1) {
-    const idx = Math.max(0, Math.min(99, Number.parseInt(stored.slice(0, sep), 10) || 0))
-    const word = stored.slice(sep + 2) || ''
-    return { idx, word }
-  }
-  return { idx: 0, word: stored }
-}
-
-function sanitizeWord(raw) {
-  return (raw || '')
+/* ===============================
+   Helpers & UI Data
+=================================*/
+const bytes = (s) => new TextEncoder().encode(String(s || '')).length
+const sanitizeOneWord = (raw) =>
+  String(raw || '')
     .trim()
     .split(' ')[0]
     .replace(/[^a-zA-Z0-9\-_]/g, '')
     .slice(0, 16)
+
+const PROMPT_STARTERS = [
+  'My day started with [BLANK], then I found a [BLANK] under the couch.',
+  'In space, no one can hear your [BLANK], but everyone sees your [BLANK].',
+  'The secret ingredient is always [BLANK], served with a side of [BLANK].',
+  'When I opened the door, a [BLANK] yelled “[BLANK]!” from the hallway.',
+  'Future me only travels for [BLANK] and exceptional [BLANK].',
+  'The prophecy spoke of [BLANK] and the legendary [BLANK].'
+]
+
+const BG_CHOICES = [
+  { key: 'indigoNebula', label: 'Indigo Nebula', cls: 'from-indigo-900 via-purple-800 to-slate-900' },
+  { key: 'candy',        label: 'Candy',         cls: 'from-pink-600 via-fuchsia-600 to-purple-700' },
+  { key: 'tealSunset',   label: 'Teal Sunset',   cls: 'from-teal-600 via-cyan-700 to-indigo-800' },
+  { key: 'magma',        label: 'Magma',         cls: 'from-orange-600 via-rose-600 to-fuchsia-700' },
+  { key: 'forest',       label: 'Forest',        cls: 'from-emerald-700 via-teal-700 to-slate-900' },
+]
+
+// Convert a story with [BLANK] into parts[] (keeps blanks)
+const storyToPartsKeepBlanks = (story) => {
+  const chunks = String(story || '').split(/\[BLANK\]/g)
+  if (chunks.length === 0) return ['']
+  return chunks // parts = text segments; blanks exist between parts
 }
 
-/** Prefer Mini App provider if present (Warpcast), else window.ethereum */
-function useEip1193() {
-  const miniProvRef = useRef(null)
-
-  const getProvider = useCallback(async () => {
-    const inWarpcast =
-      typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
-
-    // 1) Farcaster Mini wallet first (if in app)
-    if (inWarpcast) {
-      if (miniProvRef.current) return miniProvRef.current
-      try {
-        const mod = await import('@farcaster/miniapp-sdk')
-        const prov = await mod.sdk.wallet.getEthereumProvider()
-        miniProvRef.current = prov
-        return prov
-      } catch {
-        // fall through to injected
-      }
-    }
-
-    // 2) injected (web)
-    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
-
-    return null
-  }, [])
-
-  return getProvider
-}
-
-export default function Home() {
+/* ===============================
+   Index (Home) — Create Pool1
+=================================*/
+function IndexPage() {
   useMiniAppReady()
-
-  const [status, setStatus] = useState('')
-  const [logs, setLogs] = useState([])
-  const loggerRef = useRef(null)
-
-  const [address, setAddress] = useState(null)
-  const [roundId, setRoundId] = useState('')
-  const [roundName, setRoundName] = useState('')
-  const [catIdx, setCatIdx] = useState(0)
-  const [tplIdx, setTplIdx] = useState(0)
-  const [blankIndex, setBlankIndex] = useState(0)
-  const [word, setWord] = useState('')
-  const [duration, setDuration] = useState(durations[0].value) // days
-  const [feeEth, setFeeEth] = useState(0.01) // UI value, sent 1:1 as feeBase
-  const [busy, setBusy] = useState(false)
-  const [profile, setProfile] = useState(null)
-  const [showConfetti, setShowConfetti] = useState(false)
-  const [featured, setFeatured] = useState([])
-  const [loadingFeatured, setLoadingFeatured] = useState(true)
-
+  const { addToast } = useToast()
+  const { address, isConnected, connect } = useMiniWallet()
   const { width, height } = useWindowSize()
-  const getEip1193 = useEip1193()
 
-  const selectedCategory = categories[catIdx]
-  const tpl = selectedCategory.templates[tplIdx]
+  // Chain state
+  const [isOnBase, setIsOnBase] = useState(true)
 
-  const log = (msg) => {
-    setLogs((prev) => [...prev, msg])
-    setTimeout(() => {
-      if (loggerRef.current) loggerRef.current.scrollTop = loggerRef.current.scrollHeight
-    }, 30)
-  }
+  // UI
+  const [showConfetti, setShowConfetti] = useState(false)
+  const [loading, setLoading] = useState(false)
 
-  /** ---- wallet observe (passive) ---- */
+  // Round meta
+  const [title, setTitle] = useState('')
+  const [theme, setTheme] = useState('')
+  const [username, setUsername] = useState('') // creator display name (string)
+  const [bgKey, setBgKey] = useState(BG_CHOICES[0].key)
+
+  // Story
+  const storyRef = useRef(null)
+  const [story, setStory] = useState(PROMPT_STARTERS[0])
+
+  // Entry fee (feeBase)
+  const [feeEth, setFeeEth] = useState('0.0005') // editable (string)
+  const feeWei = useMemo(() => {
+    try { return ethers.parseEther((feeEth || '0').trim()) } catch { return 0n }
+  }, [feeEth])
+
+  // Duration minutes
+  const [durationMins, setDurationMins] = useState(60) // default 60 mins
+  const durationSecs = useMemo(() => BigInt(Math.max(60, Number(durationMins) | 0) * 60), [durationMins])
+
+  // Creator’s own entry
+  const [creatorWord, setCreatorWord] = useState('')
+  const blanksCount = Math.max(0, story.split(/\[BLANK\]/g).length - 1)
+  const [blankIndex, setBlankIndex] = useState(0)
+
+  // Optional USD
+  const [usd, setUsd] = useState(null)
+
+  // Base chain observe
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const eip = await getEip1193()
-      if (!eip) return
       try {
-        const accts = await eip.request?.({ method: 'eth_accounts' })
-        if (!cancelled) setAddress(accts?.[0] || null)
-      } catch {}
-      if (eip?.on && eip?.removeListener) {
-        const onAcct = (accs) => setAddress(accs?.[0] || null)
-        eip.on('accountsChanged', onAcct)
-        return () => eip.removeListener('accountsChanged', onAcct)
-      }
-    })()
-    return () => { cancelled = true }
-  }, [getEip1193])
-
-  /** ---- Farcaster profile ---- */
-  useEffect(() => {
-    if (!address) return
-    ;(async () => {
-      try {
-        const p = await fetchFarcasterProfile(address)
-        setProfile(p || null)
-      } catch {}
-    })()
-  }, [address])
-
-  /** ---- Featured (read-only) ---- */
-  useEffect(() => {
-    let cancelled = false
-    setLoadingFeatured(true)
-    ;(async () => {
-      try {
-        const provider = new ethers.JsonRpcProvider(BASE_RPC)
-        const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
-        const total = Number(await ct.pool1Count())
-        if (total === 0) {
-          if (!cancelled) setFeatured([])
-          return
-        }
-        const start = Math.max(1, total - FEATURED_TAKE + 1)
-        const rows = []
-        for (let id = total; id >= start; id--) {
-          const info = await ct.getPool1Info(BigInt(id))
-          const name = info.name_ ?? info[0]
-          const theme = info.theme_ ?? info[1]
-          const parts = info.parts_ ?? info[2]
-          const deadline = Number(info.deadline_ ?? info[4])
-          const creator = info.creator_ ?? info[5]
-          const participants = (info.participants_ ?? info[6]) || []
-          const poolBalance = info.poolBalance_ ?? info[9]
-
-          let creatorPreview = ''
+        const prov = (typeof window !== 'undefined' && window.ethereum) || null
+        if (prov) {
+          const provider = new ethers.BrowserProvider(prov)
           try {
-            const sub = await ct.getPool1Submission(BigInt(id), creator)
-            const stored = sub.word_ ?? sub[1] // "idx::word"
-            const parsed = parseStoredIdxWord(stored)
-            creatorPreview = buildPreviewSingle(parts, parsed.word, parsed.idx)
-          } catch {}
-
-          rows.push({
-            id,
-            name: name || `Round #${id}`,
-            theme,
-            parts,
-            preview: creatorPreview || buildPreviewSingle(parts, '', 0),
-            entrants: participants.length,
-            poolEth: Number(ethers.formatEther(poolBalance || 0n)),
-            deadline,
-          })
+            const net = await provider.getNetwork()
+            if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
+          } catch {
+            if (!cancelled) setIsOnBase(true)
+          }
+          const onChain = () => location.reload()
+          prov.on?.('chainChanged', onChain)
+          return () => prov.removeListener?.('chainChanged', onChain)
+        } else if (!cancelled) {
+          setIsOnBase(true)
         }
-        if (!cancelled) setFeatured(rows)
-      } catch (e) {
-        console.error('Featured fetch failed', e)
-        if (!cancelled) setFeatured([])
-      } finally {
-        if (!cancelled) setLoadingFeatured(false)
+      } catch {
+        if (!cancelled) setIsOnBase(true)
       }
     })()
     return () => { cancelled = true }
   }, [])
 
-  /** ---- Preview ---- */
-  const preview = useMemo(
-    () => buildPreviewSingle(tpl.parts, sanitizeWord(word), blankIndex),
-    [tpl.parts, word, blankIndex]
-  )
-
-  /** ---- Chain switch ---- */
   const switchToBase = useCallback(async () => {
-    const eip = await getEip1193()
-    if (!eip) throw new Error('No wallet detected')
+    const prov = (typeof window !== 'undefined' && window.ethereum) || null
+    if (!prov) {
+      addToast({ type: 'error', title: 'No Wallet', message: 'No wallet provider found.' })
+      return
+    }
     try {
-      await eip.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: BASE_CHAIN_ID_HEX }],
-      })
+      await prov.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] })
+      setIsOnBase(true)
     } catch (e) {
       if (e?.code === 4902) {
-        await eip.request({
-          method: 'wallet_addEthereumChain',
-          params: [{
-            chainId: BASE_CHAIN_ID_HEX,
-            chainName: 'Base',
-            rpcUrls: [BASE_RPC],
-            nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-            blockExplorerUrls: ['https://basescan.org'],
-          }],
-        })
+        try {
+          await prov.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: BASE_CHAIN_ID_HEX,
+              chainName: 'Base',
+              rpcUrls: [BASE_RPC],
+              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+              blockExplorerUrls: ['https://basescan.org']
+            }]
+          })
+          setIsOnBase(true)
+        } catch {
+          addToast({ type: 'error', title: 'Switch Failed', message: 'Could not add/switch to Base.' })
+        }
       } else {
-        throw e
+        addToast({ type: 'error', title: 'Switch Failed', message: e?.message || 'Could not switch to Base.' })
       }
     }
-  }, [getEip1193])
+  }, [addToast])
 
-  /** ---- Create round (feeBase-accurate, better errors) ---- */
-  async function handleCreateRound() {
-    const cleanWord = sanitizeWord(word)
-    if (!cleanWord) {
-      setStatus('Enter one word (letters/numbers/_/-), up to 16 chars.')
-      log('Invalid word')
-      return
-    }
+  // Resize blankIndex if story changes
+  useEffect(() => {
+    setBlankIndex((i) => Math.max(0, Math.min(Math.max(0, blanksCount - 1), i)))
+  }, [blanksCount])
 
-    // Parts must equal blanks + 1 (UI templates should satisfy this, but keep guard)
-    if ((tpl?.parts?.length || 0) !== (tpl?.blanks || 0) + 1) {
-      setStatus('Template error: parts must equal blanks + 1.')
-      log('Template mismatch')
-      return
-    }
-
-    // Fee guard (contract commonly requires > 0 and sane lower bound)
-    if (!(feeEth > 0)) {
-      setStatus('Entry fee must be greater than 0.')
-      return
-    }
-    if (feeEth < 0.001) {
-      setStatus('Minimum entry fee is 0.001 ETH.')
-      return
-    }
-
-    // Duration guard — if your contract enforces bounds, tweak here
-    if (duration <= 0) {
-      setStatus('Duration must be at least 1 day.')
-      return
-    }
-
-    try {
-      setBusy(true)
-      setStatus('')
-      log('Connecting wallet…')
-
-      const eip = await getEip1193()
-      if (!eip) throw new Error('No wallet detected')
-
-      const provider = new ethers.BrowserProvider(eip)
-      await eip.request?.({ method: 'eth_requestAccounts' })
-      let signer = await provider.getSigner()
-
-      const net = await provider.getNetwork()
-      if (net?.chainId !== BASE_CHAIN_ID) {
-        setStatus('Switching to Base…')
-        await switchToBase()
-        const p2 = new ethers.BrowserProvider(await getEip1193())
-        signer = await p2.getSigner()
-      }
-
-      const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
-
-      // 🔒 feeBase: exact on-chain value (no buffer). UI fee is ETH -> Wei.
-      const feeBase = ethers.parseUnits(String(feeEth), 18)
-      const value = feeBase
-      const parts = tpl.parts.map((p) => p.trim())
-      const name = (roundName || 'Untitled').slice(0, 48)
-      const theme = selectedCategory.name
-      const username = (profile?.username || 'anon').slice(0, 32)
-      const durationSecs = BigInt(duration * 86400)
-      const idx = Number(blankIndex) | 0
-
-      // Preflight to surface precise revert reasons
-      log(`Creating round "${name}" (preflight)…`)
+  // USD display (purely informational)
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
       try {
-        await ct.createPool1.staticCall(
-          name,
-          theme,
-          parts,
-          cleanWord,
-          username,
-          feeBase,
-          durationSecs,
-          idx,
-          { value }
-        )
-      } catch (err) {
-        const msg = extractError(err)
-        setStatus(`Preflight failed: ${msg}`)
-        log(`Preflight failed: ${msg}`)
-        setBusy(false)
-        return
+        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
+        const j = await r.json()
+        if (!cancelled) setUsd(Number(j?.ethereum?.usd || 0))
+      } catch {
+        if (!cancelled) setUsd(null)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  // Derived parts for contract (keep blanks)
+  const parts = useMemo(() => storyToPartsKeepBlanks(story), [story])
+
+  // StyledCard preview: show creatorWord in selected blank
+  const wordsMapForPreview = useMemo(() => {
+    const w = {}
+    for (let i = 0; i < blanksCount; i++) w[i] = ''
+    const word = sanitizeOneWord(creatorWord)
+    if (blanksCount > 0 && word) w[blankIndex] = word
+    return w
+  }, [blanksCount, creatorWord, blankIndex])
+
+  const bgCls = useMemo(() => {
+    const found = BG_CHOICES.find((b) => b.key === bgKey) || BG_CHOICES[0]
+    return found.cls
+  }, [bgKey])
+
+  const insertBlankAtCursor = () => {
+    const el = storyRef.current
+    if (!el) { setStory((s) => s + ' [BLANK] '); return }
+    const start = el.selectionStart ?? el.value.length
+    const end = el.selectionEnd ?? el.value.length
+    const before = story.slice(0, start)
+    const after = story.slice(end)
+    const next = `${before}[BLANK]${after}`
+    setStory(next)
+    requestAnimationFrame(() => {
+      el.focus()
+      const pos = start + '[BLANK]'.length
+      el.setSelectionRange(pos, pos)
+    })
+  }
+
+  const randomizeStarter = () => {
+    const pick = PROMPT_STARTERS[(Math.random() * PROMPT_STARTERS.length) | 0]
+    setStory(pick)
+  }
+  const randomizeBackground = () => {
+    const idx = BG_CHOICES.findIndex((b) => b.key === bgKey)
+    const next = (idx + 1) % BG_CHOICES.length
+    setBgKey(BG_CHOICES[next].key)
+  }
+
+  // Validate before tx
+  const validate = () => {
+    if (!POOLS_ADDR) {
+      addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_POOLS_ADDRESS.' })
+      return false
+    }
+    if (!isConnected) {
+      addToast({ type: 'error', title: 'Wallet Required', message: 'Connect your wallet to create a round.' })
+      return false
+    }
+    if (!title.trim() || !theme.trim()) {
+      addToast({ type: 'error', title: 'Missing Fields', message: 'Title and Theme are required.' })
+      return false
+    }
+    if (parts.length < 2) {
+      addToast({ type: 'error', title: 'Add a Blank', message: 'Include at least one [BLANK] in your story.' })
+      return false
+    }
+    const word = sanitizeOneWord(creatorWord)
+    if (!word) {
+      addToast({ type: 'error', title: 'Your Word', message: 'Enter your one-word entry (letters/numbers/_/-, max 16).' })
+      return false
+    }
+    if (blanksCount < 1) {
+      addToast({ type: 'error', title: 'No Blanks', message: 'Story must contain at least one [BLANK].' })
+      return false
+    }
+    if (blankIndex < 0 || blankIndex >= blanksCount) {
+      addToast({ type: 'error', title: 'Blank Index', message: 'Select which blank you are filling.' })
+      return false
+    }
+    if (feeWei <= 0n) {
+      addToast({ type: 'error', title: 'Entry Fee', message: 'Set a positive entry fee (e.g., 0.0005).' })
+      return false
+    }
+    if (durationSecs < 60n) {
+      addToast({ type: 'error', title: 'Duration', message: 'Duration must be at least 1 minute.' })
+      return false
+    }
+    // Byte sanity (not strictly needed here, but helpful)
+    if (bytes(title) > 256 || bytes(theme) > 256) {
+      addToast({ type: 'error', title: 'Too Long', message: 'Title/Theme are too long.' })
+      return false
+    }
+    // Basic safety for each part size (optional; tweak if you enforce elsewhere)
+    for (const p of parts) {
+      if (bytes(p) > 2048) {
+        addToast({ type: 'error', title: 'Part Too Large', message: 'One of the parts is too large.' })
+        return false
+      }
+    }
+    return true
+  }
+
+  const handleCreatePool1 = async () => {
+    if (!validate()) return
+    try {
+      setLoading(true)
+      const prov = (typeof window !== 'undefined' && window.ethereum) || null
+      if (!prov) throw new Error('No wallet provider found')
+      await prov.request?.({ method: 'eth_requestAccounts' })
+
+      const browserProvider = new ethers.BrowserProvider(prov)
+      const net = await browserProvider.getNetwork()
+      if (net?.chainId !== BASE_CHAIN_ID) {
+        await switchToBase()
       }
 
-      log('Sending transaction…')
+      const signer = await browserProvider.getSigner()
+      const ct = new ethers.Contract(POOLS_ADDR, POOLS_ABI, signer)
+
+      const word = sanitizeOneWord(creatorWord)
+      const value = feeWei // contract expects payable value == feeBase (creator stakes their own fee)
+
       const tx = await ct.createPool1(
-        name,
-        theme,
+        String(title).slice(0, 128),
+        String(theme).slice(0, 128),
         parts,
-        cleanWord,
-        username,
-        feeBase,
-        durationSecs,
-        idx,
+        word,
+        String(username || '').slice(0, 64),
+        value,                          // feeBase (uint256)
+        durationSecs,                   // duration (uint256)
+        Number(blankIndex) & 0xff,      // blankIndex (uint8)
         { value }
       )
+      await tx.wait()
 
-      setStatus('Waiting for confirmation…')
-      const rc = await tx.wait()
-
-      let newId = ''
-      try {
-        // ethers v6 log parsing (if ABI includes event fragment names)
-        const evt = rc.logs?.find((l) => l.fragment?.name === 'Pool1Created')
-        if (evt?.args?.id) newId = evt.args.id.toString()
-      } catch {}
-
-      if (!newId) {
-        // Fallback to reading count after tx mines
-        const rp = new ethers.JsonRpcProvider(BASE_RPC)
-        const reader = new ethers.Contract(CONTRACT_ADDRESS, abi, rp)
-        newId = String(await reader.pool1Count())
-      }
-
-      setRoundId(newId)
+      addToast({ type: 'success', title: 'Round Created!', message: 'Your Pool 1 round is live.' })
       setShowConfetti(true)
-      log(`Round #${newId} created.`)
-      setStatus('✅ Success!')
-      setTimeout(() => setShowConfetti(false), 1800)
-    } catch (err) {
-      console.error(err)
-      const msg = extractError(err)
-      setStatus(`❌ ${msg}`)
-      log(`Create failed: ${msg}`)
+      setTimeout(() => setShowConfetti(false), 1600)
+
+      // Simple reset (keep fee/background so flow stays smooth)
+      setTitle('')
+      setTheme('')
+      setUsername('')
+      setCreatorWord('')
+      setStory(PROMPT_STARTERS[(Math.random() * PROMPT_STARTERS.length) | 0])
+      setBlankIndex(0)
+    } catch (e) {
+      console.error(e)
+      const msg = e?.info?.error?.message || e?.shortMessage || e?.reason || e?.message || 'Transaction failed.'
+      addToast({ type: 'error', title: 'Create Failed', message: msg })
       setShowConfetti(false)
     } finally {
-      setBusy(false)
+      setLoading(false)
     }
   }
 
-  /** ---- SEO ---- */
-  const origin = absoluteUrl('/')
-  const roundUrl = roundId ? absoluteUrl(`/round/${roundId}`) : origin
-  const shareText = roundId
-    ? `I just created a MadFill round! Join Round #${roundId}.`
-    : `Play MadFill on Base.`
-  const seoTitle = 'MadFill — Create or Join a Round'
-  const seoDesc = 'MadFill on Base. Fill the blank, vote, and win the pool.'
-  const ogImage = buildOgUrl({ screen: 'home', title: 'MadFill' })
+  // SEO / Frame
+  const pageUrl = absoluteUrl('/')
+  const ogImage = buildOgUrl({ screen: 'home', title: 'MadFill — Create a Round' })
 
   return (
     <Layout>
       <Head>
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
-        <meta property="fc:frame:button:1" content="Open MadFill" />
+        <meta property="fc:frame:button:1" content="Create a Round" />
         <meta property="fc:frame:button:1:action" content="link" />
-        <meta property="fc:frame:button:1:target" content={origin} />
-        <link rel="canonical" href={origin} />
+        <meta property="fc:frame:button:1:target" content={pageUrl} />
+        <link rel="canonical" href={pageUrl} />
       </Head>
 
-      <SEO title={seoTitle} description={seoDesc} url={origin} image={ogImage} />
+      <SEO
+        title="MadFill — Fill the blank, win the pot."
+        description="Create a Pool 1 round on Base: pick entry fee, choose your blank, drop your word, and launch."
+        url={pageUrl}
+        image={ogImage}
+        type="website"
+        twitterCard="summary_large_image"
+      />
 
-      {showConfetti && <Confetti width={width} height={height} />}
+      {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
-      <main className="max-w-6xl mx-auto p-4 md:p-6 space-y-6 text-white">
-        <div className="rounded-2xl bg-gradient-to-br from-indigo-700 via-fuchsia-700 to-cyan-700 p-6 md:p-8 shadow-xl ring-1 ring-white/10">
+      {/* Hero */}
+      <section className="mx-auto max-w-6xl px-4 pt-8 md:pt-12">
+        <div className="rounded-2xl bg-gradient-to-br from-slate-900 via-indigo-900/70 to-purple-900/70 border border-indigo-700 p-6 md:p-8 shadow-xl">
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">MadFill</h1>
-              <p className="text-indigo-100 mt-2 max-w-2xl">
-                Fill the blank. Make it funny. Win the pot. Create rounds, enter with one word,
-                and let the community decide the best punchline.
+            <div className="max-w-2xl">
+              <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight">🧠 MadFill — Create a Round</h1>
+              <p className="text-indigo-100 mt-3">
+                Write your story using <code className="bg-slate-800/80 px-1 rounded">[BLANK]</code> for gaps,
+                set the entry fee, choose which blank you’re filling, and launch Pool&nbsp;1 on Base.
               </p>
             </div>
-            <div className="flex items-center gap-3">
-              <Link href="/active" className="underline text-white/90 text-sm">
-                View Active Rounds
-              </Link>
+            <div className="flex items-center gap-2">
+              {!isConnected ? (
+                <Button onClick={connect} className="bg-amber-500 hover:bg-amber-400 text-black">
+                  Connect Wallet
+                </Button>
+              ) : !isOnBase ? (
+                <Button onClick={switchToBase} className="bg-cyan-600 hover:bg-cyan-500">
+                  Switch to Base
+                </Button>
+              ) : null}
+            </div>
+          </div>
+
+          {/* Fee + Duration summary */}
+          <div className="mt-5 flex flex-wrap gap-3 text-sm">
+            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
+              Entry fee per player: <b>{feeEth || '—'} ETH</b>
+              {usd && feeEth ? <span className="opacity-80"> (~${(parseFloat(feeEth || '0') * usd).toFixed(2)} USD)</span> : null}
+              <span className="opacity-70"> + gas</span>
+            </div>
+            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
+              Duration: <b>{Math.max(1, Number(durationMins) | 0)} min</b>
+            </div>
+            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
+              Blanks in story: <b>{blanksCount}</b>
             </div>
           </div>
         </div>
+      </section>
 
-        <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
-          <CardHeader className="border-b border-slate-700 bg-slate-800/50">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold">Create a new round</h2>
-              {profile?.username && (
-                <div className="text-xs text-slate-300">Hi @{profile.username}</div>
-              )}
-            </div>
-          </CardHeader>
+      {/* Builder */}
+      <main className="mx-auto max-w-6xl px-4 py-8 space-y-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Left: Round Setup */}
+          <Card className="bg-slate-900/70 border border-slate-700">
+            <CardHeader className="border-b border-slate-700">
+              <h2 className="text-xl font-bold">Round Setup</h2>
+            </CardHeader>
+            <CardContent className="p-5 space-y-5">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <label className="text-sm text-slate-300 md:col-span-2">
+                  Title
+                  <input
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="e.g., The Late Night Snack Heist"
+                    className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                    maxLength={128}
+                  />
+                </label>
 
-          <CardContent className="p-5 space-y-5">
-            {status && (
-              <div className={`rounded-lg p-2 text-sm border ${
-                status.startsWith('✅')
-                  ? 'bg-emerald-500/10 border-emerald-500 text-emerald-200'
-                  : status.startsWith('❌')
-                  ? 'bg-rose-500/10 border-rose-500 text-rose-200'
-                  : 'bg-slate-800/70 border-slate-700 text-slate-200'
-              }`}>
-                {status}
+                <label className="text-sm text-slate-300">
+                  Theme
+                  <input
+                    value={theme}
+                    onChange={(e) => setTheme(e.target.value)}
+                    placeholder="e.g., Comedy"
+                    className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                    maxLength={128}
+                  />
+                </label>
               </div>
-            )}
 
-            <div className="grid md:grid-cols-2 gap-4">
-              <label className="block text-sm text-slate-300">
-                Round name (optional)
-                <input
-                  value={roundName}
-                  onChange={(e) => setRoundName(e.target.value.slice(0, 48))}
-                  placeholder="My spicy round"
-                  className="mt-1 w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 text-white focus:border-yellow-500 focus:outline-none"
-                />
-              </label>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <label className="text-sm text-slate-300 md:col-span-2">
+                  Creator username (optional)
+                  <input
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="e.g., noodlelord"
+                    className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                    maxLength={64}
+                  />
+                </label>
 
-              <label className="block text-sm text-slate-300">
-                Entry fee (ETH on Base)
-                <input
-                  type="number"
-                  step="0.001"
-                  min="0.001"
-                  value={feeEth}
-                  onChange={(e) => setFeeEth(Number(e.target.value))}
-                  className="mt-1 w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 text-white focus:border-yellow-500 focus:outline-none"
-                />
-              </label>
-            </div>
-
-            <div className="space-y-3">
-              <label className="text-sm text-slate-300">Category</label>
-              <div className="flex flex-wrap gap-2">
-                {categories.map((cat, i) => (
-                  <button
-                    key={cat.name}
-                    onClick={() => { setCatIdx(i); setTplIdx(0) }}
-                    className={`px-3 py-2 rounded text-sm font-medium ${
-                      i === catIdx
-                        ? 'bg-yellow-500 text-black'
-                        : 'bg-slate-700 text-slate-200 hover:bg-slate-600'
-                    }`}
-                  >
-                    {cat.name}
-                  </button>
-                ))}
+                <label className="text-sm text-slate-300">
+                  Your word (one word)
+                  <input
+                    value={creatorWord}
+                    onChange={(e) => setCreatorWord(sanitizeOneWord(e.target.value))}
+                    placeholder="e.g., neon"
+                    className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                    maxLength={16}
+                  />
+                  <span className="text-xs text-slate-400">{(creatorWord || '').length}/16</span>
+                </label>
               </div>
-            </div>
 
-            <div className="space-y-3">
-              <label className="text-sm text-slate-300">Template</label>
               <div className="space-y-2">
-                {selectedCategory.templates.map((template, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setTplIdx(i)}
-                    className={`w-full p-3 text-left rounded border ${
-                      i === tplIdx
-                        ? 'border-yellow-500 bg-yellow-500/10'
-                        : 'border-slate-600 bg-slate-800/50 hover:bg-slate-800'
-                    }`}
-                  >
-                    <div className="text-sm">
-                      {buildPreviewSingle(template.parts, '', 0)}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <label className="text-sm text-slate-300">Your word</label>
-              <input
-                value={word}
-                onChange={(e) => setWord(e.target.value)}
-                placeholder="Enter your word..."
-                className="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 text-white focus:border-yellow-500 focus:outline-none"
-              />
-            </div>
-
-            <div className="space-y-3">
-              <label className="text-sm text-slate-300">Duration</label>
-              <select
-                value={duration}
-                onChange={(e) => setDuration(Number(e.target.value))}
-                className="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 text-white focus:border-yellow-500 focus:outline-none"
-              >
-                {durations.map((dur) => (
-                  <option key={dur.value} value={dur.value}>{dur.label}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-3">
-              <label className="text-sm text-slate-300">Preview</label>
-              <div className="p-4 bg-slate-800/70 rounded border border-slate-700">
-                <div className="text-white font-medium">
-                  {preview || 'Enter a word to see preview...'}
-                </div>
-              </div>
-            </div>
-
-            <Button onClick={handleCreateRound} disabled={busy || !word.trim()} className="w-full">
-              {busy ? 'Creating…' : 'Create Round'}
-            </Button>
-
-            {roundId && (
-              <div className="mt-4 p-4 bg-green-900/50 border border-green-700 rounded">
-                <div className="text-green-100 font-medium mb-2">
-                  Round #{roundId} created successfully!
-                </div>
-                <ShareBar url={roundUrl} text={shareText} />
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Recent Rounds */}
-        <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
-          <CardHeader className="border-b border-slate-700 bg-slate-800/50">
-            <h2 className="text-xl font-bold">Recent Rounds</h2>
-          </CardHeader>
-          <CardContent className="p-5">
-            {loadingFeatured ? (
-              <div className="text-center py-8 text-slate-400">Loading recent rounds…</div>
-            ) : featured.length === 0 ? (
-              <div className="text-center py-8 text-slate-400">No rounds yet. Be the first to create one!</div>
-            ) : (
-              <div className="grid gap-4">
-                {featured.map((round) => (
-                  <div
-                    key={round.id}
-                    className="p-4 bg-slate-800/50 rounded border border-slate-600 hover:border-slate-500 transition"
-                  >
-                    <div className="flex justify-between items-start mb-2">
-                      <h3 className="font-medium">{round.name}</h3>
-                      <span className="text-xs text-slate-400">#{round.id}</span>
-                    </div>
-                    <div className="text-sm text-slate-300 mb-2">{round.preview}</div>
-                    <div className="flex justify-between text-xs text-slate-400">
-                      <span>{round.entrants} entries</span>
-                      <span>{round.poolEth.toFixed(4)} ETH pool</span>
-                    </div>
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm text-slate-300">Story (use <code>[BLANK]</code> for gaps)</label>
+                  <div className="flex gap-2">
+                    <Button onClick={insertBlankAtCursor} variant="outline" className="border-slate-600 text-slate-200">+ [BLANK]</Button>
+                    <Button onClick={randomizeStarter} className="bg-slate-700 hover:bg-slate-600">🎲 Random</Button>
                   </div>
-                ))}
+                </div>
+                <textarea
+                  ref={storyRef}
+                  value={story}
+                  onChange={(e) => setStory(e.target.value)}
+                  className="w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-3 outline-none focus:ring-2 focus:ring-indigo-400 min-h-[140px] resize-y"
+                />
+                <div className="text-xs text-slate-400">
+                  Current blanks: <b>{blanksCount}</b> • Parts: <b>{parts.length}</b>
+                </div>
               </div>
-            )}
-          </CardContent>
-        </Card>
+
+              {/* Blank to fill selector */}
+              <div className="space-y-2">
+                <div className="text-sm text-slate-300">Choose which blank you’ll fill</div>
+                {blanksCount === 0 ? (
+                  <div className="text-xs text-amber-300">Add a <code>[BLANK]</code> to your story to proceed.</div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {Array.from({ length: blanksCount }).map((_, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setBlankIndex(i)}
+                        className={`px-3 py-1.5 rounded text-sm border ${
+                          blankIndex === i ? 'bg-yellow-400 text-black' : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                        }`}
+                        aria-pressed={blankIndex === i}
+                      >
+                        Blank #{i + 1}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Fee selector */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-slate-300">Entry Fee (feeBase)</div>
+                  <div className="flex gap-2">
+                    {['0.0005', '0.001', '0.005'].map((v) => (
+                      <button
+                        key={v}
+                        onClick={() => setFeeEth(v)}
+                        className={`px-3 py-1.5 rounded text-sm border ${
+                          feeEth === v ? 'bg-emerald-500 text-black' : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                        }`}
+                      >
+                        {v} ETH
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    inputMode="decimal"
+                    value={feeEth}
+                    onChange={(e) => setFeeEth(e.target.value)}
+                    className="w-40 rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                  <div className="text-sm text-slate-400">
+                    {usd && feeEth ? `≈ $${(parseFloat(feeEth || '0') * usd).toFixed(2)} USD` : null}
+                    <span className="opacity-70"> + gas</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Duration selector */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-slate-300">Duration (minutes)</div>
+                  <div className="flex gap-2">
+                    {[30, 60, 120, 240].map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => setDurationMins(m)}
+                        className={`px-3 py-1.5 rounded text-sm border ${
+                          Number(durationMins) === m ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                        }`}
+                      >
+                        {m}m
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    inputMode="numeric"
+                    value={durationMins}
+                    onChange={(e) => setDurationMins(e.target.value.replace(/[^\d]/g, ''))}
+                    className="w-40 rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                  <div className="text-sm text-slate-400">
+                    Ends in ~{Math.max(1, Number(durationMins) | 0)} minutes
+                  </div>
+                </div>
+              </div>
+
+              {/* Background selector */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-slate-300">Card Background</div>
+                  <Button onClick={randomizeBackground} variant="outline" className="border-slate-600 text-slate-200">🔀 Randomize</Button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {BG_CHOICES.map((bg) => (
+                    <button
+                      key={bg.key}
+                      onClick={() => setBgKey(bg.key)}
+                      className={`h-10 w-20 rounded-lg border ${bgKey === bg.key ? 'ring-2 ring-yellow-400' : 'border-slate-600'} bg-gradient-to-br ${bg.cls}`}
+                      title={bg.label}
+                      aria-pressed={bgKey === bg.key}
+                    />
+                  ))}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Right: Preview & Create */}
+          <Card className="bg-slate-900/70 border border-slate-700">
+            <CardHeader className="border-b border-slate-700">
+              <h2 className="text-xl font-bold">Preview & Launch</h2>
+            </CardHeader>
+            <CardContent className="p-5 space-y-5">
+              <div className="rounded-xl border border-slate-700 p-4 bg-gradient-to-br text-white shadow-inner min-h-[180px]">
+                <div className={`rounded-xl p-5 md:p-6 bg-gradient-to-br ${bgCls}`}>
+                  <div className="text-xs uppercase tracking-wide opacity-80">{theme || 'Theme'}</div>
+                  <div className="text-xl md:text-2xl font-extrabold">{title || 'Your Round Title'}</div>
+                  <div className="mt-3 text-base leading-relaxed">
+                    <StyledCard
+                      parts={parts}
+                      blanks={Math.max(0, parts.length - 1)}
+                      words={wordsMapForPreview}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3 text-sm">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div>
+                    Entry fee per player: <b>{feeEth || '—'} ETH</b>
+                    {usd && feeEth ? <span className="opacity-80"> (~${(parseFloat(feeEth || '0') * usd).toFixed(2)} USD)</span> : null}
+                    <span className="opacity-70"> + gas</span>
+                  </div>
+                  <div className="opacity-80">•</div>
+                  <div>Blanks in story: <b>{blanksCount}</b></div>
+                  <div className="opacity-80">•</div>
+                  <div>You’re filling: <b>{blanksCount ? `Blank #${blankIndex + 1}` : '—'}</b></div>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3">
+                <Button
+                  onClick={handleCreatePool1}
+                  disabled={
+                    loading ||
+                    !isConnected ||
+                    !title.trim() ||
+                    !theme.trim() ||
+                    blanksCount < 1 ||
+                    !sanitizeOneWord(creatorWord) ||
+                    feeWei <= 0n ||
+                    durationSecs < 60n
+                  }
+                  className="bg-fuchsia-600 hover:bg-fuchsia-500 w-full"
+                >
+                  {loading ? 'Launching…' : 'Launch Pool 1'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setTitle('')
+                    setTheme('')
+                    setUsername('')
+                    setCreatorWord('')
+                    setStory('')
+                    setBlankIndex(0)
+                  }}
+                  className="border-slate-600 text-slate-200 w-full"
+                >
+                  Clear
+                </Button>
+              </div>
+
+              <div className="text-xs text-slate-400">
+                Note: You’ll pay the entry fee you set (sent to the pool) plus gas. Players who join later pay the same entry fee.
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </main>
     </Layout>
   )
 }
+
+export default dynamic(() => Promise.resolve(IndexPage), { ssr: false })
