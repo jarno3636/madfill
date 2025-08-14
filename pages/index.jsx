@@ -1,7 +1,7 @@
 // pages/index.jsx
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -16,20 +16,18 @@ import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useMiniWallet } from '@/hooks/useMiniWallet'
 import { useToast } from '@/components/Toast'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
-import { categories as presetCategories } from '@/data/templates' // ⬅️ your templates
+import { categories as presetCategories } from '@/data/templates'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
-/* ===============================
-   Pools Contract
-=================================*/
+/* ========== Pools Contract ========== */
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID = 8453n
 const BASE_CHAIN_ID_HEX = '0x2105'
 
 const POOLS_ADDR =
   process.env.NEXT_PUBLIC_POOLS_ADDRESS ||
-  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // fallback
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // replace with your deploy
 
 const POOLS_ABI = [
   { inputs: [], name: 'FEE_BPS', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
@@ -52,25 +50,13 @@ const POOLS_ABI = [
   }
 ]
 
-/* ===============================
-   Helpers & UI Data
-=================================*/
-const bytes = (s) => new TextEncoder().encode(String(s || '')).length
+/* ========== Helpers ========== */
 const sanitizeOneWord = (raw) =>
   String(raw || '')
     .trim()
     .split(' ')[0]
     .replace(/[^a-zA-Z0-9\-_]/g, '')
     .slice(0, 16)
-
-const PROMPT_STARTERS = [
-  'My day started with [BLANK], then I found a [BLANK] under the couch.',
-  'In space, no one can hear your [BLANK], but everyone sees your [BLANK].',
-  'The secret ingredient is always [BLANK], served with a side of [BLANK].',
-  'When I opened the door, a [BLANK] yelled “[BLANK]!” from the hallway.',
-  'Future me only travels for [BLANK] and exceptional [BLANK].',
-  'The prophecy spoke of [BLANK] and the legendary [BLANK].'
-]
 
 const BG_CHOICES = [
   { key: 'indigoNebula', label: 'Indigo Nebula', cls: 'from-indigo-900 via-purple-800 to-slate-900' },
@@ -80,30 +66,28 @@ const BG_CHOICES = [
   { key: 'forest',       label: 'Forest',        cls: 'from-emerald-700 via-teal-700 to-slate-900' },
 ]
 
-// Split story by [BLANK] and keep the blanks between parts
-const storyToPartsKeepBlanks = (story) => String(story || '').split(/\[BLANK\]/g)
-
-/* ===============================
-   Page
-=================================*/
+/* ========== Page ========== */
 function IndexPage() {
   useMiniAppReady()
   const { addToast } = useToast()
   const { isConnected, connect } = useMiniWallet()
   const { width, height } = useWindowSize()
 
-  // -------- chain / fee (burn) display --------
+  // chain / fees
   const [isOnBase, setIsOnBase] = useState(true)
   const [feeBps, setFeeBps] = useState(null)
   const [bpsDen, setBpsDen] = useState(10000)
 
-  // -------- ui state --------
+  // ui
   const [showConfetti, setShowConfetti] = useState(false)
   const [loading, setLoading] = useState(false)
 
-  // templates
+  // templates pickers
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
+  const currentCategory = presetCategories[catIdx] || { name: 'Custom', templates: [] }
+  const currentTemplates = currentCategory.templates || []
+  const currentTemplate = currentTemplates[tplIdx] || null
 
   // round meta
   const [title, setTitle] = useState('')
@@ -111,11 +95,9 @@ function IndexPage() {
   const [username, setUsername] = useState('')
   const [bgKey, setBgKey] = useState(BG_CHOICES[0].key)
 
-  // story + blanks
-  const storyRef = useRef(null)
-  const [story, setStory] = useState(PROMPT_STARTERS[0])
-  const parts = useMemo(() => storyToPartsKeepBlanks(story), [story])
-  const blanksCount = Math.max(0, parts.length - 1)
+  // story parts come from template ONLY
+  const parts = useMemo(() => currentTemplate?.parts ?? [], [currentTemplate])
+  const blanksCount = Math.max(0, (parts?.length || 0) - 1)
   const [blankIndex, setBlankIndex] = useState(0)
 
   // creator entry
@@ -127,43 +109,26 @@ function IndexPage() {
     try { return ethers.parseEther((feeEth || '0').trim()) } catch { return 0n }
   }, [feeEth])
 
-  // duration (template-driven)
-  const [durationMins, setDurationMins] = useState(60)
-  const durationSecs = useMemo(() => BigInt(Math.max(60, Number(durationMins) | 0) * 60), [durationMins])
-
-  // usd (display only)
-  const [usd, setUsd] = useState(null)
-
-  // template data
-  const currentCategory = presetCategories[catIdx] || { name: 'Custom', templates: [] }
-  const currentTemplates = currentCategory.templates || []
-  const currentTemplate = currentTemplates[tplIdx] || null
-
-  const durationOptions = useMemo(() => {
-    const t = currentTemplate
-    if (!t) return [30, 60, 120, 240]
-    if (Array.isArray(t.durations) && t.durations.length) return t.durations
-    if (Array.isArray(t.durationMinsOptions) && t.durationMinsOptions.length) return t.durationMinsOptions
-    if (Array.isArray(t.versionOptions) && t.versionOptions.length) {
-      return t.versionOptions
-        .map(v => v?.durationMins)
-        .filter((n) => Number.isFinite(n) && n > 0)
+  // duration (from template days)
+  const templateDayOptions = useMemo(() => {
+    if (Array.isArray(currentTemplate?.durationDaysOptions) && currentTemplate.durationDaysOptions.length) {
+      return currentTemplate.durationDaysOptions
     }
-    return [30, 60, 120, 240]
+    // Fallback: 1–6 days + 7 (1 week)
+    return [1,2,3,4,5,6,7]
   }, [currentTemplate])
 
-  // context snippets for each blank
-  const blankContexts = useMemo(() => {
-    const out = []
-    for (let i = 0; i < blanksCount; i++) {
-      const left = (parts[i] || '').split(/\s+/).slice(-3).join(' ')
-      const right = (parts[i + 1] || '').split(/\s+/).slice(0, 3).join(' ')
-      out.push(`${left}  [____]  ${right}`.trim())
-    }
-    return out
-  }, [parts, blanksCount])
+  const [durationDays, setDurationDays] = useState(templateDayOptions[0] || 1)
+  useEffect(() => {
+    setDurationDays(templateDayOptions[0] || 1)
+  }, [templateDayOptions])
 
-  // show selected word in preview
+  const durationSecs = useMemo(() => BigInt(Math.max(1, Number(durationDays)) * 24 * 60 * 60), [durationDays])
+
+  // usd display (estimate)
+  const [usd, setUsd] = useState(null)
+
+  // preview words map (show creator word in chosen blank)
   const wordsMapForPreview = useMemo(() => {
     const w = {}
     for (let i = 0; i < blanksCount; i++) w[i] = ''
@@ -230,7 +195,7 @@ function IndexPage() {
     return () => { cancelled = true }
   }, [])
 
-  // keep blank index in bounds when story changes
+  // keep chosen blank index in bounds when template changes
   useEffect(() => {
     setBlankIndex((i) => Math.max(0, Math.min(Math.max(0, blanksCount - 1), i)))
   }, [blanksCount])
@@ -264,60 +229,32 @@ function IndexPage() {
     }
   }, [addToast])
 
-  /* ---------- template apply ---------- */
+  /* ---------- apply template ---------- */
   const applyTemplate = useCallback(() => {
     const t = currentTemplate
     if (!t) return
     setTitle(t.name || '')
     setTheme(currentCategory.name || '')
-    const p = t.parts || []
-    const joined = p.map((x, i) => (i < p.length - 1 ? `${x}[BLANK]` : x)).join('')
-    setStory(joined || '')
-    const opts =
-      (Array.isArray(t.durations) && t.durations.length && t.durations) ||
-      (Array.isArray(t.durationMinsOptions) && t.durationMinsOptions.length && t.durationMinsOptions) ||
-      (Array.isArray(t.versionOptions) && t.versionOptions.length &&
-        t.versionOptions.map(v => v?.durationMins).filter(n => Number.isFinite(n) && n > 0)) ||
-      null
-    if (opts && opts.length) setDurationMins(Number(opts[0]))
+    // duration from template (days)
+    if (Array.isArray(t.durationDaysOptions) && t.durationDaysOptions.length) {
+      setDurationDays(Number(t.durationDaysOptions[0]))
+    } else {
+      setDurationDays(1)
+    }
   }, [currentTemplate, currentCategory])
-
-  /* ---------- helpers ---------- */
-  const insertBlankAtCursor = () => {
-    const el = storyRef.current
-    if (!el) { setStory((s) => s + ' [BLANK] '); return }
-    const start = el.selectionStart ?? el.value.length
-    const end = el.selectionEnd ?? el.value.length
-    const before = story.slice(0, start)
-    const after = story.slice(end)
-    const next = `${before}[BLANK]${after}`
-    setStory(next)
-    requestAnimationFrame(() => {
-      el.focus()
-      const pos = start + '[BLANK]'.length
-      el.setSelectionRange(pos, pos)
-    })
-  }
-
-  const randomizeStarter = () => setStory(PROMPT_STARTERS[(Math.random() * PROMPT_STARTERS.length) | 0])
-  const randomizeBackground = () => {
-    const idx = BG_CHOICES.findIndex((b) => b.key === bgKey)
-    const next = (idx + 1) % BG_CHOICES.length
-    setBgKey(BG_CHOICES[next].key)
-  }
 
   /* ---------- validation & tx ---------- */
   const validate = () => {
     if (!POOLS_ADDR) { addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_POOLS_ADDRESS.' }); return false }
     if (!isConnected) { addToast({ type: 'error', title: 'Wallet Required', message: 'Connect your wallet to create a round.' }); return false }
+    if (!currentTemplate) { addToast({ type: 'error', title: 'Choose a Template', message: 'Pick a category and template.' }); return false }
     if (!title.trim() || !theme.trim()) { addToast({ type: 'error', title: 'Missing Fields', message: 'Title and Theme are required.' }); return false }
-    if (parts.length < 2) { addToast({ type: 'error', title: 'Add a Blank', message: 'Include at least one [BLANK] in your story.' }); return false }
+    if (blanksCount < 1) { addToast({ type: 'error', title: 'No Blanks', message: 'Selected template must have at least one blank.' }); return false }
     const word = sanitizeOneWord(creatorWord)
     if (!word) { addToast({ type: 'error', title: 'Your Word', message: 'Enter your one-word entry (letters/numbers/_/-, max 16).' }); return false }
     if (blankIndex < 0 || blankIndex >= blanksCount) { addToast({ type: 'error', title: 'Blank Index', message: 'Select which blank you are filling.' }); return false }
     if (feeWei <= 0n) { addToast({ type: 'error', title: 'Entry Fee', message: 'Set a positive entry fee (e.g., 0.0005).' }); return false }
     if (durationSecs < 60n) { addToast({ type: 'error', title: 'Duration', message: 'Duration must be at least 1 minute.' }); return false }
-    if (bytes(title) > 256 || bytes(theme) > 256) { addToast({ type: 'error', title: 'Too Long', message: 'Title/Theme are too long.' }); return false }
     return true
   }
 
@@ -345,7 +282,7 @@ function IndexPage() {
         word,
         String(username || '').slice(0, 64),
         value,
-        durationSecs,
+        durationSecs,                   // seconds (days * 24h)
         Number(blankIndex) & 0xff,
         { value }
       )
@@ -369,6 +306,17 @@ function IndexPage() {
   const feeUsd = (usd && feeEth) ? (parseFloat(feeEth || '0') * usd) : null
   const burnPct = (feeBps != null && bpsDen) ? (feeBps / bpsDen * 100) : null
 
+  // context snippet for each blank (left/right words)
+  const blankContexts = useMemo(() => {
+    const out = []
+    for (let i = 0; i < blanksCount; i++) {
+      const left = (parts[i] || '').split(/\s+/).slice(-3).join(' ')
+      const right = (parts[i + 1] || '').split(/\s+/).slice(0, 3).join(' ')
+      out.push(`${left} [____] ${right}`.trim())
+    }
+    return out
+  }, [parts, blanksCount])
+
   return (
     <Layout>
       <Head>
@@ -382,7 +330,7 @@ function IndexPage() {
 
       <SEO
         title="MadFill — Fill the blank, win the pot."
-        description="Create a Pool 1 round on Base: pick entry fee, choose your blank, drop your word, and launch."
+        description="Create a Pool 1 round on Base: pick a template, set the entry fee, choose the blank, and launch."
         url={pageUrl}
         image={ogImage}
         type="website"
@@ -391,50 +339,46 @@ function IndexPage() {
 
       {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
-      {/* Hero */}
+      {/* Hero (centered, no overflow) */}
       <section className="mx-auto max-w-6xl px-4 pt-8 md:pt-12">
+        {/* What is MadFill */}
         <div className="rounded-2xl bg-gradient-to-br from-slate-900 via-indigo-900/70 to-purple-900/70 border border-indigo-700 p-6 md:p-8 shadow-xl">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="max-w-2xl">
+          <div className="grid gap-6 md:grid-cols-3">
+            <div className="md:col-span-2">
               <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight">🧠 MadFill — Create a Round</h1>
-              <p className="text-indigo-100 mt-3">
-                Pick a template, set the entry fee, choose which blank you’ll fill, and launch Pool&nbsp;1 on Base.
+              <p className="text-indigo-100 mt-4">
+                MadFill is a social word game on Base. Pick a template with blanks, choose <em>which</em> blank
+                you’ll fill, set the entry fee, and launch a round. Players submit their best word. Community votes. Winners split the pot.
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              {!isConnected ? (
-                <Button onClick={connect} className="bg-amber-500 hover:bg-amber-400 text-black">Connect Wallet</Button>
-              ) : !isOnBase ? (
-                <Button onClick={switchToBase} className="bg-cyan-600 hover:bg-cyan-500">Switch to Base</Button>
-              ) : null}
-            </div>
-          </div>
-
-          {/* Summary with fee & burn inline on the same line */}
-          <div className="mt-5 flex flex-wrap gap-3 text-sm">
-            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 whitespace-nowrap">
-              Entry fee:&nbsp;
-              <b className="font-mono">{feeEth || '—'} ETH</b>
-              {feeUsd != null && <span className="opacity-80"> (~${feeUsd.toFixed(2)})</span>}
-              <span className="opacity-70"> + gas</span>
-              {burnPct != null && (
-                <> <span className="opacity-80">•</span> Protocol fee (burn): <b>{burnPct.toFixed(2)}%</b></>
-              )}
-            </div>
-            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
-              Duration: <b>{Math.max(1, Number(durationMins) | 0)} min</b>
-            </div>
-            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
-              Blanks in story: <b>{blanksCount}</b>
+            <div className="rounded-xl bg-slate-900/50 border border-slate-700 p-4">
+              <h3 className="font-semibold mb-2">Quick Steps</h3>
+              <ol className="space-y-2 text-sm text-slate-200 list-decimal list-inside">
+                <li>Choose Category & Template</li>
+                <li>Pick the Blank you’ll fill</li>
+                <li>Set Entry Fee & Duration</li>
+                <li>Launch Pool&nbsp;1</li>
+              </ol>
+              <div className="mt-3">
+                {!isConnected ? (
+                  <Button onClick={connect} className="bg-amber-500 hover:bg-amber-400 text-black w-full">
+                    Connect Wallet
+                  </Button>
+                ) : !isOnBase ? (
+                  <Button onClick={switchToBase} className="bg-cyan-600 hover:bg-cyan-500 w-full">
+                    Switch to Base
+                  </Button>
+                ) : null}
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Builder */}
+      {/* Builder (centered grid) */}
       <main className="mx-auto max-w-6xl px-4 py-8 space-y-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left */}
+          {/* Left: Setup */}
           <Card className="bg-slate-900/70 border border-slate-700">
             <CardHeader className="border-b border-slate-700">
               <h2 className="text-xl font-bold">Round Setup</h2>
@@ -471,14 +415,14 @@ function IndexPage() {
                 Use This Template
               </Button>
 
-              {/* Title / Theme */}
+              {/* Title / Theme (pre-filled, editable if you want) */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <label className="text-sm text-slate-300 md:col-span-2">
                   Title
                   <input
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
-                    placeholder="e.g., The Late Night Snack Heist"
+                    placeholder="Template title"
                     className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                     maxLength={128}
                   />
@@ -488,7 +432,7 @@ function IndexPage() {
                   <input
                     value={theme}
                     onChange={(e) => setTheme(e.target.value)}
-                    placeholder="e.g., Comedy"
+                    placeholder="Category / Theme"
                     className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                     maxLength={128}
                   />
@@ -520,29 +464,11 @@ function IndexPage() {
                 </label>
               </div>
 
-              {/* Story */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="block text-sm text-slate-300">Story (use <code>[BLANK]</code> for gaps)</label>
-                  <div className="flex gap-2">
-                    <Button onClick={insertBlankAtCursor} variant="outline" className="border-slate-600 text-slate-200">+ [BLANK]</Button>
-                    <Button onClick={randomizeStarter} className="bg-slate-700 hover:bg-slate-600">🎲 Random</Button>
-                  </div>
-                </div>
-                <textarea
-                  ref={storyRef}
-                  value={story}
-                  onChange={(e) => setStory(e.target.value)}
-                  className="w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-3 outline-none focus:ring-2 focus:ring-indigo-400 min-h-[140px] resize-y"
-                />
-                <div className="text-xs text-slate-400">Current blanks: <b>{blanksCount}</b> • Parts: <b>{parts.length}</b></div>
-              </div>
-
-              {/* Which blank to fill */}
+              {/* Which blank to fill (from template parts) */}
               <div className="space-y-2">
                 <div className="text-sm text-slate-300">Choose which blank you’ll fill</div>
                 {blanksCount === 0 ? (
-                  <div className="text-xs text-amber-300">Add a <code>[BLANK]</code> to your story to proceed.</div>
+                  <div className="text-xs text-amber-300">Pick a template that includes blanks.</div>
                 ) : (
                   <>
                     <div className="flex flex-wrap gap-2">
@@ -566,16 +492,18 @@ function IndexPage() {
                         value={blankIndex}
                         onChange={(e) => setBlankIndex(+e.target.value)}
                       >
-                        {blankContexts.map((c, i) => (
-                          <option key={i} value={i}>#{i + 1} — {c}</option>
-                        ))}
+                        {Array.from({ length: blanksCount }).map((_, i) => {
+                          const left = (parts[i] || '').split(/\s+/).slice(-3).join(' ')
+                          const right = (parts[i + 1] || '').split(/\s+/).slice(0, 3).join(' ')
+                          return <option key={i} value={i}>#{i + 1} — {left} [____] {right}</option>
+                        })}
                       </select>
                     </label>
                   </>
                 )}
               </div>
 
-              {/* Fee selector — single line, no wrapping, burn inline */}
+              {/* Fee selector — single line, burn inline */}
               <div className="space-y-2">
                 <div className="text-sm text-slate-300">Entry Fee (per player)</div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -590,8 +518,6 @@ function IndexPage() {
                       {v} ETH
                     </button>
                   ))}
-
-                  {/* Compact input group; monospace stops the “last digit under zeros” issue */}
                   <div className="flex items-center gap-2 bg-slate-800/70 border border-slate-700 rounded-lg px-2 py-1.5 whitespace-nowrap">
                     <input
                       inputMode="decimal"
@@ -612,26 +538,27 @@ function IndexPage() {
                       </>
                     )}
                   </div>
-
                   <span className="text-xs text-slate-400">+ gas</span>
                 </div>
               </div>
 
-              {/* Duration — template “version” options as dropdown */}
+              {/* Duration — from template days */}
               <div className="space-y-2">
                 <div className="text-sm text-slate-300">Duration</div>
                 <div className="flex items-center gap-2">
                   <select
                     className="rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
-                    value={durationMins}
-                    onChange={(e) => setDurationMins(Number(e.target.value))}
+                    value={durationDays}
+                    onChange={(e) => setDurationDays(Number(e.target.value))}
                   >
-                    {durationOptions.map((m) => (
-                      <option key={m} value={m}>{m} minutes</option>
+                    {templateDayOptions.map((d) => (
+                      <option key={d} value={d}>
+                        {d === 7 ? '1 week' : `${d} day${d > 1 ? 's' : ''}`}
+                      </option>
                     ))}
                   </select>
                   <span className="text-xs text-slate-400">
-                    Selected: <b>{Math.max(1, Number(durationMins) | 0)} min</b>
+                    Selected: <b>{durationDays === 7 ? '1 week' : `${durationDays} day${durationDays > 1 ? 's' : ''}`}</b>
                   </span>
                 </div>
               </div>
@@ -640,7 +567,17 @@ function IndexPage() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="text-sm text-slate-300">Card Background</div>
-                  <Button onClick={randomizeBackground} variant="outline" className="border-slate-600 text-slate-200">🔀 Randomize</Button>
+                  <Button
+                    onClick={() => {
+                      const idx = BG_CHOICES.findIndex((b) => b.key === bgKey)
+                      const next = (idx + 1) % BG_CHOICES.length
+                      setBgKey(BG_CHOICES[next].key)
+                    }}
+                    variant="outline"
+                    className="border-slate-600 text-slate-200"
+                  >
+                    🔀 Randomize
+                  </Button>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {BG_CHOICES.map((bg) => (
@@ -657,7 +594,7 @@ function IndexPage() {
             </CardContent>
           </Card>
 
-          {/* Right */}
+          {/* Right: Preview & Launch */}
           <Card className="bg-slate-900/70 border border-slate-700">
             <CardHeader className="border-b border-slate-700">
               <h2 className="text-xl font-bold">Preview & Launch</h2>
@@ -668,11 +605,16 @@ function IndexPage() {
                   <div className="text-xs uppercase tracking-wide opacity-80">{theme || 'Theme'}</div>
                   <div className="text-xl md:text-2xl font-extrabold">{title || 'Your Round Title'}</div>
                   <div className="mt-3 text-base leading-relaxed">
-                    <StyledCard parts={parts} blanks={Math.max(0, parts.length - 1)} words={wordsMapForPreview} />
+                    <StyledCard
+                      parts={parts}
+                      blanks={Math.max(0, parts.length - 1)}
+                      words={wordsMapForPreview}
+                    />
                   </div>
                 </div>
               </div>
 
+              {/* Compact summary */}
               <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3 text-sm">
                 <div className="flex flex-wrap items-center gap-3">
                   <div>
@@ -699,6 +641,7 @@ function IndexPage() {
                   disabled={
                     loading ||
                     !isConnected ||
+                    !currentTemplate ||
                     !title.trim() ||
                     !theme.trim() ||
                     blanksCount < 1 ||
@@ -712,19 +655,35 @@ function IndexPage() {
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={() => { setTitle(''); setTheme(''); setUsername(''); setCreatorWord(''); setStory(''); setBlankIndex(0) }}
+                  onClick={() => { setUsername(''); setCreatorWord(''); setBlankIndex(0) }}
                   className="border-slate-600 text-slate-200 w-full"
                 >
-                  Clear
+                  Clear (keep template)
                 </Button>
-              </div>
-
-              <div className="text-xs text-slate-400">
-                You’ll pay the entry fee you set (goes to the pool) plus gas. Players who join later pay the same entry fee.
               </div>
             </CardContent>
           </Card>
         </div>
+
+        {/* Fee breakdown card near bottom */}
+        <Card className="bg-slate-900/70 border border-slate-700">
+          <CardHeader className="border-b border-slate-700">
+            <h3 className="text-lg font-bold">Fee Breakdown</h3>
+          </CardHeader>
+          <CardContent className="p-5 text-sm text-slate-200 space-y-2">
+            <p>
+              <b>Entry Fee:</b> You pick it (e.g., <span className="font-mono">{feeEth} ETH</span>), paid by each player
+              who enters. It goes into the prize pool.
+              {feeUsd != null && <> Estimated: ~${feeUsd.toFixed(2)}.</>}
+            </p>
+            <p>
+              <b>Protocol Fee (burn):</b> {burnPct != null ? `${burnPct.toFixed(2)}%` : '—'} of the entry fee is burned at the protocol level.
+            </p>
+            <p>
+              <b>Gas:</b> Network fee paid to miners/validators. Varies with network congestion.
+            </p>
+          </CardContent>
+        </Card>
       </main>
     </Layout>
   )
