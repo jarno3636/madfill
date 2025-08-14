@@ -16,28 +16,24 @@ import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useMiniWallet } from '@/hooks/useMiniWallet'
 import { useToast } from '@/components/Toast'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
+import { categories as presetCategories } from '@/data/templates' // ⬅️ your templates
 
-// Client-only confetti
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 /* ===============================
-   Pools Contract (Pool1/Pool2 ABI)
+   Pools Contract
 =================================*/
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID = 8453n
 const BASE_CHAIN_ID_HEX = '0x2105'
 
-// Replace with your deployed Pools contract
 const POOLS_ADDR =
   process.env.NEXT_PUBLIC_POOLS_ADDRESS ||
-  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // fallback (update to your Pools)
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // fallback
 
 const POOLS_ABI = [
-  // --- minimal reads we might use (optional) ---
   { inputs: [], name: 'FEE_BPS', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'BPS_DENOMINATOR', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
-
-  // --- writes we need ---
   {
     inputs: [
       { type: 'string', name: 'name' },
@@ -84,58 +80,104 @@ const BG_CHOICES = [
   { key: 'forest',       label: 'Forest',        cls: 'from-emerald-700 via-teal-700 to-slate-900' },
 ]
 
-// Convert a story with [BLANK] into parts[] (keeps blanks)
-const storyToPartsKeepBlanks = (story) => {
-  const chunks = String(story || '').split(/\[BLANK\]/g)
-  if (chunks.length === 0) return ['']
-  return chunks // parts = text segments; blanks exist between parts
-}
+// Split story by [BLANK] and keep the blanks between parts
+const storyToPartsKeepBlanks = (story) => String(story || '').split(/\[BLANK\]/g)
 
 /* ===============================
-   Index (Home) — Create Pool1
+   Page
 =================================*/
 function IndexPage() {
   useMiniAppReady()
   const { addToast } = useToast()
-  const { address, isConnected, connect } = useMiniWallet()
+  const { isConnected, connect } = useMiniWallet()
   const { width, height } = useWindowSize()
 
-  // Chain state
+  // -------- chain / fee (burn) display --------
   const [isOnBase, setIsOnBase] = useState(true)
+  const [feeBps, setFeeBps] = useState(null)
+  const [bpsDen, setBpsDen] = useState(10000)
 
-  // UI
+  // -------- ui state --------
   const [showConfetti, setShowConfetti] = useState(false)
   const [loading, setLoading] = useState(false)
 
-  // Round meta
+  // templates
+  const [catIdx, setCatIdx] = useState(0)
+  const [tplIdx, setTplIdx] = useState(0)
+
+  // round meta
   const [title, setTitle] = useState('')
   const [theme, setTheme] = useState('')
-  const [username, setUsername] = useState('') // creator display name (string)
+  const [username, setUsername] = useState('')
   const [bgKey, setBgKey] = useState(BG_CHOICES[0].key)
 
-  // Story
+  // story + blanks
   const storyRef = useRef(null)
   const [story, setStory] = useState(PROMPT_STARTERS[0])
+  const parts = useMemo(() => storyToPartsKeepBlanks(story), [story])
+  const blanksCount = Math.max(0, parts.length - 1)
+  const [blankIndex, setBlankIndex] = useState(0)
 
-  // Entry fee (feeBase)
-  const [feeEth, setFeeEth] = useState('0.0005') // editable (string)
+  // creator entry
+  const [creatorWord, setCreatorWord] = useState('')
+
+  // entry fee (ETH)
+  const [feeEth, setFeeEth] = useState('0.0005')
   const feeWei = useMemo(() => {
     try { return ethers.parseEther((feeEth || '0').trim()) } catch { return 0n }
   }, [feeEth])
 
-  // Duration minutes
-  const [durationMins, setDurationMins] = useState(60) // default 60 mins
+  // duration (template-driven)
+  const [durationMins, setDurationMins] = useState(60)
   const durationSecs = useMemo(() => BigInt(Math.max(60, Number(durationMins) | 0) * 60), [durationMins])
 
-  // Creator’s own entry
-  const [creatorWord, setCreatorWord] = useState('')
-  const blanksCount = Math.max(0, story.split(/\[BLANK\]/g).length - 1)
-  const [blankIndex, setBlankIndex] = useState(0)
-
-  // Optional USD
+  // usd (display only)
   const [usd, setUsd] = useState(null)
 
-  // Base chain observe
+  // template data
+  const currentCategory = presetCategories[catIdx] || { name: 'Custom', templates: [] }
+  const currentTemplates = currentCategory.templates || []
+  const currentTemplate = currentTemplates[tplIdx] || null
+
+  const durationOptions = useMemo(() => {
+    const t = currentTemplate
+    if (!t) return [30, 60, 120, 240]
+    if (Array.isArray(t.durations) && t.durations.length) return t.durations
+    if (Array.isArray(t.durationMinsOptions) && t.durationMinsOptions.length) return t.durationMinsOptions
+    if (Array.isArray(t.versionOptions) && t.versionOptions.length) {
+      return t.versionOptions
+        .map(v => v?.durationMins)
+        .filter((n) => Number.isFinite(n) && n > 0)
+    }
+    return [30, 60, 120, 240]
+  }, [currentTemplate])
+
+  // context snippets for each blank
+  const blankContexts = useMemo(() => {
+    const out = []
+    for (let i = 0; i < blanksCount; i++) {
+      const left = (parts[i] || '').split(/\s+/).slice(-3).join(' ')
+      const right = (parts[i + 1] || '').split(/\s+/).slice(0, 3).join(' ')
+      out.push(`${left}  [____]  ${right}`.trim())
+    }
+    return out
+  }, [parts, blanksCount])
+
+  // show selected word in preview
+  const wordsMapForPreview = useMemo(() => {
+    const w = {}
+    for (let i = 0; i < blanksCount; i++) w[i] = ''
+    const word = sanitizeOneWord(creatorWord)
+    if (blanksCount > 0 && word) w[blankIndex] = word
+    return w
+  }, [blanksCount, creatorWord, blankIndex])
+
+  const bgCls = useMemo(() => {
+    const found = BG_CHOICES.find((b) => b.key === bgKey) || BG_CHOICES[0]
+    return found.cls
+  }, [bgKey])
+
+  /* ---------- chain observe & fee bps ---------- */
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -143,31 +185,59 @@ function IndexPage() {
         const prov = (typeof window !== 'undefined' && window.ethereum) || null
         if (prov) {
           const provider = new ethers.BrowserProvider(prov)
-          try {
-            const net = await provider.getNetwork()
-            if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-          } catch {
-            if (!cancelled) setIsOnBase(true)
-          }
+          const net = await provider.getNetwork().catch(() => null)
+          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
           const onChain = () => location.reload()
           prov.on?.('chainChanged', onChain)
           return () => prov.removeListener?.('chainChanged', onChain)
-        } else if (!cancelled) {
-          setIsOnBase(true)
+        } else if (!cancelled) setIsOnBase(true)
+      } catch { if (!cancelled) setIsOnBase(true) }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const p = new ethers.JsonRpcProvider(BASE_RPC)
+        const ct = new ethers.Contract(POOLS_ADDR, POOLS_ABI, p)
+        const [fee, den] = await Promise.all([
+          ct.FEE_BPS().catch(() => null),
+          ct.BPS_DENOMINATOR().catch(() => 10000n),
+        ])
+        if (!cancelled) {
+          setFeeBps(fee != null ? Number(fee) : null)
+          setBpsDen(Number(den || 10000n))
         }
       } catch {
-        if (!cancelled) setIsOnBase(true)
+        if (!cancelled) { setFeeBps(null); setBpsDen(10000) }
       }
     })()
     return () => { cancelled = true }
   }, [])
 
+  // usd (display)
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
+        const j = await r.json()
+        if (!cancelled) setUsd(Number(j?.ethereum?.usd || 0))
+      } catch { if (!cancelled) setUsd(null) }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  // keep blank index in bounds when story changes
+  useEffect(() => {
+    setBlankIndex((i) => Math.max(0, Math.min(Math.max(0, blanksCount - 1), i)))
+  }, [blanksCount])
+
   const switchToBase = useCallback(async () => {
     const prov = (typeof window !== 'undefined' && window.ethereum) || null
-    if (!prov) {
-      addToast({ type: 'error', title: 'No Wallet', message: 'No wallet provider found.' })
-      return
-    }
+    if (!prov) { addToast({ type: 'error', title: 'No Wallet', message: 'No wallet provider found.' }); return }
     try {
       await prov.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] })
       setIsOnBase(true)
@@ -194,43 +264,25 @@ function IndexPage() {
     }
   }, [addToast])
 
-  // Resize blankIndex if story changes
-  useEffect(() => {
-    setBlankIndex((i) => Math.max(0, Math.min(Math.max(0, blanksCount - 1), i)))
-  }, [blanksCount])
+  /* ---------- template apply ---------- */
+  const applyTemplate = useCallback(() => {
+    const t = currentTemplate
+    if (!t) return
+    setTitle(t.name || '')
+    setTheme(currentCategory.name || '')
+    const p = t.parts || []
+    const joined = p.map((x, i) => (i < p.length - 1 ? `${x}[BLANK]` : x)).join('')
+    setStory(joined || '')
+    const opts =
+      (Array.isArray(t.durations) && t.durations.length && t.durations) ||
+      (Array.isArray(t.durationMinsOptions) && t.durationMinsOptions.length && t.durationMinsOptions) ||
+      (Array.isArray(t.versionOptions) && t.versionOptions.length &&
+        t.versionOptions.map(v => v?.durationMins).filter(n => Number.isFinite(n) && n > 0)) ||
+      null
+    if (opts && opts.length) setDurationMins(Number(opts[0]))
+  }, [currentTemplate, currentCategory])
 
-  // USD display (purely informational)
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
-        const j = await r.json()
-        if (!cancelled) setUsd(Number(j?.ethereum?.usd || 0))
-      } catch {
-        if (!cancelled) setUsd(null)
-      }
-    })()
-    return () => { cancelled = true }
-  }, [])
-
-  // Derived parts for contract (keep blanks)
-  const parts = useMemo(() => storyToPartsKeepBlanks(story), [story])
-
-  // StyledCard preview: show creatorWord in selected blank
-  const wordsMapForPreview = useMemo(() => {
-    const w = {}
-    for (let i = 0; i < blanksCount; i++) w[i] = ''
-    const word = sanitizeOneWord(creatorWord)
-    if (blanksCount > 0 && word) w[blankIndex] = word
-    return w
-  }, [blanksCount, creatorWord, blankIndex])
-
-  const bgCls = useMemo(() => {
-    const found = BG_CHOICES.find((b) => b.key === bgKey) || BG_CHOICES[0]
-    return found.cls
-  }, [bgKey])
-
+  /* ---------- helpers ---------- */
   const insertBlankAtCursor = () => {
     const el = storyRef.current
     if (!el) { setStory((s) => s + ' [BLANK] '); return }
@@ -247,67 +299,25 @@ function IndexPage() {
     })
   }
 
-  const randomizeStarter = () => {
-    const pick = PROMPT_STARTERS[(Math.random() * PROMPT_STARTERS.length) | 0]
-    setStory(pick)
-  }
+  const randomizeStarter = () => setStory(PROMPT_STARTERS[(Math.random() * PROMPT_STARTERS.length) | 0])
   const randomizeBackground = () => {
     const idx = BG_CHOICES.findIndex((b) => b.key === bgKey)
     const next = (idx + 1) % BG_CHOICES.length
     setBgKey(BG_CHOICES[next].key)
   }
 
-  // Validate before tx
+  /* ---------- validation & tx ---------- */
   const validate = () => {
-    if (!POOLS_ADDR) {
-      addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_POOLS_ADDRESS.' })
-      return false
-    }
-    if (!isConnected) {
-      addToast({ type: 'error', title: 'Wallet Required', message: 'Connect your wallet to create a round.' })
-      return false
-    }
-    if (!title.trim() || !theme.trim()) {
-      addToast({ type: 'error', title: 'Missing Fields', message: 'Title and Theme are required.' })
-      return false
-    }
-    if (parts.length < 2) {
-      addToast({ type: 'error', title: 'Add a Blank', message: 'Include at least one [BLANK] in your story.' })
-      return false
-    }
+    if (!POOLS_ADDR) { addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_POOLS_ADDRESS.' }); return false }
+    if (!isConnected) { addToast({ type: 'error', title: 'Wallet Required', message: 'Connect your wallet to create a round.' }); return false }
+    if (!title.trim() || !theme.trim()) { addToast({ type: 'error', title: 'Missing Fields', message: 'Title and Theme are required.' }); return false }
+    if (parts.length < 2) { addToast({ type: 'error', title: 'Add a Blank', message: 'Include at least one [BLANK] in your story.' }); return false }
     const word = sanitizeOneWord(creatorWord)
-    if (!word) {
-      addToast({ type: 'error', title: 'Your Word', message: 'Enter your one-word entry (letters/numbers/_/-, max 16).' })
-      return false
-    }
-    if (blanksCount < 1) {
-      addToast({ type: 'error', title: 'No Blanks', message: 'Story must contain at least one [BLANK].' })
-      return false
-    }
-    if (blankIndex < 0 || blankIndex >= blanksCount) {
-      addToast({ type: 'error', title: 'Blank Index', message: 'Select which blank you are filling.' })
-      return false
-    }
-    if (feeWei <= 0n) {
-      addToast({ type: 'error', title: 'Entry Fee', message: 'Set a positive entry fee (e.g., 0.0005).' })
-      return false
-    }
-    if (durationSecs < 60n) {
-      addToast({ type: 'error', title: 'Duration', message: 'Duration must be at least 1 minute.' })
-      return false
-    }
-    // Byte sanity (not strictly needed here, but helpful)
-    if (bytes(title) > 256 || bytes(theme) > 256) {
-      addToast({ type: 'error', title: 'Too Long', message: 'Title/Theme are too long.' })
-      return false
-    }
-    // Basic safety for each part size (optional; tweak if you enforce elsewhere)
-    for (const p of parts) {
-      if (bytes(p) > 2048) {
-        addToast({ type: 'error', title: 'Part Too Large', message: 'One of the parts is too large.' })
-        return false
-      }
-    }
+    if (!word) { addToast({ type: 'error', title: 'Your Word', message: 'Enter your one-word entry (letters/numbers/_/-, max 16).' }); return false }
+    if (blankIndex < 0 || blankIndex >= blanksCount) { addToast({ type: 'error', title: 'Blank Index', message: 'Select which blank you are filling.' }); return false }
+    if (feeWei <= 0n) { addToast({ type: 'error', title: 'Entry Fee', message: 'Set a positive entry fee (e.g., 0.0005).' }); return false }
+    if (durationSecs < 60n) { addToast({ type: 'error', title: 'Duration', message: 'Duration must be at least 1 minute.' }); return false }
+    if (bytes(title) > 256 || bytes(theme) > 256) { addToast({ type: 'error', title: 'Too Long', message: 'Title/Theme are too long.' }); return false }
     return true
   }
 
@@ -321,15 +331,12 @@ function IndexPage() {
 
       const browserProvider = new ethers.BrowserProvider(prov)
       const net = await browserProvider.getNetwork()
-      if (net?.chainId !== BASE_CHAIN_ID) {
-        await switchToBase()
-      }
+      if (net?.chainId !== BASE_CHAIN_ID) await switchToBase()
 
       const signer = await browserProvider.getSigner()
       const ct = new ethers.Contract(POOLS_ADDR, POOLS_ABI, signer)
-
       const word = sanitizeOneWord(creatorWord)
-      const value = feeWei // contract expects payable value == feeBase (creator stakes their own fee)
+      const value = feeWei
 
       const tx = await ct.createPool1(
         String(title).slice(0, 128),
@@ -337,9 +344,9 @@ function IndexPage() {
         parts,
         word,
         String(username || '').slice(0, 64),
-        value,                          // feeBase (uint256)
-        durationSecs,                   // duration (uint256)
-        Number(blankIndex) & 0xff,      // blankIndex (uint8)
+        value,
+        durationSecs,
+        Number(blankIndex) & 0xff,
         { value }
       )
       await tx.wait()
@@ -347,27 +354,20 @@ function IndexPage() {
       addToast({ type: 'success', title: 'Round Created!', message: 'Your Pool 1 round is live.' })
       setShowConfetti(true)
       setTimeout(() => setShowConfetti(false), 1600)
-
-      // Simple reset (keep fee/background so flow stays smooth)
-      setTitle('')
-      setTheme('')
-      setUsername('')
       setCreatorWord('')
-      setStory(PROMPT_STARTERS[(Math.random() * PROMPT_STARTERS.length) | 0])
-      setBlankIndex(0)
     } catch (e) {
       console.error(e)
       const msg = e?.info?.error?.message || e?.shortMessage || e?.reason || e?.message || 'Transaction failed.'
       addToast({ type: 'error', title: 'Create Failed', message: msg })
       setShowConfetti(false)
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }
 
-  // SEO / Frame
+  /* ---------- SEO / frame ---------- */
   const pageUrl = absoluteUrl('/')
   const ogImage = buildOgUrl({ screen: 'home', title: 'MadFill — Create a Round' })
+  const feeUsd = (usd && feeEth) ? (parseFloat(feeEth || '0') * usd) : null
+  const burnPct = (feeBps != null && bpsDen) ? (feeBps / bpsDen * 100) : null
 
   return (
     <Layout>
@@ -398,29 +398,28 @@ function IndexPage() {
             <div className="max-w-2xl">
               <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight">🧠 MadFill — Create a Round</h1>
               <p className="text-indigo-100 mt-3">
-                Write your story using <code className="bg-slate-800/80 px-1 rounded">[BLANK]</code> for gaps,
-                set the entry fee, choose which blank you’re filling, and launch Pool&nbsp;1 on Base.
+                Pick a template, set the entry fee, choose which blank you’ll fill, and launch Pool&nbsp;1 on Base.
               </p>
             </div>
             <div className="flex items-center gap-2">
               {!isConnected ? (
-                <Button onClick={connect} className="bg-amber-500 hover:bg-amber-400 text-black">
-                  Connect Wallet
-                </Button>
+                <Button onClick={connect} className="bg-amber-500 hover:bg-amber-400 text-black">Connect Wallet</Button>
               ) : !isOnBase ? (
-                <Button onClick={switchToBase} className="bg-cyan-600 hover:bg-cyan-500">
-                  Switch to Base
-                </Button>
+                <Button onClick={switchToBase} className="bg-cyan-600 hover:bg-cyan-500">Switch to Base</Button>
               ) : null}
             </div>
           </div>
 
-          {/* Fee + Duration summary */}
+          {/* Summary with fee & burn inline on the same line */}
           <div className="mt-5 flex flex-wrap gap-3 text-sm">
-            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
-              Entry fee per player: <b>{feeEth || '—'} ETH</b>
-              {usd && feeEth ? <span className="opacity-80"> (~${(parseFloat(feeEth || '0') * usd).toFixed(2)} USD)</span> : null}
+            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 whitespace-nowrap">
+              Entry fee:&nbsp;
+              <b className="font-mono">{feeEth || '—'} ETH</b>
+              {feeUsd != null && <span className="opacity-80"> (~${feeUsd.toFixed(2)})</span>}
               <span className="opacity-70"> + gas</span>
+              {burnPct != null && (
+                <> <span className="opacity-80">•</span> Protocol fee (burn): <b>{burnPct.toFixed(2)}%</b></>
+              )}
             </div>
             <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
               Duration: <b>{Math.max(1, Number(durationMins) | 0)} min</b>
@@ -435,12 +434,44 @@ function IndexPage() {
       {/* Builder */}
       <main className="mx-auto max-w-6xl px-4 py-8 space-y-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left: Round Setup */}
+          {/* Left */}
           <Card className="bg-slate-900/70 border border-slate-700">
             <CardHeader className="border-b border-slate-700">
               <h2 className="text-xl font-bold">Round Setup</h2>
             </CardHeader>
-            <CardContent className="p-5 space-y-5">
+            <CardContent className="p-5 space-y-6">
+              {/* Template selectors */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <label className="text-sm text-slate-300">
+                  Category
+                  <select
+                    value={catIdx}
+                    onChange={(e) => { setCatIdx(+e.target.value); setTplIdx(0) }}
+                    className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                  >
+                    {presetCategories.map((c, i) => (
+                      <option key={i} value={i}>{c.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm text-slate-300 md:col-span-2">
+                  Template
+                  <select
+                    value={tplIdx}
+                    onChange={(e) => setTplIdx(+e.target.value)}
+                    className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                  >
+                    {currentTemplates.map((t, i) => (
+                      <option key={i} value={i}>{t.name} ({t.blanks} blanks)</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <Button onClick={applyTemplate} className="bg-fuchsia-600 hover:bg-fuchsia-500" type="button">
+                Use This Template
+              </Button>
+
+              {/* Title / Theme */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <label className="text-sm text-slate-300 md:col-span-2">
                   Title
@@ -452,7 +483,6 @@ function IndexPage() {
                     maxLength={128}
                   />
                 </label>
-
                 <label className="text-sm text-slate-300">
                   Theme
                   <input
@@ -465,6 +495,7 @@ function IndexPage() {
                 </label>
               </div>
 
+              {/* Username / Word */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <label className="text-sm text-slate-300 md:col-span-2">
                   Creator username (optional)
@@ -476,20 +507,20 @@ function IndexPage() {
                     maxLength={64}
                   />
                 </label>
-
                 <label className="text-sm text-slate-300">
                   Your word (one word)
                   <input
                     value={creatorWord}
                     onChange={(e) => setCreatorWord(sanitizeOneWord(e.target.value))}
                     placeholder="e.g., neon"
-                    className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                    className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
                     maxLength={16}
                   />
                   <span className="text-xs text-slate-400">{(creatorWord || '').length}/16</span>
                 </label>
               </div>
 
+              {/* Story */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="block text-sm text-slate-300">Story (use <code>[BLANK]</code> for gaps)</label>
@@ -504,98 +535,108 @@ function IndexPage() {
                   onChange={(e) => setStory(e.target.value)}
                   className="w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-3 outline-none focus:ring-2 focus:ring-indigo-400 min-h-[140px] resize-y"
                 />
-                <div className="text-xs text-slate-400">
-                  Current blanks: <b>{blanksCount}</b> • Parts: <b>{parts.length}</b>
-                </div>
+                <div className="text-xs text-slate-400">Current blanks: <b>{blanksCount}</b> • Parts: <b>{parts.length}</b></div>
               </div>
 
-              {/* Blank to fill selector */}
+              {/* Which blank to fill */}
               <div className="space-y-2">
                 <div className="text-sm text-slate-300">Choose which blank you’ll fill</div>
                 {blanksCount === 0 ? (
                   <div className="text-xs text-amber-300">Add a <code>[BLANK]</code> to your story to proceed.</div>
                 ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {Array.from({ length: blanksCount }).map((_, i) => (
-                      <button
-                        key={i}
-                        onClick={() => setBlankIndex(i)}
-                        className={`px-3 py-1.5 rounded text-sm border ${
-                          blankIndex === i ? 'bg-yellow-400 text-black' : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
-                        }`}
-                        aria-pressed={blankIndex === i}
+                  <>
+                    <div className="flex flex-wrap gap-2">
+                      {Array.from({ length: blanksCount }).map((_, i) => (
+                        <button
+                          key={i}
+                          onClick={() => setBlankIndex(i)}
+                          className={`px-3 py-1.5 rounded text-sm border ${
+                            blankIndex === i ? 'bg-yellow-400 text-black' : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                          }`}
+                          aria-pressed={blankIndex === i}
+                        >
+                          Blank #{i + 1}
+                        </button>
+                      ))}
+                    </div>
+                    <label className="block text-xs text-slate-300">
+                      Or pick with context
+                      <select
+                        className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400 text-sm"
+                        value={blankIndex}
+                        onChange={(e) => setBlankIndex(+e.target.value)}
                       >
-                        Blank #{i + 1}
-                      </button>
-                    ))}
-                  </div>
+                        {blankContexts.map((c, i) => (
+                          <option key={i} value={i}>#{i + 1} — {c}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </>
                 )}
               </div>
 
-              {/* Fee selector */}
+              {/* Fee selector — single line, no wrapping, burn inline */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm text-slate-300">Entry Fee (feeBase)</div>
-                  <div className="flex gap-2">
-                    {['0.0005', '0.001', '0.005'].map((v) => (
-                      <button
-                        key={v}
-                        onClick={() => setFeeEth(v)}
-                        className={`px-3 py-1.5 rounded text-sm border ${
-                          feeEth === v ? 'bg-emerald-500 text-black' : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
-                        }`}
-                      >
-                        {v} ETH
-                      </button>
-                    ))}
+                <div className="text-sm text-slate-300">Entry Fee (per player)</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {['0.0005', '0.001', '0.005'].map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => setFeeEth(v)}
+                      className={`px-3 py-1.5 rounded text-sm border whitespace-nowrap ${
+                        feeEth === v ? 'bg-emerald-500 text-black' : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                      }`}
+                    >
+                      {v} ETH
+                    </button>
+                  ))}
+
+                  {/* Compact input group; monospace stops the “last digit under zeros” issue */}
+                  <div className="flex items-center gap-2 bg-slate-800/70 border border-slate-700 rounded-lg px-2 py-1.5 whitespace-nowrap">
+                    <input
+                      inputMode="decimal"
+                      value={feeEth}
+                      onChange={(e) => setFeeEth(e.target.value)}
+                      className="w-28 font-mono bg-transparent outline-none"
+                      placeholder="0.0000"
+                    />
+                    <span className="text-slate-300 text-sm">ETH</span>
+                    <span className="text-slate-500">|</span>
+                    <span className="text-slate-400 text-sm">
+                      {usd && feeEth ? `~$${(parseFloat(feeEth || '0') * usd).toFixed(2)}` : '—'}
+                    </span>
+                    {burnPct != null && (
+                      <>
+                        <span className="text-slate-500">|</span>
+                        <span className="text-xs text-slate-400">burn {burnPct.toFixed(2)}%</span>
+                      </>
+                    )}
                   </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    inputMode="decimal"
-                    value={feeEth}
-                    onChange={(e) => setFeeEth(e.target.value)}
-                    className="w-40 rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
-                  />
-                  <div className="text-sm text-slate-400">
-                    {usd && feeEth ? `≈ $${(parseFloat(feeEth || '0') * usd).toFixed(2)} USD` : null}
-                    <span className="opacity-70"> + gas</span>
-                  </div>
+
+                  <span className="text-xs text-slate-400">+ gas</span>
                 </div>
               </div>
 
-              {/* Duration selector */}
+              {/* Duration — template “version” options as dropdown */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm text-slate-300">Duration (minutes)</div>
-                  <div className="flex gap-2">
-                    {[30, 60, 120, 240].map((m) => (
-                      <button
-                        key={m}
-                        onClick={() => setDurationMins(m)}
-                        className={`px-3 py-1.5 rounded text-sm border ${
-                          Number(durationMins) === m ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
-                        }`}
-                      >
-                        {m}m
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                <div className="text-sm text-slate-300">Duration</div>
                 <div className="flex items-center gap-2">
-                  <input
-                    inputMode="numeric"
+                  <select
+                    className="rounded-lg bg-slate-800/70 border border-slate-700 px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                     value={durationMins}
-                    onChange={(e) => setDurationMins(e.target.value.replace(/[^\d]/g, ''))}
-                    className="w-40 rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
-                  />
-                  <div className="text-sm text-slate-400">
-                    Ends in ~{Math.max(1, Number(durationMins) | 0)} minutes
-                  </div>
+                    onChange={(e) => setDurationMins(Number(e.target.value))}
+                  >
+                    {durationOptions.map((m) => (
+                      <option key={m} value={m}>{m} minutes</option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-slate-400">
+                    Selected: <b>{Math.max(1, Number(durationMins) | 0)} min</b>
+                  </span>
                 </div>
               </div>
 
-              {/* Background selector */}
+              {/* Backgrounds */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="text-sm text-slate-300">Card Background</div>
@@ -616,7 +657,7 @@ function IndexPage() {
             </CardContent>
           </Card>
 
-          {/* Right: Preview & Create */}
+          {/* Right */}
           <Card className="bg-slate-900/70 border border-slate-700">
             <CardHeader className="border-b border-slate-700">
               <h2 className="text-xl font-bold">Preview & Launch</h2>
@@ -627,11 +668,7 @@ function IndexPage() {
                   <div className="text-xs uppercase tracking-wide opacity-80">{theme || 'Theme'}</div>
                   <div className="text-xl md:text-2xl font-extrabold">{title || 'Your Round Title'}</div>
                   <div className="mt-3 text-base leading-relaxed">
-                    <StyledCard
-                      parts={parts}
-                      blanks={Math.max(0, parts.length - 1)}
-                      words={wordsMapForPreview}
-                    />
+                    <StyledCard parts={parts} blanks={Math.max(0, parts.length - 1)} words={wordsMapForPreview} />
                   </div>
                 </div>
               </div>
@@ -639,14 +676,20 @@ function IndexPage() {
               <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3 text-sm">
                 <div className="flex flex-wrap items-center gap-3">
                   <div>
-                    Entry fee per player: <b>{feeEth || '—'} ETH</b>
-                    {usd && feeEth ? <span className="opacity-80"> (~${(parseFloat(feeEth || '0') * usd).toFixed(2)} USD)</span> : null}
+                    Entry fee: <b className="font-mono">{feeEth || '—'} ETH</b>
+                    {feeUsd != null && <span className="opacity-80"> (~${feeUsd.toFixed(2)})</span>}
                     <span className="opacity-70"> + gas</span>
                   </div>
                   <div className="opacity-80">•</div>
-                  <div>Blanks in story: <b>{blanksCount}</b></div>
+                  <div>Blanks: <b>{blanksCount}</b></div>
                   <div className="opacity-80">•</div>
                   <div>You’re filling: <b>{blanksCount ? `Blank #${blankIndex + 1}` : '—'}</b></div>
+                  {burnPct != null && (
+                    <>
+                      <div className="opacity-80">•</div>
+                      <div>Protocol fee (burn): <b>{burnPct.toFixed(2)}%</b></div>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -669,14 +712,7 @@ function IndexPage() {
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={() => {
-                    setTitle('')
-                    setTheme('')
-                    setUsername('')
-                    setCreatorWord('')
-                    setStory('')
-                    setBlankIndex(0)
-                  }}
+                  onClick={() => { setTitle(''); setTheme(''); setUsername(''); setCreatorWord(''); setStory(''); setBlankIndex(0) }}
                   className="border-slate-600 text-slate-200 w-full"
                 >
                   Clear
@@ -684,7 +720,7 @@ function IndexPage() {
               </div>
 
               <div className="text-xs text-slate-400">
-                Note: You’ll pay the entry fee you set (sent to the pool) plus gas. Players who join later pay the same entry fee.
+                You’ll pay the entry fee you set (goes to the pool) plus gas. Players who join later pay the same entry fee.
               </div>
             </CardContent>
           </Card>
