@@ -3,23 +3,23 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
+import dynamic from 'next/dynamic'
 import { ethers } from 'ethers'
 import { useWindowSize } from 'react-use'
+
 import Layout from '@/components/Layout'
+import SEO from '@/components/SEO'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useMiniWallet } from '@/hooks/useMiniWallet'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useToast } from '@/components/Toast'
-import SEO from '@/components/SEO'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
-import dynamic from 'next/dynamic'
+
+import { categories as presetCategories } from '@/data/templates'
 
 // Client-only confetti
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
-
-// 🔹 Preset templates
-import { categories as presetCategories } from '@/data/templates'
 
 // ---- Chain / Contract ----
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
@@ -90,6 +90,7 @@ export default function MYO() {
         .filter((p) => p.length > 0),
     []
   )
+  const utf8BytesLen = (str) => new TextEncoder().encode(str || '').length
 
   // Wallet / chain observe only
   useEffect(() => {
@@ -200,8 +201,7 @@ export default function MYO() {
     return () => { aborted = true }
   }, [mintPriceWei])
 
-  // Byte helpers
-  const utf8BytesLen = (str) => new TextEncoder().encode(str || '').length
+  // Byte counters
   const partsBytes = useMemo(() => sanitizeParts(storyParts).reduce((sum, p) => sum + utf8BytesLen(p), 0), [storyParts, sanitizeParts])
   const titleBytes = utf8BytesLen(templateTitle)
   const themeBytes = utf8BytesLen(templateTheme)
@@ -215,7 +215,6 @@ export default function MYO() {
 
   const applyPreset = useCallback(() => {
     if (!currentPreset) return
-    // Fill form from preset: title, theme (category), parts; keep / append to description
     setTemplateTitle(currentPreset.name || '')
     setTemplateTheme(currentCategory.name || '')
     setStoryParts(currentPreset.parts || [''])
@@ -279,7 +278,6 @@ export default function MYO() {
       const signer = await browserProvider.getSigner()
       const ct = new ethers.Contract(TEMPLATE_ADDR, ABI, signer)
 
-      // Send EXACT on-chain price (no arbitrary buffer)
       const tx = await ct.mintTemplate(
         String(templateTitle).slice(0, 128),
         String(templateDesc).slice(0, 2048),
@@ -322,7 +320,6 @@ export default function MYO() {
   return (
     <Layout>
       <Head>
-        {/* Farcaster Mini App / Frame meta */}
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
         <meta property="fc:frame:button:1" content="Create Template" />
@@ -398,7 +395,7 @@ export default function MYO() {
 
             <CardContent className="p-8">
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* 🔹 Preset Selector (left column) */}
+                {/* Preset Selector */}
                 <div className="space-y-4">
                   <div className="text-white font-semibold">Start from a Preset</div>
                   <label className="block text-white text-sm font-medium mb-1">Category</label>
@@ -442,7 +439,7 @@ export default function MYO() {
                   )}
                 </div>
 
-                {/* 📝 Form (middle column) */}
+                {/* Form */}
                 <div className="space-y-6">
                   <div>
                     <label className="block text-white text-sm font-medium mb-2">Template Title</label>
@@ -522,7 +519,7 @@ export default function MYO() {
                   </div>
                 </div>
 
-                {/* 👁️ Preview + Mint (right column) */}
+                {/* Preview + Mint */}
                 <div className="space-y-6">
                   <h3 className="text-xl font-bold text-white">Preview</h3>
                   <Card className="bg-white/5 border-purple-400/30">
