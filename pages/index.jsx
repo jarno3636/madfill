@@ -206,7 +206,7 @@ export default function Home() {
           const parts = info.parts_ ?? info[2]
           const deadline = Number(info.deadline_ ?? info[4])
           const creator = info.creator_ ?? info[5]
-          const participants = info.participants_ ?? info[6] || []
+          const participants = (info.participants_ ?? info[6]) || []
           const poolBalance = info.poolBalance_ ?? info[9]
 
           let creatorPreview = ''
