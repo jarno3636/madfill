@@ -1,7 +1,7 @@
 // pages/free.jsx
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import Head from 'next/head'
 import dynamic from 'next/dynamic'
 import { useWindowSize } from 'react-use'
@@ -12,7 +12,6 @@ import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import StyledCard from '@/components/StyledCard'
 import ShareBar from '@/components/ShareBar'
-
 import { categories } from '@/data/templates'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
@@ -20,9 +19,9 @@ import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
-/* ---------- helpers ---------- */
+/** ---------- utils ---------- */
 function sanitizeWord(raw) {
-  return String(raw || '')
+  return (raw || '')
     .trim()
     .split(' ')[0]
     .replace(/[^a-zA-Z0-9\-_]/g, '')
@@ -42,8 +41,51 @@ function buildWordsParam(words, blanks) {
   for (let i = 0; i < blanks; i++) list.push(encodeURIComponent(sanitizeWord(words[i] || '')))
   return list.join(',')
 }
-const TOKENS = ['neon', 'taco', 'llama', 'vibe', 'sprocket', 'laser', 'bop', 'glow', 'noodle', 'vortex', 'biscuit', 'snack', 'jazz', 'pixel', 'dino', 'meta']
 
+/** ---------- Responsive preview scaler ----------
+ * Scales its children down to fit the container width.
+ * Base dimensions are a soft assumption; adjust if your StyledCard is larger.
+ */
+function ScaledPreview({ baseW = 640, baseH = 360, children }) {
+  const wrapRef = useRef(null)
+  const [scale, setScale] = useState(1)
+
+  useEffect(() => {
+    if (!wrapRef.current) return
+    const el = wrapRef.current
+    const ro = new ResizeObserver(() => {
+      const available = Math.max(0, el.clientWidth) // padding already accounted by parent
+      const next = available > 0 ? Math.min(1, available / baseW) : 1
+      setScale(next)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const w = Math.round(baseW * scale)
+  const h = Math.round(baseH * scale)
+
+  return (
+    <div ref={wrapRef} className="w-full overflow-hidden">
+      <div
+        style={{
+          width: baseW,
+          height: baseH,
+          transform: `scale(${scale})`,
+          transformOrigin: 'top left',
+        }}
+      >
+        {/* Shadow frame so tall content doesn't collapse when scaled */}
+        <div style={{ width: w, height: h }} aria-hidden className="pointer-events-none" />
+        <div className="relative -mt-[1px]">
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** ---------- Page ---------- */
 export default function FreeGame() {
   useMiniAppReady() // Farcaster Mini: signal readiness
 
@@ -59,7 +101,7 @@ export default function FreeGame() {
   const category = categories[catIdx] || { name: 'General', templates: [] }
   const template = category.templates[tplIdx] || { parts: [], blanks: 0, name: 'Untitled' }
 
-  /* ---------- Farcaster profile (optional) ---------- */
+  // Load Farcaster profile (if we stashed fid)
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -69,54 +111,41 @@ export default function FreeGame() {
         if (!fid) return
         const p = await fetchFarcasterProfile(fid)
         if (!cancelled) setProfile(p)
-      } catch {
-        // ignore fetch/profile errors
-      }
+      } catch {}
     })()
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [])
 
-  /* ---------- Init from URL ---------- */
+  // Initialize from URL params
   useEffect(() => {
     if (typeof window === 'undefined') return
-    try {
-      const u = new URL(window.location.href)
-      const c = Number(u.searchParams.get('c') || '0')
-      const safeCat = Number.isFinite(c) ? Math.max(0, Math.min(categories.length - 1, c)) : 0
+    const u = new URL(window.location.href)
+    const c = Number(u.searchParams.get('c') || '0')
+    const safeCat = Number.isFinite(c) ? Math.max(0, Math.min(categories.length - 1, c)) : 0
 
-      const tRaw = Number(u.searchParams.get('t') || '0')
-      const tplLen = categories[safeCat]?.templates.length || 1
-      const safeTpl = Number.isFinite(tRaw) ? Math.max(0, Math.min(tplLen - 1, tRaw)) : 0
+    const tRaw = Number(u.searchParams.get('t') || '0')
+    const tplLen = categories[safeCat]?.templates.length || 1
+    const safeTpl = Number.isFinite(tRaw) ? Math.max(0, Math.min(tplLen - 1, tRaw)) : 0
 
-      setCatIdx(safeCat)
-      setTplIdx(safeTpl)
+    setCatIdx(safeCat)
+    setTplIdx(safeTpl)
 
-      const blanks = categories[safeCat]?.templates?.[safeTpl]?.blanks || 0
-      const wordsParam = u.searchParams.get('w') || ''
-      setWords(parseWordsParam(wordsParam, blanks))
-    } catch {
-      // ignore malformed URLs; keep defaults
-    }
+    const blanks = categories[safeCat]?.templates?.[safeTpl]?.blanks || 0
+    const wordsParam = u.searchParams.get('w') || ''
+    setWords(parseWordsParam(wordsParam, blanks))
   }, [])
 
-  /* ---------- Keep URL in sync ---------- */
+  // Keep URL in sync when selection/words change
   useEffect(() => {
     if (typeof window === 'undefined') return
-    try {
-      const blanks = template.blanks
-      const u = new URL(window.location.href)
-      u.searchParams.set('c', String(catIdx))
-      u.searchParams.set('t', String(tplIdx))
-      u.searchParams.set('w', buildWordsParam(words, blanks))
-      window.history.replaceState({}, '', u.toString())
-    } catch {
-      // ignore if Location not available
-    }
+    const blanks = template.blanks
+    const u = new URL(window.location.href)
+    u.searchParams.set('c', String(catIdx))
+    u.searchParams.set('t', String(tplIdx))
+    u.searchParams.set('w', buildWordsParam(words, blanks))
+    window.history.replaceState({}, '', u.toString())
   }, [catIdx, tplIdx, words, template.blanks])
 
-  /* ---------- Derived ---------- */
   const allWordsFilled = useMemo(
     () => Array.from({ length: template.blanks }).every((_, i) => !!sanitizeWord(words[i])),
     [template.blanks, words]
@@ -134,7 +163,7 @@ export default function FreeGame() {
   const origin =
     typeof window !== 'undefined'
       ? window.location.origin
-      : process.env.NEXT_PUBLIC_SITE_URL || 'https://madfill.vercel.app'
+      : (process.env.NEXT_PUBLIC_SITE_URL || 'https://madfill.vercel.app')
 
   const permalink = useMemo(() => {
     if (typeof window === 'undefined') return `${origin}/free`
@@ -157,28 +186,24 @@ export default function FreeGame() {
     [catIdx, tplIdx, words, template.blanks]
   )
 
-  /* ---------- Handlers ---------- */
-  const handleWordChange = useCallback((i, val) => {
+  function handleWordChange(i, val) {
     setWords((w) => ({ ...w, [i]: sanitizeWord(val) }))
-  }, [])
-
-  const handleSubmit = useCallback(() => {
+  }
+  function handleSubmit() {
     setSubmitted(true)
     setShowConfetti(true)
     setTimeout(() => setShowConfetti(false), 1800)
-  }, [])
-
-  const handleRemix = useCallback(() => {
+  }
+  function handleRemix() {
     setSubmitted(false)
-  }, [])
-
-  const surpriseMe = useCallback(() => {
+  }
+  function surpriseMe() {
+    const tokens = ['neon', 'taco', 'llama', 'vibe', 'sprocket', 'laser', 'bop', 'glow', 'noodle', 'vortex', 'biscuit', 'snack', 'jazz', 'pixel', 'dino', 'meta']
     const next = {}
-    for (let i = 0; i < template.blanks; i++) next[i] = TOKENS[(Math.random() * TOKENS.length) | 0]
+    for (let i = 0; i < template.blanks; i++) next[i] = tokens[(Math.random() * tokens.length) | 0]
     setWords(next)
-  }, [template.blanks])
-
-  const randomTemplate = useCallback(() => {
+  }
+  function randomTemplate() {
     const c = (Math.random() * categories.length) | 0
     const tCount = categories[c]?.templates.length || 1
     const t = (Math.random() * tCount) | 0
@@ -186,31 +211,18 @@ export default function FreeGame() {
     setTplIdx(t)
     setWords({})
     setSubmitted(false)
-  }, [])
+  }
 
-  const copyToClipboard = useCallback(async () => {
+  async function copyToClipboard() {
     try {
       if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(filledText)
         setCopied(true)
         setTimeout(() => setCopied(false), 1500)
       }
-    } catch {
-      // Silent fail to avoid alerts in frames/mini
-    }
-  }, [filledText])
+    } catch {}
+  }
 
-  const onInputKeyDown = useCallback(
-    (e) => {
-      if (e.key === 'Enter' && allWordsFilled) {
-        e.preventDefault()
-        handleSubmit()
-      }
-    },
-    [allWordsFilled, handleSubmit]
-  )
-
-  /* ---------- UI ---------- */
   return (
     <Layout>
       <Head>
@@ -234,19 +246,18 @@ export default function FreeGame() {
 
       {showConfetti && <Confetti width={width} height={height} />}
 
-      {/* Prevent any horizontal shift on small screens */}
       <main className="max-w-5xl mx-auto p-4 md:p-6 text-white space-y-6 overflow-x-hidden">
-        <div className="rounded-2xl bg-gradient-to-br from-pink-700 via-indigo-700 to-cyan-700 p-6 md:p-8 shadow-xl ring-1 ring-white/10">
-          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">🎁 Free MadFill</h1>
-          <p className="text-indigo-100 mt-2 max-w-2xl">
+        <div className="rounded-2xl bg-gradient-to-br from-pink-700 via-indigo-700 to-cyan-700 p-5 md:p-8 shadow-xl ring-1 ring-white/10">
+          <h1 className="text-2xl md:text-4xl font-extrabold tracking-tight">🎁 Free MadFill</h1>
+          <p className="text-indigo-100 mt-2 max-w-2xl text-sm md:text-base">
             No wallet, no gas, just vibes. Fill in the blanks, get a sharable card, and challenge your friends.
           </p>
         </div>
 
         <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
           <CardHeader className="border-b border-slate-700 bg-slate-800/50">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold">Build your card</h2>
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <h2 className="text-lg md:text-xl font-bold">Build your card</h2>
               <div className="flex gap-2">
                 <Button onClick={randomTemplate} className="bg-slate-700 hover:bg-slate-600" type="button">
                   🎲 Random template
@@ -258,7 +269,7 @@ export default function FreeGame() {
             </div>
           </CardHeader>
 
-          <CardContent className="p-5 space-y-5">
+          <CardContent className="p-4 md:p-5 space-y-5">
             {/* Pickers */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <label className="block text-sm text-slate-300">
@@ -307,41 +318,33 @@ export default function FreeGame() {
                 return (
                   <div key={i}>
                     <label className="text-sm text-slate-300" htmlFor={`word-${i}`}>
-                      Word {i + 1} (one word, a–z 0–9 _ - , max 16)
+                      Word {i + 1} (one word, a-z 0-9 _ - , max 16)
                     </label>
                     <input
                       id={`word-${i}`}
                       type="text"
                       inputMode="text"
-                      autoComplete="off"
                       placeholder="e.g., neon"
                       className={`mt-1 w-full rounded-lg bg-slate-800/70 border px-3 py-2 outline-none focus:ring-2 ${
                         ok ? 'border-slate-700 focus:ring-indigo-400' : 'border-red-600/60 focus:ring-red-500/50'
                       }`}
                       value={val}
                       onChange={(e) => handleWordChange(i, e.target.value)}
-                      onKeyDown={onInputKeyDown}
-                      aria-invalid={!ok}
-                      aria-describedby={`word-${i}-count`}
                     />
-                    <div id={`word-${i}-count`} className="text-xs mt-1 text-slate-400" aria-live="polite">
-                      {val.length}/16
-                    </div>
+                    <div className="text-xs mt-1 text-slate-400">{val.length}/16</div>
                   </div>
                 )
               })}
             </div>
 
-            {/* Preview (responsive, no horizontal shift on mobile) */}
-            <div className="rounded-xl bg-slate-800/60 border border-slate-700 p-4 space-y-3">
+            {/* Preview (never overflows) */}
+            <div className="rounded-xl bg-slate-800/60 border border-slate-700 p-3 md:p-4 space-y-3">
               <div className="text-slate-300 text-sm">Live preview</div>
-
-              <div className="mx-auto w-full max-w-full grid place-items-center overflow-hidden">
-                {/* Scale down the card on very small screens without affecting desktop */}
-                <div className="origin-top scale-[0.92] sm:scale-100 will-change-transform">
+              <ScaledPreview baseW={640} baseH={360}>
+                <div className="max-w-full">
                   <StyledCard parts={template.parts} blanks={template.blanks} words={words} />
                 </div>
-              </div>
+              </ScaledPreview>
 
               {allWordsFilled && (
                 <div>
@@ -349,7 +352,7 @@ export default function FreeGame() {
                     onClick={copyToClipboard}
                     className="bg-slate-700 hover:bg-slate-600 w-full"
                     type="button"
-                    aria-label="Copy completed text"
+                    title="Copy completed text"
                   >
                     {copied ? '✅ Copied!' : '📋 Copy text'}
                   </Button>
