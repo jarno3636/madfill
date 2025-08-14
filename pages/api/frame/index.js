@@ -4,15 +4,33 @@
 function getBaseUrl(req) {
   const envUrl = process.env.NEXT_PUBLIC_SITE_URL;
   if (envUrl) return envUrl.replace(/\/$/, '');
-  const proto = req.headers['x-forwarded-proto'] || 'https';
-  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const proto = (req.headers['x-forwarded-proto'] || 'https').toString();
+  const host = (req.headers['x-forwarded-host'] || req.headers.host || '').toString();
   return `${proto}://${host}`.replace(/\/$/, '');
+}
+
+// Basic clamps/sanitizers for small string params used inside meta tags
+const clamp = (s = '', n = 64) => String(s).replace(/\s+/g, ' ').slice(0, n);
+const sanitizeScreen = (s) => {
+  const v = String(s || '').toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 24);
+  return v || 'home';
+};
+
+// Warpcast POST body can be JSON or raw string; parse safely
+function parseBody(req) {
+  const b = req.body;
+  if (!b) return {};
+  if (typeof b === 'string') {
+    try { return JSON.parse(b); } catch { return {}; }
+  }
+  return b;
 }
 
 function htmlFor({ title, image, pageUrl, postUrl }) {
   return `<!DOCTYPE html>
 <html>
   <head>
+    <meta charSet="utf-8" />
     <meta property="og:title" content="${title}" />
     <meta property="og:image" content="${image}" />
     <meta property="og:url" content="${pageUrl}" />
@@ -35,7 +53,7 @@ function htmlFor({ title, image, pageUrl, postUrl }) {
 
 export default async function handler(req, res) {
   const baseUrl = getBaseUrl(req);
-  const screen = (req.query.screen || 'home').toString();
+  const screen = sanitizeScreen((req.query?.screen || 'home').toString());
 
   // defaults
   let title = 'MadFill — Create or Join a Round';
@@ -62,22 +80,36 @@ export default async function handler(req, res) {
     pageUrl = `${baseUrl}/active`;
   }
 
-  // POST interactions (stay in-frame)
   if (req.method === 'POST') {
-    // Warpcast sends button index in untrustedData.buttonIndex
-    const btn =
-      req.body?.untrustedData?.buttonIndex ??
-      req.body?.buttonIndex ??
-      null;
+    const body = parseBody(req);
+    const btn = body?.untrustedData?.buttonIndex ?? body?.buttonIndex ?? null;
 
-    // Example interaction: button 2 shuffles to a generic default
+    // Example interaction: button 2 shuffles to a generic default image while staying in-frame
     if (String(btn) === '2') {
       image = `${baseUrl}/og/default.png`;
+      title = clamp(title, 80);
     }
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=86400');
+    return res.status(200).send(
+      htmlFor({
+        title,
+        image,
+        pageUrl,
+        postUrl,
+      })
+    );
+  }
+
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET, POST');
+    return res.status(405).end('Method Not Allowed');
   }
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.status(200).send(
+  res.setHeader('Cache-Control', 'public, s-maxage=600, stale-while-revalidate=86400');
+  return res.status(200).send(
     htmlFor({
       title,
       image,
