@@ -1,22 +1,31 @@
 // pages/_document.jsx
-import { Html, Head, Main, NextScript } from 'next/document'
+import Document, { Html, Head, Main, NextScript } from 'next/document'
 
 /**
- * Minimal custom Document.
- * No getInitialProps override — avoids touching Next's internal `styles` shape.
+ * Custom Document for Pages Router.
+ * - Keeps Next.js defaults (no custom logic beyond getInitialProps passthrough).
+ * - Safe for SSR and Vercel static optimization steps.
  */
-export default function Document() {
-  return (
-    <Html lang="en">
-      <Head>
-        <meta name="theme-color" content="#0b0f19" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
-      </Head>
-      <body>
-        <Main />
-        <NextScript />
-      </body>
-    </Html>
-  )
+class MyDocument extends Document {
+  static async getInitialProps(ctx) {
+    const initialProps = await Document.getInitialProps(ctx)
+    return { ...initialProps }
+  }
+
+  render() {
+    return (
+      <Html lang="en">
+        <Head>
+          {/* Keep <Head> lean; global meta is handled in pages/components */}
+          {/* Preload fonts or add favicon links here if needed */}
+        </Head>
+        <body>
+          <Main />
+          <NextScript />
+        </body>
+      </Html>
+    )
+  }
 }
+
+export default MyDocument
