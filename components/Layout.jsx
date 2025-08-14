@@ -40,9 +40,7 @@ export default function Layout({ children }) {
       { href: '/myo', label: '🎨 Make Your Own' },
       { href: '/free', label: '🎁 Free Play' },
       { href: '/challenge', label: '⚔️ Challenge' },
-      { href: '/myrounds', label: '📜 My Rounds' },
-      { href: '/leaderboard', label: '📈 Leaderboard' },
-      { href: '/profile', label: '👤 Profile' },
+      { href: '/myrounds', label: '📜 My Rounds' }
     ],
     []
   )
@@ -53,7 +51,7 @@ export default function Layout({ children }) {
         <meta name="fc:frame" content="vNext" />
         <meta property="og:title" content="MadFill — Fill the blank, win the pot." />
         <meta property="og:description" content="MadFill on Base. Create rounds, drop one word, vote, and win." />
-        <meta property="og:image" content="https://madfill.vercel.app/og/cover.png" />
+        <meta property="og:image" content="https://madfill.vercel.app/og/cover.PNG" />
         <meta property="og:url" content="https://madfill.vercel.app" />
         <meta name="twitter:card" content="summary_large_image" />
         <link rel="icon" href="/favicon.ico" />
