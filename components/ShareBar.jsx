@@ -1,108 +1,110 @@
 // components/ShareBar.jsx
 'use client'
 
-import {
-  FacebookShareButton,
-  TwitterShareButton,
-  TelegramShareButton,
-  FacebookIcon,
-  TwitterIcon,
-  TelegramIcon,
-} from 'react-share'
+import { useEffect, useState, useMemo } from 'react'
 import { absoluteUrl } from '@/lib/seo'
 
 /**
- * Lightweight social share bar with safe fallbacks.
- *
- * Props:
- * - url: string (absolute or relative)
- * - title: string (tweet text / fb quote)
- * - text: string (optional extra body for navigator.share / clipboard)
- * - hashtags: string[] (twitter only)
- * - small: boolean (render 28px icons instead of 32px)
- * - og: object (optional, reserved for future OG param plumbing)
- * - className: string
+ * SSR-safe ShareBar:
+ * - Avoids importing `react-share` at module scope (some adapters break during export)
+ * - Dynamically loads buttons/icons on the client; SSR renders a simple copy/share button
  */
 export default function ShareBar({
   url,
   title = 'Check out MadFill!',
-  text = '',
   hashtags = ['MadFill', 'Base', 'Farcaster'],
-  small = false,
-  // eslint-disable-next-line no-unused-vars
-  og = undefined, // accepted for API compatibility; not used here
   className = '',
 }) {
-  // Resolve to absolute for consistent previews/webviews
   const shareUrl = absoluteUrl(url || 'https://madfill.vercel.app')
-  const size = small ? 28 : 32
 
-  async function handleShareClick() {
-    const body = [title, text].filter(Boolean).join('\n\n')
+  const [lib, setLib] = useState(null)
+  useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      try {
+        const mod = await import('react-share')
+        if (mounted) setLib(mod)
+      } catch {
+        // ignore; fallback UI will be shown
+      }
+    })()
+    return () => { mounted = false }
+  }, [])
+
+  const handleShareClick = async () => {
     try {
       if (typeof navigator !== 'undefined' && navigator.share) {
-        await navigator.share({
-          title,
-          text: body,
-          url: shareUrl,
-        })
+        await navigator.share({ title, url: shareUrl })
         return
       }
-      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText([body, shareUrl].filter(Boolean).join('\n\n'))
-        // TODO: integrate app toast/snackbar (useToast) instead of console
-        console.info('Share link copied to clipboard')
-        return
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(shareUrl)
+        // TODO: swap for toast/snackbar
+        console.info('URL copied to clipboard')
       }
     } catch (err) {
-      // fall through to no-op; buttons below still work
       console.error('Share failed:', err)
     }
   }
 
-  // Guard hashtags to array of strings
-  const hashList = Array.isArray(hashtags) ? hashtags.filter(Boolean).map(String) : []
+  const Buttons = useMemo(() => {
+    if (!lib) return null
+    const {
+      FacebookShareButton,
+      TwitterShareButton,
+      TelegramShareButton,
+      FacebookIcon,
+      TwitterIcon,
+      TelegramIcon,
+    } = lib
+    return {
+      FacebookShareButton,
+      TwitterShareButton,
+      TelegramShareButton,
+      FacebookIcon,
+      TwitterIcon,
+      TelegramIcon,
+    }
+  }, [lib])
 
   return (
     <div className={`flex items-center gap-2 ${className}`}>
       <span className="text-sm text-purple-200 mr-2">Share:</span>
 
-      <TwitterShareButton
-        url={shareUrl}
-        title={title}
-        hashtags={hashList}
-        className="hover:scale-110 transition-transform"
-        aria-label="Share on Twitter/X"
-      >
-        <TwitterIcon size={size} round />
-      </TwitterShareButton>
+      {Buttons ? (
+        <>
+          <Buttons.TwitterShareButton
+            url={shareUrl}
+            title={title}
+            hashtags={hashtags}
+            className="hover:scale-110 transition-transform"
+          >
+            <Buttons.TwitterIcon size={32} round alt="Share on Twitter" />
+          </Buttons.TwitterShareButton>
 
-      <FacebookShareButton
-        url={shareUrl}
-        quote={title}
-        className="hover:scale-110 transition-transform"
-        aria-label="Share on Facebook"
-      >
-        <FacebookIcon size={size} round />
-      </FacebookShareButton>
+          <Buttons.FacebookShareButton
+            url={shareUrl}
+            quote={title}
+            className="hover:scale-110 transition-transform"
+          >
+            <Buttons.FacebookIcon size={32} round alt="Share on Facebook" />
+          </Buttons.FacebookShareButton>
 
-      <TelegramShareButton
-        url={shareUrl}
-        title={title}
-        className="hover:scale-110 transition-transform"
-        aria-label="Share on Telegram"
-      >
-        <TelegramIcon size={size} round />
-      </TelegramShareButton>
+          <Buttons.TelegramShareButton
+            url={shareUrl}
+            title={title}
+            className="hover:scale-110 transition-transform"
+          >
+            <Buttons.TelegramIcon size={32} round alt="Share on Telegram" />
+          </Buttons.TelegramShareButton>
+        </>
+      ) : null}
 
       <button
         onClick={handleShareClick}
-        className={`rounded-full bg-purple-600 hover:bg-purple-700 flex items-center justify-center text-white hover:scale-110 transition-all ${
-          small ? 'w-7 h-7 text-[13px]' : 'w-8 h-8 text-[14px]'
-        }`}
+        className="w-8 h-8 rounded-full bg-purple-600 hover:bg-purple-700 flex items-center justify-center text-white hover:scale-110 transition-all"
         title="Share or Copy Link"
         aria-label="Share or copy link"
-        type="button"
       >
         📋
       </button>
