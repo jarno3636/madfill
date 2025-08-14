@@ -9,27 +9,29 @@ import '@/styles/globals.css'
 
 export default function App({ Component, pageProps }) {
   const router = useRouter()
-  // Sanitize GA id for inline script safety
+
+  // Sanitize GA id for inline script safety (no quotes/semicolons injected)
   const GA_ID_SAFE =
     typeof GA_TRACKING_ID === 'string'
       ? GA_TRACKING_ID.replace(/[^A-Za-z0-9_-]/g, '')
       : ''
 
-  // Track page views
+  // Track page views on route changes (initial is handled by gtag config below)
   useEffect(() => {
     const handleRouteChange = (url) => {
       try {
-        // Only attempt if GA is configured and available
         if (GA_ID_SAFE && typeof window !== 'undefined' && window.gtag) {
           pageview(url)
         }
-      } catch {}
+      } catch {
+        // no-op
+      }
     }
     router.events?.on('routeChangeComplete', handleRouteChange)
     return () => router.events?.off('routeChangeComplete', handleRouteChange)
-  }, [router, GA_ID_SAFE])
+  }, [router.events, GA_ID_SAFE])
 
-  // Client-side error tracking
+  // Client-side error tracking to GA
   useEffect(() => {
     if (typeof window === 'undefined') return
 
@@ -63,11 +65,11 @@ export default function App({ Component, pageProps }) {
     }
   }, [])
 
-  // Cleanup performance observers on unmount
+  // Cleanup performance observers on unmount (defensive)
   useEffect(() => {
     return () => {
       try {
-        performanceMonitor.cleanup?.()
+        performanceMonitor?.cleanup?.()
       } catch {}
     }
   }, [])
@@ -95,7 +97,9 @@ export default function App({ Component, pageProps }) {
         </>
       ) : null}
 
+      {/* Vercel Web Analytics (safe to include unconditionally) */}
       <Script strategy="afterInteractive" src="/_vercel/insights/script.js" />
+
       <Component {...pageProps} />
     </ErrorBoundary>
   )
