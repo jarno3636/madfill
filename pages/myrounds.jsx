@@ -20,7 +20,7 @@ import abi from '@/abi/FillInStoryV3_ABI.json'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
-// --- env / chain ---
+/** ---------------- env / chain ---------------- */
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // V3 fallback
@@ -29,7 +29,7 @@ const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID = 8453n
 const BASE_CHAIN_ID_HEX = '0x2105' // 8453
 
-// --- small helpers ---
+/** ---------------- small helpers ---------------- */
 const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
 const toEth = (wei) => (wei ? Number(ethers.formatEther(wei)) : 0)
 const fmt = (n, d = 2) =>
@@ -77,6 +77,7 @@ function formatTimeLeft(deadlineSec) {
   return `${m}m`
 }
 
+/** ---------------- page ---------------- */
 export default function MyRounds() {
   useMiniAppReady()
 
@@ -98,6 +99,7 @@ export default function MyRounds() {
 
   const [filter, setFilter] = useState('all') // all | started | joined | voted | wins | unclaimed
   const [sortBy, setSortBy] = useState('newest') // newest | oldest | prize
+  const [activeTab, setActiveTab] = useState('stats') // stats | nfts
   const [showConfetti, setShowConfetti] = useState(false)
   const [contractAddrUsed, setContractAddrUsed] = useState(CONTRACT_ADDRESS)
 
@@ -371,6 +373,18 @@ export default function MyRounds() {
     return rs
   }, [allCards, filter, sortBy])
 
+  // quick stats (client only derived)
+  const stats = useMemo(() => {
+    const created = started.length
+    const totalJoined = joined.length
+    const winCount = wins.length
+    const unclaimedCount = unclaimedWins.length
+    const totalFeesEth = joined.reduce((s, r) => s + (r.feeEth || 0), 0)
+    const totalFeesUsd = joined.reduce((s, r) => s + (r.feeUsd || 0), 0)
+    const totalPoolUsd = joined.reduce((s, r) => s + (r.poolUsd || 0), 0)
+    return { created, totalJoined, winCount, unclaimedCount, totalFeesEth, totalFeesUsd, totalPoolUsd }
+  }, [started, joined, wins, unclaimedWins])
+
   // SEO / Frames
   const pageUrl = absoluteUrl('/myrounds')
   const ogTitle = profile?.username
@@ -435,9 +449,54 @@ export default function MyRounds() {
               </Button>
             </div>
           </div>
+
           {status && (
             <div className="mt-3 rounded bg-slate-800/70 border border-slate-700 px-3 py-2 text-sm text-amber-200">
               {status}
+            </div>
+          )}
+
+          {/* Primary page tabs (Stats / NFTs) */}
+          <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-slate-800/40 p-2">
+            {[
+              { key: 'stats', label: '📊 Stats' },
+              { key: 'nfts', label: '🎨 My NFTs' },
+            ].map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setActiveTab(t.key)}
+                className={`h-11 rounded-xl px-3 text-sm font-semibold transition ${
+                  activeTab === t.key
+                    ? 'bg-yellow-500 text-black'
+                    : 'bg-slate-900/60 border border-slate-700 text-slate-200 hover:bg-slate-900'
+                }`}
+                aria-pressed={activeTab === t.key}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {activeTab === 'stats' && (
+            <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+              <StatCard label="Created" value={stats.created} />
+              <StatCard label="Joined" value={stats.totalJoined} />
+              <StatCard label="Wins" value={stats.winCount} />
+              <StatCard label="Unclaimed" value={stats.unclaimedCount} />
+              <StatCard label="Fees (ETH)" value={fmt(stats.totalFeesEth, 4)} />
+              <StatCard label="Fees (USD)" value={`$${fmt(stats.totalFeesUsd)}`} />
+              <StatCard label="Total Pool (USD est.)" value={`$${fmt(stats.totalPoolUsd)}`} className="md:col-span-2" />
+            </div>
+          )}
+
+          {activeTab === 'nfts' && (
+            <div className="mt-4 rounded-xl bg-slate-900/60 border border-slate-700 p-4 text-sm text-slate-300">
+              <p className="mb-2">Your minted MadFill NFTs will appear here.</p>
+              <ul className="list-disc pl-5 space-y-1">
+                <li>We’ll read tokens owned by <span className="font-mono">{shortAddr(address) || 'your wallet'}</span> on Base.</li>
+                <li>Preview thumbnails and quick links to view on BaseScan / marketplaces.</li>
+              </ul>
+              {/* TODO(nfts): Implement owned-NFTs query for the MadFill contract (TheGraph/Alchemy/Reservoir). */}
             </div>
           )}
         </div>
@@ -473,6 +532,7 @@ export default function MyRounds() {
               className="ml-1 bg-slate-900 border border-slate-700 rounded px-2 py-1"
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
+              aria-label="Sort cards"
             >
               <option value="newest">Newest</option>
               <option value="oldest">Oldest</option>
@@ -508,7 +568,7 @@ export default function MyRounds() {
               const shareTxt = isPool1
                 ? `Check out my MadFill Round #${card.id}!`
                 : `I voted on a MadFill challenger for Round #${card.originalPool1Id}!`
-              const endsLabel = isPool1 ? formatTimeLeft(card.deadline) : formatTimeLeft(card.deadline)
+              const endsLabel = formatTimeLeft(card.deadline)
 
               return (
                 <Card
@@ -605,4 +665,30 @@ export default function MyRounds() {
       </main>
     </Layout>
   )
+}
+
+/** ---------------- small UI bits ---------------- */
+function StatCard({ label, value, className = '' }) {
+  return (
+    <div className={`rounded-xl bg-slate-900/60 border border-slate-700 p-4 ${className}`}>
+      <div className="text-slate-400 text-xs">{label}</div>
+      <div className="text-xl font-semibold mt-1">{value}</div>
+    </div>
+  )
+}
+
+function statusBadge(card) {
+  if (card.kind === 'pool2') {
+    if (card.claimed) return <span className="inline-block px-2 py-0.5 rounded bg-emerald-700/40 text-emerald-200 text-xs">Claimed</span>
+    if (card.challengerWon) return <span className="inline-block px-2 py-0.5 rounded bg-indigo-700/40 text-indigo-200 text-xs">Challenger won</span>
+    return <span className="inline-block px-2 py-0.5 rounded bg-slate-700/40 text-slate-200 text-xs">Voting</span>
+  }
+  // pool1
+  if (card.claimed) return <span className="inline-block px-2 py-0.5 rounded bg-emerald-700/40 text-emerald-200 text-xs">Claimed</span>
+  if (card.ended) {
+    return card.youWon
+      ? <span className="inline-block px-2 py-0.5 rounded bg-yellow-600/40 text-yellow-200 text-xs">You won</span>
+      : <span className="inline-block px-2 py-0.5 rounded bg-slate-700/40 text-slate-200 text-xs">Ended</span>
+  }
+  return <span className="inline-block px-2 py-0.5 rounded bg-cyan-700/40 text-cyan-200 text-xs">Active</span>
 }
