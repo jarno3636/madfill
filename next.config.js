@@ -8,19 +8,19 @@ const nextConfig = {
   swcMinify: true,
   output: 'standalone',
 
-  // Images used by OGs / Warpcast cards / CDN assets
   images: {
     domains: ['warpcast.com', 'imagedelivery.net', 'res.cloudinary.com', 'madfill.vercel.app'],
     remotePatterns: [{ protocol: 'https', hostname: '**' }],
   },
 
-  // HTTP headers (mirrors your security/CDN needs)
   async headers() {
     return [
       {
+        // Default site headers
         source: '/(.*)',
         headers: [
-          { key: 'X-Frame-Options', value: 'ALLOWALL' },
+          // NOTE: Do NOT send X-Frame-Options here; CSP frame-ancestors is the modern control and
+          // must allow Warpcast. XFO has only DENY/SAMEORIGIN and would block embedding.
           {
             key: 'Content-Security-Policy',
             value: "frame-ancestors 'self' https://warpcast.com https://*.warpcast.com;",
@@ -32,9 +32,10 @@ const nextConfig = {
         ],
       },
       {
+        // Well-known Farcaster config
         source: '/.well-known/farcaster.json',
         headers: [
-          { key: 'Content-Type', value: 'application/json' },
+          { key: 'Content-Type', value: 'application/json; charset=utf-8' },
           { key: 'Cache-Control', value: 'public, max-age=300' },
         ],
       },
@@ -46,7 +47,7 @@ const nextConfig = {
     config.output = config.output || {};
     config.output.globalObject = 'globalThis';
 
-    // Keep your manual vendor splitting (optional; Next has sane defaults)
+    // Keep vendor splitting (Next has sane defaults; this is harmless)
     config.optimization = {
       ...config.optimization,
       splitChunks: {
@@ -71,15 +72,15 @@ const nextConfig = {
     };
 
     if (isServer) {
-      // Compile-time alias for `self` so server-side vendor code doesn't crash
+      // Compile-time alias for `self` so SSR vendor code doesn't crash
       config.plugins = config.plugins || [];
       config.plugins.push(
         new webpackLib.DefinePlugin({
-          self: 'globalThis',
+          self: 'globalThis', // replace identifier `self` with the identifier `globalThis`
         })
       );
 
-      // Runtime guard – in case any chunk still probes `self`
+      // Runtime guard — if any chunk still probes `self`
       config.plugins.push(
         new webpackLib.BannerPlugin({
           raw: true,
@@ -102,8 +103,9 @@ const nextConfig = {
         : {}),
     };
 
-    // Prepend our explicit SSR polyfill to all server entries (defensive)
-    const originalEntry = typeof config.entry === 'function' ? config.entry : async () => config.entry || {};
+    // Prepend an explicit SSR polyfill to all server entries (defensive)
+    const originalEntry =
+      typeof config.entry === 'function' ? config.entry : async () => config.entry || {};
     config.entry = async () => {
       const entries = await originalEntry();
       if (isServer) {
