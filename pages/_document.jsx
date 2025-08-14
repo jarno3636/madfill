@@ -1,27 +1,35 @@
-// pages/_document.jsx
+// pages/_document.js
 import Document, { Html, Head, Main, NextScript } from 'next/document'
-import React from 'react'
 
+/**
+ * Minimal, robust Document for Next.js (Pages Router).
+ * - Normalizes `styles` so downstream bundler/runtime never sees `undefined`.
+ * - Avoids custom chunk reductions that have caused build-time crashes.
+ * - No browser globals; SSR-only.
+ */
 export default class MyDocument extends Document {
   static async getInitialProps(ctx) {
-    // Ensure styles is an array to avoid edge cases with styled-jsx/Emotion.
     const initialProps = await Document.getInitialProps(ctx)
-    const safeStyles = React.Children.toArray(initialProps?.styles || [])
-    return { ...initialProps, styles: safeStyles }
+    // Normalize styles to an array to prevent `.length`/map errors.
+    const normalizedStyles = Array.isArray(initialProps.styles)
+      ? initialProps.styles
+      : initialProps.styles
+        ? [initialProps.styles]
+        : []
+
+    return {
+      ...initialProps,
+      styles: normalizedStyles,
+    }
   }
 
   render() {
     return (
       <Html lang="en">
         <Head>
-          {/* Keep this lean and static. No scripts here. */}
-          <link rel="icon" href="/favicon.ico" />
-          <meta name="theme-color" content="#1e293b" />
-          {/* Use the standard meta for referrer policy */}
-          <meta name="referrer" content="origin-when-cross-origin" />
-          {/* Security headers like X-Content-Type-Options must be sent via HTTP headers, not meta tags. */}
+          {/* Keep head minimal; SEO/OG is handled per-page */}
+          <meta name="theme-color" content="#0f172a" />
         </Head>
-        {/* Next injects the viewport meta automatically. */}
         <body className="antialiased">
           <Main />
           <NextScript />
