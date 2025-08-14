@@ -3,8 +3,14 @@ const SITE = process.env.NEXT_PUBLIC_SITE_URL || 'https://madfill.vercel.app'
 const OG = `${SITE}/api/og?screen=challenge&title=MadFill%20Challenge&subtitle=Beat%20the%20current%20winner`
 
 export default async function handler(req, res) {
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET')
+    return res.status(405).end('Method Not Allowed')
+  }
+
   const pageUrl = `${SITE}/challenge`
   const html = `<!doctype html><html><head>
+    <meta charSet="utf-8" />
     <meta property="og:title" content="MadFill — Community Challenge" />
     <meta property="og:image" content="${OG}" />
 
@@ -27,7 +33,8 @@ export default async function handler(req, res) {
     <meta name="fc:frame:button:4:action" content="link" />
     <meta name="fc:frame:button:4:target" content="${SITE}/" />
   </head><body></body></html>`
-  
-  res.setHeader('Content-Type', 'text/html')
-  res.status(200).send(html)
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8')
+  res.setHeader('Cache-Control', 'public, s-maxage=600, stale-while-revalidate=86400')
+  return res.status(200).send(html)
 }
