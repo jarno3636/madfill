@@ -1,33 +1,37 @@
 // pages/myo.jsx
-'use client';
+'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Head from 'next/head';
-import dynamic from 'next/dynamic';
-import { ethers } from 'ethers';
-import { useWindowSize } from 'react-use';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
+import Head from 'next/head'
+import { ethers } from 'ethers'
+import { useWindowSize } from 'react-use'
 
-import Layout from '@/components/Layout';
-import SEO from '@/components/SEO';
-import { absoluteUrl, buildOgUrl } from '@/lib/seo';
-import { useMiniWallet } from '@/hooks/useMiniWallet';
-import { useMiniAppReady } from '@/hooks/useMiniAppReady';
-import { useToast } from '@/components/Toast';
-import { Card, CardHeader, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+import Layout from '@/components/Layout'
+import SEO from '@/components/SEO'
+import { Card, CardHeader, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import StyledCard from '@/components/StyledCard'
 
-// Client-only confetti
-const Confetti = dynamic(() => import('react-confetti'), { ssr: false });
+import { useMiniAppReady } from '@/hooks/useMiniAppReady'
+import { useMiniWallet } from '@/hooks/useMiniWallet'
+import { useToast } from '@/components/Toast'
+import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 
-// ---- Chain / Contract ----
-const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org';
-const BASE_CHAIN_ID = 8453n;
-const BASE_CHAIN_ID_HEX = '0x2105';
+// Client-only confetti (optional flourish)
+const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
+
+/* ===============================
+   Chain / Contract (Base Mainnet)
+=================================*/
+const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+const BASE_CHAIN_ID = 8453n
+const BASE_CHAIN_ID_HEX = '0x2105'
 const TEMPLATE_ADDR =
   process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS ||
-  '0x0F22124A86F8893990fA4763393E46d97F429442'; // fallback
+  '0x0F22124A86F8893990fA4763393E46d97F429442' // fallback
 
-// Minimal ABI used on this page
+// Minimal ABI for limits, price, and mint
 const ABI = [
   { inputs: [], name: 'MAX_PARTS', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_PART_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
@@ -35,350 +39,359 @@ const ABI = [
   { inputs: [], name: 'getMintPriceWei', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   {
     inputs: [
-      { name: 'title', type: 'string' },
-      { name: 'description', type: 'string' },
-      { name: 'theme', type: 'string' },
-      { name: 'parts', type: 'string[]' },
+      { type: 'string', name: 'title' },
+      { type: 'string', name: 'description' },
+      { type: 'string', name: 'theme' },
+      { type: 'string[]', name: 'parts' }
     ],
     name: 'mintTemplate',
     outputs: [],
     stateMutability: 'payable',
-    type: 'function',
-  },
-];
+    type: 'function'
+  }
+]
 
-// ---------- helpers ----------
-const utf8BytesLen = (str) => new TextEncoder().encode(str || '').length;
+/* ===============================
+   Small helpers
+=================================*/
+const bytes = (s) => new TextEncoder().encode(String(s || '')).length
+const clamp = (n, min, max) => Math.max(min, Math.min(max, n))
 
-// Split a single “composer” line by [[blank]] markers into contract parts[].
-// Example: "The [[blank]] fox jumps over the [[blank]] dog"
-// -> ["The ", " fox jumps over the ", " dog"]  (blanks = parts.length-1)
-function splitIntoPartsByBlanks(input) {
-  if (!input) return [''];
-  return String(input).split(/\[\[blank\]\]/g);
-}
+// Friendly random starters (users can modify freely)
+const PROMPT_STARTERS = [
+  'My day started with [BLANK], then I found a [BLANK] under the couch.',
+  'In space, no one can hear your [BLANK], but everyone sees your [BLANK].',
+  'The secret ingredient is always [BLANK], served with a side of [BLANK].',
+  'When I opened the door, a [BLANK] yelled “[BLANK]!” from the hallway.',
+  'Future me only travels for [BLANK] and exceptional [BLANK].',
+  'The prophecy spoke of [BLANK] and the legendary [BLANK].'
+]
 
-function countBlanks(parts) {
-  return Math.max(0, (parts?.length || 0) - 1);
-}
+// Polished gradient / image-like backgrounds (utility classes)
+const BG_CHOICES = [
+  { key: 'indigoNebula', label: 'Indigo Nebula', cls: 'from-indigo-900 via-purple-800 to-slate-900' },
+  { key: 'candy',        label: 'Candy',         cls: 'from-pink-600 via-fuchsia-600 to-purple-700' },
+  { key: 'tealSunset',   label: 'Teal Sunset',   cls: 'from-teal-600 via-cyan-700 to-indigo-800' },
+  { key: 'magma',        label: 'Magma',         cls: 'from-orange-600 via-rose-600 to-fuchsia-700' },
+  { key: 'forest',       label: 'Forest',        cls: 'from-emerald-700 via-teal-700 to-slate-900' },
+]
 
-// UI: pretty preview replacing blanks with slots
-function renderPreview(parts) {
-  const n = parts.length;
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    out.push(parts[i] || '');
-    if (i < n - 1) {
-      out.push(' ');
-      out.push('[  ______  ]');
-      out.push(' ');
+// Convert the author’s story (with [BLANK] markers) to parts.
+// `fills` is an array where the user can pre-fill some blanks.
+// If a blank has a fill, we merge it into the previous part (so that blank disappears).
+function deriveParts(story, fills) {
+  const chunks = String(story || '').split(/\[BLANK\]/g)
+  const blanks = Math.max(0, chunks.length - 1)
+  const safeFills = Array.from({ length: blanks }, (_, i) => (fills?.[i] || '').trim())
+
+  if (chunks.length === 0) return { parts: [''], blanksRemaining: 0 }
+  // Start with the first text segment
+  const parts = [chunks[0] || '']
+  for (let i = 0; i < blanks; i++) {
+    const fill = safeFills[i]
+    const nextText = chunks[i + 1] || ''
+    if (fill) {
+      // "Consume" the blank by appending the filled word into the previous part
+      parts[parts.length - 1] = parts[parts.length - 1] + fill + nextText
+    } else {
+      // Keep the blank: push nextText as the next part
+      parts.push(nextText)
     }
   }
-  return out.join('');
+  return { parts, blanksRemaining: Math.max(0, parts.length - 1) }
 }
 
-const backgrounds = [
-  { key: 'midnight', cls: 'from-slate-900 via-indigo-900 to-violet-900' },
-  { key: 'sunset', cls: 'from-pink-600 via-fuchsia-700 to-purple-800' },
-  { key: 'ocean', cls: 'from-cyan-700 via-sky-700 to-indigo-800' },
-  { key: 'matrix', cls: 'from-emerald-800 via-teal-800 to-slate-900' },
-];
+/* ===============================
+   Page Component
+=================================*/
+function MYOPage() {
+  useMiniAppReady()
+  const { addToast } = useToast()
+  const { address, isConnected, connect } = useMiniWallet()
+  const { width, height } = useWindowSize()
 
-export default function MYO() {
-  useMiniAppReady();
-  const { addToast } = useToast();
-  const { address, isConnected, connect, isLoading: walletLoading } = useMiniWallet();
-  const { width, height } = useWindowSize();
-  const [showConfetti, setShowConfetti] = useState(false);
-  const confettiTimer = useRef(null);
+  // Wallet / chain
+  const [isOnBase, setIsOnBase] = useState(true)
 
-  // Network observe + switch
-  const [isOnBase, setIsOnBase] = useState(true);
+  // On-chain constraints & price
+  const [maxParts, setMaxParts] = useState(16)
+  const [maxPartBytes, setMaxPartBytes] = useState(256)
+  const [maxTotalBytes, setMaxTotalBytes] = useState(2048)
+  const [mintPriceWei, setMintPriceWei] = useState(0n)
+  const mintPriceEth = useMemo(() => Number(ethers.formatEther(mintPriceWei || 0n)), [mintPriceWei])
 
-  // Form (simplified + more intuitive)
-  const [title, setTitle] = useState('');
-  const [theme, setTheme] = useState('');
-  const [description, setDescription] = useState('');
-  const [composer, setComposer] = useState(''); // one text area with [[blank]] markers
-  const [bgKey, setBgKey] = useState('midnight');
+  // ETH/USD display (optional nicety)
+  const [usd, setUsd] = useState(null)
 
-  // Limits & price
-  const [maxParts, setMaxParts] = useState(16);
-  const [maxPartBytes, setMaxPartBytes] = useState(256);
-  const [maxTotalBytes, setMaxTotalBytes] = useState(2048);
-  const [mintPriceWei, setMintPriceWei] = useState(0n);
-  const [usdApprox, setUsdApprox] = useState(null);
+  // UI state
+  const [loading, setLoading] = useState(false)
+  const [showConfetti, setShowConfetti] = useState(false)
 
-  // Derived
-  const parts = useMemo(() => splitIntoPartsByBlanks(composer).map((p) => p.replace(/\s+/g, ' ')), [composer]);
-  const blanks = useMemo(() => countBlanks(parts), [parts]);
-  const totalBytes = useMemo(
-    () => utf8BytesLen(title) + utf8BytesLen(theme) + utf8BytesLen(description) + parts.reduce((s, p) => s + utf8BytesLen(p), 0),
-    [title, theme, description, parts]
-  );
-  const mintPriceEth = useMemo(() => Number(ethers.formatEther(mintPriceWei || 0n)), [mintPriceWei]);
+  // Template meta
+  const [title, setTitle] = useState('')
+  const [theme, setTheme] = useState('')
+  const [description, setDescription] = useState('')
 
-  // Observe chain (browser only)
+  // Story + blanks
+  const storyRef = useRef(null)
+  const [story, setStory] = useState(PROMPT_STARTERS[0])
+  const blanksInStory = Math.max(0, story.split(/\[BLANK\]/g).length - 1)
+  const [fills, setFills] = useState(Array(blanksInStory).fill('')) // optional pre-fills
+
+  // Background
+  const [bgKey, setBgKey] = useState(BG_CHOICES[0].key)
+
+  // Keep fills array aligned with number of [BLANK]s
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
+    setFills((prev) => {
+      const next = Array(blanksInStory).fill('')
+      for (let i = 0; i < Math.min(prev.length, next.length); i++) next[i] = prev[i]
+      return next
+    })
+  }, [blanksInStory])
+
+  // Observe chain
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
       try {
-        const prov = (typeof window !== 'undefined' && window.ethereum) || null;
+        const prov = (typeof window !== 'undefined' && window.ethereum) || null
         if (prov) {
-          const provider = new ethers.BrowserProvider(prov);
+          const provider = new ethers.BrowserProvider(prov)
           try {
-            const net = await provider.getNetwork();
-            if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID);
+            const net = await provider.getNetwork()
+            if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
           } catch {
-            if (!cancelled) setIsOnBase(true);
+            if (!cancelled) setIsOnBase(true)
           }
-          const onChain = () => location.reload();
-          prov.on?.('chainChanged', onChain);
-          return () => prov.removeListener?.('chainChanged', onChain);
-        } else {
-          if (!cancelled) setIsOnBase(true);
+          const onChain = () => location.reload()
+          prov.on?.('chainChanged', onChain)
+          return () => prov.removeListener?.('chainChanged', onChain)
+        } else if (!cancelled) {
+          setIsOnBase(true)
         }
       } catch {
-        if (!cancelled) setIsOnBase(true);
+        if (!cancelled) setIsOnBase(true)
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    })()
+    return () => { cancelled = true }
+  }, [])
 
   const switchToBase = useCallback(async () => {
-    const prov = (typeof window !== 'undefined' && window.ethereum) || null;
+    const prov = (typeof window !== 'undefined' && window.ethereum) || null
     if (!prov) {
-      addToast({ type: 'error', title: 'No Wallet', message: 'No wallet provider found.' });
-      return;
+      addToast({ type: 'error', title: 'No Wallet', message: 'No wallet provider found.' })
+      return
     }
     try {
-      await prov.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] });
-      setIsOnBase(true);
+      await prov.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] })
+      setIsOnBase(true)
     } catch (e) {
       if (e?.code === 4902) {
         try {
           await prov.request({
             method: 'wallet_addEthereumChain',
-            params: [
-              {
-                chainId: BASE_CHAIN_ID_HEX,
-                chainName: 'Base',
-                rpcUrls: [BASE_RPC],
-                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-                blockExplorerUrls: ['https://basescan.org'],
-              },
-            ],
-          });
-          setIsOnBase(true);
+            params: [{
+              chainId: BASE_CHAIN_ID_HEX,
+              chainName: 'Base',
+              rpcUrls: [BASE_RPC],
+              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+              blockExplorerUrls: ['https://basescan.org']
+            }]
+          })
+          setIsOnBase(true)
         } catch {
-          addToast({ type: 'error', title: 'Switch Failed', message: 'Could not add/switch to Base.' });
+          addToast({ type: 'error', title: 'Switch Failed', message: 'Could not add/switch to Base.' })
         }
       } else {
-        addToast({ type: 'error', title: 'Switch Failed', message: e?.message || 'Could not switch to Base.' });
+        addToast({ type: 'error', title: 'Switch Failed', message: e?.message || 'Could not switch to Base.' })
       }
     }
-  }, [addToast]);
+  }, [addToast])
 
-  // Read on-chain limits + price
+  // Load on-chain limits + mint price
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
+    let cancelled = false
+    ;(async () => {
       try {
-        if (!TEMPLATE_ADDR) return;
-        const provider = new ethers.JsonRpcProvider(BASE_RPC);
-        const ct = new ethers.Contract(TEMPLATE_ADDR, ABI, provider);
+        const provider = new ethers.JsonRpcProvider(BASE_RPC)
+        const ct = new ethers.Contract(TEMPLATE_ADDR, ABI, provider)
         const [mp, mpb, mtb, price] = await Promise.all([
           ct.MAX_PARTS().catch(() => 16n),
           ct.MAX_PART_BYTES().catch(() => 256n),
           ct.MAX_TOTAL_BYTES().catch(() => 2048n),
           ct.getMintPriceWei().catch(() => 0n),
-        ]);
-        if (cancelled) return;
-        setMaxParts(Number(mp));
-        setMaxPartBytes(Number(mpb));
-        setMaxTotalBytes(Number(mtb));
-        setMintPriceWei(BigInt(price || 0n));
+        ])
+        if (cancelled) return
+        setMaxParts(Number(mp))
+        setMaxPartBytes(Number(mpb))
+        setMaxTotalBytes(Number(mtb))
+        setMintPriceWei(BigInt(price || 0n))
       } catch {
         // keep defaults
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    })()
+    return () => { cancelled = true }
+  }, [])
 
-  // USD approx
+  // ETH/USD for display (does not affect tx)
   useEffect(() => {
-    let aborted = false;
-    (async () => {
-      if (mintPriceWei === 0n) {
-        setUsdApprox(null);
-        return;
-      }
+    let aborted = false
+    ;(async () => {
       try {
-        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd');
-        const j = await r.json();
-        const ethUsd = Number(j?.ethereum?.usd || 0);
-        if (!aborted && ethUsd > 0) {
-          const eth = Number(ethers.formatEther(mintPriceWei));
-          setUsdApprox(eth * ethUsd);
-        }
+        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
+        const j = await r.json()
+        if (!aborted) setUsd(Number(j?.ethereum?.usd || 0))
       } catch {
-        setUsdApprox(null);
+        if (!aborted) setUsd(null)
       }
-    })();
-    return () => {
-      aborted = true;
-    };
-  }, [mintPriceWei]);
+    })()
+    return () => { aborted = true }
+  }, [])
 
-  // Insert [[blank]] at cursor
-  const textAreaRef = useRef(null);
-  const insertBlankAtCursor = useCallback(() => {
-    const el = textAreaRef.current;
-    if (!el) {
-      setComposer((s) => (s || '') + '[[blank]]');
-      return;
-    }
-    const start = el.selectionStart ?? el.value.length;
-    const end = el.selectionEnd ?? el.value.length;
-    const before = el.value.slice(0, start);
-    const after = el.value.slice(end);
-    const next = `${before}[[blank]]${after}`;
-    setComposer(next);
+  // Derived parts (removing blanks the user pre-filled)
+  const { parts, blanksRemaining } = useMemo(() => deriveParts(story, fills), [story, fills])
+
+  // Byte accounting
+  const partsBytes = useMemo(() => parts.reduce((sum, p) => sum + bytes(p), 0), [parts])
+  const totalBytes = bytes(title) + bytes(description) + bytes(theme) + partsBytes
+
+  // Background class
+  const bgCls = useMemo(() => {
+    const found = BG_CHOICES.find((b) => b.key === bgKey) || BG_CHOICES[0]
+    return found.cls
+  }, [bgKey])
+
+  // Insert a [BLANK] at cursor position
+  const insertBlankAtCursor = () => {
+    const el = storyRef.current
+    if (!el) { setStory((s) => s + ' [BLANK] '); return }
+    const start = el.selectionStart ?? el.value.length
+    const end = el.selectionEnd ?? el.value.length
+    const before = story.slice(0, start)
+    const after = story.slice(end)
+    const next = `${before}[BLANK]${after}`
+    setStory(next)
+    // restore cursor
     requestAnimationFrame(() => {
-      el.focus();
-      const pos = start + '[[blank]]'.length;
-      el.setSelectionRange(pos, pos);
-    });
-  }, []);
+      el.focus()
+      const pos = start + '[BLANK]'.length
+      el.setSelectionRange(pos, pos)
+    })
+  }
 
-  // Validate form
+  const randomizeStarter = () => {
+    const pick = PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)]
+    setStory(pick)
+    setFills([]) // will resize automatically
+  }
+
+  const randomizeBackground = () => {
+    const idx = BG_CHOICES.findIndex((b) => b.key === bgKey)
+    const next = (idx + 1) % BG_CHOICES.length
+    setBgKey(BG_CHOICES[next].key)
+  }
+
+  // Validate before mint
   const validate = () => {
-    const errs = [];
-    if (!title.trim()) errs.push('Add a title.');
-    if (!theme.trim()) errs.push('Add a theme.');
-    if (!description.trim()) errs.push('Add a short description.');
-    if (parts.length < 2) errs.push('Add at least one [[blank]] to your template.');
-    if (parts.length > maxParts) errs.push(`Too many blanks: maximum parts is ${maxParts} (blanks = parts-1).`);
-    if (parts.some((p) => utf8BytesLen(p) > maxPartBytes)) errs.push(`Each fixed segment must be ≤ ${maxPartBytes} bytes.`);
-    if (totalBytes > maxTotalBytes) errs.push(`Template too large: ≤ ${maxTotalBytes} bytes total.`);
-    if (!mintPriceWei || mintPriceWei === 0n) errs.push('On-chain mint price unavailable. Try again in a moment.');
-    return errs;
-  };
-
-  // Estimate gas & check funds
-  const checkFundsAndEstimate = async (signer, ct, value) => {
-    const addr = await signer.getAddress();
-    const balance = await signer.provider.getBalance(addr);
-    let gasCost = 0n;
-    try {
-      const gas = await ct.mintTemplate.estimateGas(
-        String(title).slice(0, 128),
-        String(description).slice(0, 2048),
-        String(theme).slice(0, 128),
-        parts,
-        { value }
-      );
-      const feeData = await signer.provider.getFeeData();
-      const gasPrice = feeData.gasPrice ?? 0n;
-      gasCost = gas * gasPrice;
-    } catch {
-      // fallback: 200k gas at current price
-      const feeData = await signer.provider.getFeeData();
-      const gasPrice = feeData.gasPrice ?? 0n;
-      gasCost = 200_000n * gasPrice;
+    if (!TEMPLATE_ADDR) {
+      addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS.' })
+      return false
     }
-
-    const needed = value + gasCost;
-    if (balance < needed) {
-      const shortEth = Number(ethers.formatEther(needed - balance));
-      throw new Error(
-        `Insufficient funds: need ~${shortEth.toFixed(6)} ETH more (mint + gas).`
-      );
+    if (!isConnected) {
+      addToast({ type: 'error', title: 'Wallet Required', message: 'Please connect your wallet.' })
+      return false
     }
-  };
-
-  const [isMinting, setIsMinting] = useState(false);
+    if (!title.trim() || !theme.trim() || !description.trim()) {
+      addToast({ type: 'error', title: 'Missing Fields', message: 'Title, Theme, and Description are required.' })
+      return false
+    }
+    if (parts.length > maxParts) {
+      addToast({ type: 'error', title: 'Too Many Parts', message: `Max ${maxParts} parts.` })
+      return false
+    }
+    if (parts.some((p) => bytes(p) > maxPartBytes)) {
+      addToast({ type: 'error', title: 'Part Too Long', message: `Each part must be ≤ ${maxPartBytes} bytes.` })
+      return false
+    }
+    if (totalBytes > maxTotalBytes) {
+      addToast({ type: 'error', title: 'Too Large', message: `Total bytes must be ≤ ${maxTotalBytes}.` })
+      return false
+    }
+    if (blanksRemaining < 1) {
+      // Contract likely expects at least one blank; keep author-friendly hint
+      addToast({ type: 'error', title: 'Add a Blank', message: 'Include at least one [BLANK] in your story.' })
+      return false
+    }
+    if (mintPriceWei === 0n) {
+      addToast({ type: 'error', title: 'Mint Price Unavailable', message: 'Unable to read on-chain price. Try again.' })
+      return false
+    }
+    return true
+  }
 
   const handleMint = async () => {
-    const errs = validate();
-    if (errs.length) {
-      addToast({ type: 'error', title: 'Fix the following', message: errs.join(' ') });
-      return;
-    }
-
+    if (!validate()) return
     try {
-      if (!isConnected) {
-        addToast({ type: 'error', title: 'Wallet required', message: 'Connect your wallet to mint.' });
-        return;
+      setLoading(true)
+      const prov = (typeof window !== 'undefined' && window.ethereum) || null
+      if (!prov) throw new Error('No wallet provider found')
+      await prov.request?.({ method: 'eth_requestAccounts' })
+
+      // Ensure Base
+      const browserProvider = new ethers.BrowserProvider(prov)
+      const net = await browserProvider.getNetwork()
+      if (net?.chainId !== BASE_CHAIN_ID) {
+        await switchToBase()
       }
 
-      setIsMinting(true);
-
-      const prov = (typeof window !== 'undefined' && window.ethereum) || null;
-      if (!prov) throw new Error('No wallet provider found');
-      await prov.request?.({ method: 'eth_requestAccounts' });
-
-      const browserProvider = new ethers.BrowserProvider(prov);
-      const net = await browserProvider.getNetwork();
-      if (net?.chainId !== BASE_CHAIN_ID) await switchToBase();
-
-      const signer = await browserProvider.getSigner();
-      const ct = new ethers.Contract(TEMPLATE_ADDR, ABI, signer);
-
-      // Trust contract price; refresh in case it changed
-      const onChainPrice = await ct.getMintPriceWei().catch(() => mintPriceWei);
-      const value = BigInt(onChainPrice || mintPriceWei || 0n);
-
-      // Funds check (includes gas)
-      await checkFundsAndEstimate(signer, ct, value);
+      // Use exact on-chain mint fee (gas is separate)
+      const signer = await browserProvider.getSigner()
+      const ct = new ethers.Contract(TEMPLATE_ADDR, ABI, signer)
 
       const tx = await ct.mintTemplate(
         String(title).slice(0, 128),
         String(description).slice(0, 2048),
         String(theme).slice(0, 128),
         parts,
-        { value }
-      );
-      await tx.wait();
+        { value: mintPriceWei }
+      )
+      await tx.wait()
 
-      addToast({ type: 'success', title: 'Minted 🎉', message: 'Your template NFT was minted successfully.' });
-      setShowConfetti(true);
-      clearTimeout(confettiTimer.current);
-      confettiTimer.current = setTimeout(() => setShowConfetti(false), 1800);
+      addToast({ type: 'success', title: 'Minted!', message: 'Your template NFT is live on Base.' })
+      setShowConfetti(true)
+      setTimeout(() => setShowConfetti(false), 1800)
 
-      // Reset composer but keep cosmetic selections
-      setTitle('');
-      setTheme('');
-      setDescription('');
-      setComposer('');
+      // Reset template (keep background)
+      setTitle('')
+      setTheme('')
+      setDescription('')
+      setStory(PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)])
+      setFills([])
     } catch (e) {
-      addToast({
-        type: 'error',
-        title: 'Mint failed',
-        message: e?.shortMessage || e?.reason || e?.message || 'Transaction failed.',
-      });
-      setShowConfetti(false);
+      console.error(e)
+      const msg = e?.info?.error?.message || e?.shortMessage || e?.reason || e?.message || 'Transaction failed.'
+      addToast({ type: 'error', title: 'Mint Failed', message: msg })
+      setShowConfetti(false)
     } finally {
-      setIsMinting(false);
+      setLoading(false)
     }
-  };
+  }
 
-  useEffect(() => () => clearTimeout(confettiTimer.current), []);
+  // Live preview content for StyledCard:
+  // We want the remaining blanks to appear as "____".
+  const wordsForPreview = useMemo(() => {
+    // StyledCard expects words map for current blanks (0..blanksRemaining-1)
+    // Leave empty to render ____ for each.
+    const w = {}
+    for (let i = 0; i < blanksRemaining; i++) w[i] = ''
+    return w
+  }, [blanksRemaining])
 
-  // ---- SEO / Farcaster ----
-  const pageUrl = absoluteUrl('/myo');
-  const ogImage = buildOgUrl({ screen: 'myo', title: 'Make Your Own' });
+  // Basic SEO / Farcaster
+  const pageUrl = absoluteUrl('/myo')
+  const ogImage = buildOgUrl({ screen: 'myo', title: 'Make Your Own' })
 
-  const bgCls = useMemo(
-    () => backgrounds.find((b) => b.key === bgKey)?.cls || backgrounds[0].cls,
-    [bgKey]
-  );
-
-  // ---------- UI ----------
   return (
     <Layout>
       <Head>
@@ -391,8 +404,8 @@ export default function MYO() {
       </Head>
 
       <SEO
-        title="Make Your Own Templates — MadFill"
-        description="Type your prompt, drop [[blank]] wherever players will fill in. Mint as an NFT on Base."
+        title="Make Your Own — MadFill Templates"
+        description="Type your story, drop [BLANK] anywhere, pick a background, and mint as an NFT on Base."
         url={pageUrl}
         image={ogImage}
         type="website"
@@ -401,199 +414,223 @@ export default function MYO() {
 
       {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
-      <div className={`min-h-screen bg-gradient-to-br ${bgCls}`}>
+      <main className="max-w-6xl mx-auto p-4 md:p-6 text-white space-y-6">
         {/* Header */}
-        <div className="relative py-14 px-4">
-          <div className="max-w-5xl mx-auto text-center">
-            <div className="text-7xl mb-4">🎨</div>
-            <h1 className="text-4xl md:text-5xl font-bold text-white">Make Your Own Template</h1>
-            <p className="text-purple-100 mt-3">
-              Type your story and insert <code className="px-1.5 py-0.5 rounded bg-white/10">[[blank]]</code> anywhere you want a blank.
-              Words you leave in place become fixed. At least one blank is required.
-            </p>
-
-            <div className="mt-5 text-purple-100 text-sm">
-              Mint price (from contract):{' '}
-              <span className="font-semibold text-white">
-                {mintPriceWei === 0n ? '—' : `${mintPriceEth.toFixed(5)} ETH`}
-              </span>
-              {usdApprox != null && <span className="ml-1 opacity-80">(~${usdApprox.toFixed(2)} USD)</span>}
+        <div className="rounded-2xl bg-slate-900/70 border border-slate-700 p-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h1 className="text-3xl md:text-4xl font-extrabold">🎨 Make Your Own</h1>
+              <p className="text-slate-300">
+                Type your story and insert <code className="px-1 py-0.5 bg-slate-800 rounded">[BLANK]</code> wherever players will fill a word.
+                Pre-fill any blank you want (optional). Then mint the template NFT.
+              </p>
             </div>
+            <div className="flex items-center gap-2">
+              {!isConnected ? (
+                <Button onClick={connect} className="bg-amber-500 hover:bg-amber-400 text-black">Connect Wallet</Button>
+              ) : !isOnBase ? (
+                <Button onClick={switchToBase} className="bg-cyan-600 hover:bg-cyan-500">Switch to Base</Button>
+              ) : null}
+            </div>
+          </div>
 
-            {!isConnected ? (
-              <div className="mt-6">
-                <Button
-                  onClick={connect}
-                  disabled={walletLoading}
-                  className="bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 text-black font-bold px-6 py-3 rounded-lg"
-                >
-                  {walletLoading ? 'Connecting…' : 'Connect Wallet'}
-                </Button>
-              </div>
-            ) : (
-              <div className="mt-6 inline-flex items-center gap-3 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-sm text-white">
-                <span className="opacity-80">Connected</span>
-                <span className="font-mono bg-black/30 px-2 py-1 rounded">
-                  {address?.slice(0, 6)}…{address?.slice(-4)}
-                </span>
-                {!isOnBase && (
-                  <Button onClick={switchToBase} className="bg-cyan-600 hover:bg-cyan-500 h-8 px-3 text-sm">
-                    Switch to Base
-                  </Button>
-                )}
-              </div>
-            )}
+          {/* Fee pill */}
+          <div className="mt-4 flex flex-wrap gap-3 text-sm">
+            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
+              Mint fee: <b>{mintPriceWei === 0n ? '—' : `${mintPriceEth.toFixed(6)} ETH`}</b>
+              {usd ? <span className="opacity-80"> (~${(mintPriceEth * usd).toFixed(2)} USD)</span> : null}
+              <span className="opacity-70"> + gas</span>
+            </div>
+            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
+              Limits: parts ≤ {maxParts}, part bytes ≤ {maxPartBytes}, total bytes ≤ {maxTotalBytes}
+            </div>
+            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
+              Remaining blanks in this design: <b>{blanksRemaining}</b>
+            </div>
           </div>
         </div>
 
-        {/* Main */}
-        <div className="max-w-6xl mx-auto px-4 pb-16">
-          <Card className="bg-white/10 backdrop-blur border-white/20">
-            <CardHeader>
-              <h2 className="text-2xl md:text-3xl font-bold text-white text-center">Compose &amp; Mint</h2>
+        {/* Main grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Left: Builder */}
+          <Card className="bg-slate-900/70 border border-slate-700">
+            <CardHeader className="border-b border-slate-700">
+              <h2 className="text-xl font-bold">Story Builder</h2>
             </CardHeader>
+            <CardContent className="p-5 space-y-5">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <label className="text-sm text-slate-300 md:col-span-2">
+                  Title
+                  <input
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="e.g., The Late Night Snack Heist"
+                    className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                    maxLength={128}
+                  />
+                  <span className="text-xs text-slate-400">{bytes(title)} / 128 bytes</span>
+                </label>
 
-            <CardContent className="p-6 md:p-8">
-              <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
-                {/* Left: Inputs */}
-                <div className="lg:col-span-3 space-y-5">
-                  <div>
-                    <label className="block text-white text-sm font-medium mb-1">Title</label>
-                    <input
-                      type="text"
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      placeholder="e.g., The Great Adventure"
-                      className="w-full px-4 py-2.5 rounded-lg bg-white/15 text-white placeholder-purple-200 border border-white/20 focus:border-yellow-400 focus:outline-none"
-                    />
-                    <div className="text-xs text-purple-200 mt-1">{utf8BytesLen(title)} bytes</div>
-                  </div>
+                <label className="text-sm text-slate-300">
+                  Theme
+                  <input
+                    value={theme}
+                    onChange={(e) => setTheme(e.target.value)}
+                    placeholder="e.g., Comedy"
+                    className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                    maxLength={128}
+                  />
+                  <span className="text-xs text-slate-400">{bytes(theme)} / 128 bytes</span>
+                </label>
+              </div>
 
-                  <div>
-                    <label className="block text-white text-sm font-medium mb-1">Theme</label>
-                    <input
-                      type="text"
-                      value={theme}
-                      onChange={(e) => setTheme(e.target.value)}
-                      placeholder="e.g., Space Adventure"
-                      className="w-full px-4 py-2.5 rounded-lg bg-white/15 text-white placeholder-purple-200 border border-white/20 focus:border-yellow-400 focus:outline-none"
-                    />
-                    <div className="text-xs text-purple-200 mt-1">{utf8BytesLen(theme)} bytes</div>
-                  </div>
+              <label className="block text-sm text-slate-300">
+                Description
+                <textarea
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="Short description for the NFT metadata."
+                  className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400 h-20 resize-y"
+                  maxLength={2048}
+                />
+                <span className="text-xs text-slate-400">{bytes(description)} / 2048 bytes</span>
+              </label>
 
-                  <div>
-                    <label className="block text-white text-sm font-medium mb-1">Description</label>
-                    <textarea
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      placeholder="Describe your template for NFT metadata"
-                      className="w-full px-4 py-3 rounded-lg bg-white/15 text-white placeholder-purple-200 border border-white/20 focus:border-yellow-400 focus:outline-none h-24 resize-none"
-                    />
-                    <div className="text-xs text-purple-200 mt-1">{utf8BytesLen(description)} bytes</div>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <label className="block text-white text-sm font-medium">Story Composer</label>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          type="button"
-                          onClick={insertBlankAtCursor}
-                          className="bg-fuchsia-600 hover:bg-fuchsia-500 h-8 px-3 text-sm"
-                          title="Insert [[blank]] at cursor"
-                        >
-                          + [[blank]]
-                        </Button>
-                        <span className="text-xs text-purple-100">Blanks: {blanks}</span>
-                      </div>
-                    </div>
-                    <textarea
-                      ref={textAreaRef}
-                      value={composer}
-                      onChange={(e) => setComposer(e.target.value)}
-                      placeholder="Type your story and insert [[blank]] where players will fill in…"
-                      className="mt-2 w-full px-4 py-3 rounded-lg bg-white/15 text-white placeholder-purple-200 border border-white/20 focus:border-yellow-400 focus:outline-none min-h-[140px]"
-                    />
-                    <div className="text-xs text-purple-200 mt-1">
-                      Total payload bytes (title + theme + description + parts): <b>{totalBytes}</b> / {maxTotalBytes}
-                    </div>
-                    <div className="text-xs text-purple-200 mt-1">
-                      Tip: To reduce blanks, replace <code className="bg-white/10 px-1 rounded">[[blank]]</code> with your own word.
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-white text-sm font-medium mb-1">Preview Background</label>
-                    <div className="flex flex-wrap gap-2">
-                      {backgrounds.map((b) => (
-                        <button
-                          key={b.key}
-                          type="button"
-                          onClick={() => setBgKey(b.key)}
-                          className={`h-9 px-3 rounded-lg border ${
-                            bgKey === b.key ? 'border-yellow-400' : 'border-white/20'
-                          } bg-gradient-to-br ${b.cls} text-white text-sm`}
-                          aria-pressed={bgKey === b.key}
-                          title={b.key}
-                        >
-                          {b.key}
-                        </button>
-                      ))}
-                    </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm text-slate-300">Story (use <code>[BLANK]</code> for gaps)</label>
+                  <div className="flex gap-2">
+                    <Button onClick={insertBlankAtCursor} variant="outline" className="border-slate-600 text-slate-200">+ [BLANK]</Button>
+                    <Button onClick={randomizeStarter} className="bg-slate-700 hover:bg-slate-600">🎲 Random</Button>
                   </div>
                 </div>
+                <textarea
+                  ref={storyRef}
+                  value={story}
+                  onChange={(e) => setStory(e.target.value)}
+                  className="w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-3 outline-none focus:ring-2 focus:ring-indigo-400 min-h-[140px] resize-y"
+                />
+                <div className="text-xs text-slate-400">
+                  Parts now: <b>{parts.length}</b> • Bytes in parts: <b>{partsBytes}</b> • Total bytes: <b>{totalBytes}</b> / {maxTotalBytes}
+                </div>
+              </div>
 
-                {/* Right: Preview + Mint */}
-                <div className="lg:col-span-2 space-y-5">
-                  <h3 className="text-white font-semibold">Preview</h3>
-                  <div className={`rounded-2xl border border-white/20 p-5 bg-gradient-to-br ${bgCls}`}>
-                    <div className="bg-black/40 rounded-xl p-4 ring-1 ring-white/10">
-                      <div className="text-white font-bold text-lg">{title || 'Your Template'}</div>
-                      <div className="text-purple-200 text-sm">{theme || 'Theme'}</div>
-                      <div className="mt-3 text-purple-100 leading-relaxed break-words">
-                        {renderPreview(parts) || 'Type your story and add [[blank]]…'}
-                      </div>
-                    </div>
+              {blanksInStory > 0 && (
+                <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
+                  <div className="text-sm font-semibold mb-2">Optional pre-fill (remove blanks you don’t want)</div>
+                  <div className="grid sm:grid-cols-2 gap-2">
+                    {Array.from({ length: blanksInStory }).map((_, i) => (
+                      <input
+                        key={i}
+                        value={fills[i] || ''}
+                        onChange={(e) => setFills((old) => {
+                          const next = [...old]
+                          next[i] = e.target.value
+                          return next
+                        })}
+                        placeholder={`Blank #${i + 1} (leave empty to keep a blank)`}
+                        className="rounded-md bg-slate-900/70 border border-slate-700 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-400"
+                      />
+                    ))}
                   </div>
+                  <div className="text-xs text-slate-400 mt-2">
+                    Any filled blank will become permanent text in the template; unfilled ones remain blanks.
+                  </div>
+                </div>
+              )}
 
-                  <Button
-                    onClick={handleMint}
-                    disabled={
-                      isMinting ||
-                      !isConnected ||
-                      !title.trim() ||
-                      !theme.trim() ||
-                      !description.trim() ||
-                      parts.length < 2 ||
-                      !mintPriceWei
-                    }
-                    className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-bold py-3 rounded-lg disabled:opacity-50"
-                    type="button"
-                  >
-                    {isMinting
-                      ? 'Minting…'
-                      : `Mint NFT Template (${mintPriceWei ? `${mintPriceEth.toFixed(5)} ETH` : '—'}${
-                          usdApprox != null ? ` ~ $${usdApprox.toFixed(2)}` : ''
-                        })`}
-                  </Button>
-
-                  {!isConnected && (
-                    <p className="text-yellow-300/90 text-xs text-center">Connect your wallet to mint.</p>
-                  )}
+              {/* Background selector */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-slate-300">Card Background</div>
+                  <Button onClick={randomizeBackground} variant="outline" className="border-slate-600 text-slate-200">🔀 Randomize</Button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {BG_CHOICES.map((bg) => (
+                    <button
+                      key={bg.key}
+                      onClick={() => setBgKey(bg.key)}
+                      className={`h-10 w-20 rounded-lg border ${bgKey === bg.key ? 'ring-2 ring-yellow-400' : 'border-slate-600'} bg-gradient-to-br ${bg.cls}`}
+                      title={bg.label}
+                      aria-pressed={bgKey === bg.key}
+                    />
+                  ))}
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* FAQ / Help inline */}
-          <div className="mt-6 text-purple-100/90 text-sm space-y-2">
-            <div>• <b>How do I leave a blank?</b> Insert <code className="bg-white/10 px-1 rounded">[[blank]]</code> anywhere in your sentence.</div>
-            <div>• <b>Can I pre-fill some words?</b> Yes — just type them normally. Only the <code className="bg-white/10 px-1 rounded">[[blank]]</code> spots become fill-ins.</div>
-            <div>• <b>Why did it say “needed a blank”?</b> The contract requires at least one blank (parts ≥ 2). Add one <code className="bg-white/10 px-1 rounded">[[blank]]</code>.</div>
-            <div>• <b>Insufficient funds?</b> We check mint price + an estimated gas cost. Add a little more ETH on Base and retry.</div>
-          </div>
+          {/* Right: Preview + Mint */}
+          <Card className="bg-slate-900/70 border border-slate-700">
+            <CardHeader className="border-b border-slate-700">
+              <h2 className="text-xl font-bold">Preview & Mint</h2>
+            </CardHeader>
+            <CardContent className="p-5 space-y-5">
+              <div className="rounded-xl border border-slate-700 p-4 bg-gradient-to-br text-white shadow-inner min-h-[180px]">
+                <div className={`rounded-xl p-5 md:p-6 bg-gradient-to-br ${bgCls}`}>
+                  <div className="text-xs uppercase tracking-wide opacity-80">{theme || 'Theme'}</div>
+                  <div className="text-xl md:text-2xl font-extrabold">{title || 'Your Template Title'}</div>
+                  <div className="mt-3 text-base leading-relaxed">
+                    {/* Use StyledCard to render blanks as ____ */}
+                    <StyledCard parts={parts} blanks={Math.max(0, parts.length - 1)} words={wordsForPreview} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3 text-sm">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div>
+                    Mint fee: <b>{mintPriceWei === 0n ? '—' : `${mintPriceEth.toFixed(6)} ETH`}</b>
+                    {usd ? <span className="opacity-80"> (~${(mintPriceEth * usd).toFixed(2)} USD)</span> : null}
+                    <span className="opacity-70"> + gas at confirmation</span>
+                  </div>
+                  <div className="opacity-80">•</div>
+                  <div>Blanks to fill by players: <b>{blanksRemaining}</b></div>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3">
+                <Button
+                  onClick={handleMint}
+                  disabled={
+                    loading ||
+                    !isConnected ||
+                    !title.trim() ||
+                    !theme.trim() ||
+                    !description.trim() ||
+                    blanksRemaining < 1 ||
+                    mintPriceWei === 0n
+                  }
+                  className="bg-purple-600 hover:bg-purple-500 w-full"
+                >
+                  {loading ? 'Minting…' : 'Mint Template NFT'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setTitle('')
+                    setTheme('')
+                    setDescription('')
+                    setStory('')
+                    setFills([])
+                  }}
+                  className="border-slate-600 text-slate-200 w-full"
+                >
+                  Clear All
+                </Button>
+              </div>
+
+              <div className="text-xs text-slate-400">
+                Tip: If you get an “insufficient funds” error, ensure you’re on Base and have enough ETH for the
+                mint fee <i>and</i> gas. The mint fee is read from the contract; gas varies with network conditions.
+              </div>
+            </CardContent>
+          </Card>
         </div>
-      </div>
+      </main>
     </Layout>
-  );
+  )
 }
+
+// Prevent server-rendered context issues (e.g., Toast) and wallet probing during SSR
+export default dynamic(() => Promise.resolve(MYOPage), { ssr: false })
