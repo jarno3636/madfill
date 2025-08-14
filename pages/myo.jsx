@@ -15,26 +15,33 @@ import { useMiniWallet } from '@/hooks/useMiniWallet'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useToast } from '@/components/Toast'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
-
 import { categories as presetCategories } from '@/data/templates'
 
 // Client-only confetti
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
-// ---- Chain / Contract ----
+/** =========================
+ *  Chain / Contract settings
+ *  ========================= */
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID = 8453n
 const BASE_CHAIN_ID_HEX = '0x2105'
+
+// Your template contract (ERC721) address
 const TEMPLATE_ADDR =
   process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS ||
   '0x0F22124A86F8893990fA4763393E46d97F429442' // fallback
 
-// Minimal ABI
+// Mint price policy: fixed 0.0005 BASE ETH
+const FIXED_PRICE_WEI = ethers.parseEther('0.0005')
+
+// Minimal ABI (read+mint)
 const ABI = [
   { inputs: [], name: 'MAX_PARTS', outputs: [{ internalType: 'uint256', name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_PART_BYTES', outputs: [{ internalType: 'uint256', name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_TOTAL_BYTES', outputs: [{ internalType: 'uint256', name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'getMintPriceWei', outputs: [{ internalType: 'uint256', name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'paused', outputs: [{ internalType: 'bool', name: '', type: 'bool' }], stateMutability: 'view', type: 'function' },
   {
     inputs: [
       { internalType: 'string', name: 'title', type: 'string' },
@@ -49,50 +56,69 @@ const ABI = [
   }
 ]
 
+/** =========================
+ *  Background swatches
+ *  ========================= */
+const BACKGROUNDS = [
+  { id: 'grad-1', label: 'Indigo → Fuchsia', css: 'linear-gradient(135deg, #3730a3 0%, #c026d3 100%)' },
+  { id: 'grad-2', label: 'Blue → Cyan',     css: 'linear-gradient(135deg, #1d4ed8 0%, #06b6d4 100%)' },
+  { id: 'grad-3', label: 'Purple Mist',     css: 'linear-gradient(135deg, #7c3aed 0%, #1f2937 100%)' },
+  { id: 'grad-4', label: 'Sunset',          css: 'linear-gradient(135deg, #ef4444 0%, #f59e0b 100%)' },
+  { id: 'grad-5', label: 'Slate Glow',      css: 'linear-gradient(135deg, #0f172a 0%, #334155 100%)' },
+]
+
+/** =========================
+ *  Helpers
+ *  ========================= */
+const utf8BytesLen = (str) => new TextEncoder().encode(str || '').length
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n))
+const fmtUsd = (n) => new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(n)
+const fmtEth = (wei) => Number(ethers.formatEther(wei))
+
+/** =========================
+ *  Page
+ *  ========================= */
 export default function MYO() {
   useMiniAppReady()
   const { addToast } = useToast()
+  const { width, height } = useWindowSize()
+
+  // Wallet hook used elsewhere in your app
   const { address, isConnected, connect, isLoading: walletLoading } = useMiniWallet()
 
-  // Network observe + switch
+  // Network/chain observe + switch
   const [isOnBase, setIsOnBase] = useState(true)
 
-  // Confetti
+  // On-chain limits & price
+  const [maxParts, setMaxParts] = useState(16)
+  const [maxPartBytes, setMaxPartBytes] = useState(256)
+  const [maxTotalBytes, setMaxTotalBytes] = useState(2048)
+  const [chainPriceWei, setChainPriceWei] = useState(0n)
+  const [paused, setPaused] = useState(false)
+
+  // Price display
+  const [usdApprox, setUsdApprox] = useState(null)
+
+  // UI / confetti
+  const [isLoading, setIsLoading] = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
-  const { width, height } = useWindowSize()
   const confettiTimer = useRef(null)
 
   // Form state
-  const [isLoading, setIsLoading] = useState(false)
   const [templateTitle, setTemplateTitle] = useState('')
-  const [templateDesc, setTemplateDesc] = useState('') // required by contract
+  const [templateDesc, setTemplateDesc] = useState('')
   const [templateTheme, setTemplateTheme] = useState('')
   const [storyParts, setStoryParts] = useState([''])
+  const [bgId, setBgId] = useState(BACKGROUNDS[0].id)
 
   // Preset pickers
   const [catIdx, setCatIdx] = useState(0)
   const [tmplIdx, setTmplIdx] = useState(0)
 
-  // On-chain limits
-  const [maxParts, setMaxParts] = useState(16)
-  const [maxPartBytes, setMaxPartBytes] = useState(256)
-  const [maxTotalBytes, setMaxTotalBytes] = useState(2048)
-
-  // On-chain mint price
-  const [mintPriceWei, setMintPriceWei] = useState(0n)
-  const [usdApprox, setUsdApprox] = useState(null)
-
-  // ---- UI helpers ----
-  const sanitizeParts = useCallback(
-    (parts) =>
-      (parts || [])
-        .map((p) => (p || '').replace(/\s+/g, ' ').trim())
-        .filter((p) => p.length > 0),
-    []
-  )
-  const utf8BytesLen = (str) => new TextEncoder().encode(str || '').length
-
-  // Wallet / chain observe only
+  /** ============
+   *  Effects
+   *  ============ */
+  // Observe chain
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -118,6 +144,88 @@ export default function MYO() {
     })()
     return () => { cancelled = true }
   }, [])
+
+  // Read limits / price / paused
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        if (!TEMPLATE_ADDR) return
+        const provider = new ethers.JsonRpcProvider(BASE_RPC)
+        const ct = new ethers.Contract(TEMPLATE_ADDR, ABI, provider)
+
+        const [mp, mpb, mtb, price, isPaused] = await Promise.all([
+          ct.MAX_PARTS().catch(() => 16n),
+          ct.MAX_PART_BYTES().catch(() => 256n),
+          ct.MAX_TOTAL_BYTES().catch(() => 2048n),
+          ct.getMintPriceWei().catch(() => 0n),
+          ct.paused().catch(() => false),
+        ])
+        if (cancelled) return
+        setMaxParts(Number(mp))
+        setMaxPartBytes(Number(mpb))
+        setMaxTotalBytes(Number(mtb))
+        setChainPriceWei(BigInt(price || 0n))
+        setPaused(Boolean(isPaused))
+      } catch {
+        // keep defaults
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  // USD approximation
+  useEffect(() => {
+    let aborted = false
+    ;(async () => {
+      try {
+        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
+        const j = await r.json()
+        const ethUsd = Number(j?.ethereum?.usd || 0)
+        if (!aborted && ethUsd > 0) {
+          setUsdApprox(fmtEth(FIXED_PRICE_WEI) * ethUsd)
+        }
+      } catch {
+        setUsdApprox(null)
+      }
+    })()
+    return () => { aborted = true }
+  }, [])
+
+  useEffect(() => () => clearTimeout(confettiTimer.current), [])
+
+  /** ============
+   *  UI helpers
+   *  ============ */
+  const sanitizeParts = useCallback(
+    (parts) =>
+      (parts || [])
+        .map((p) => (p || '').replace(/\s+/g, ' ').trim())
+        .filter((p) => p.length > 0),
+    []
+  )
+
+  const partsBytes = useMemo(
+    () => sanitizeParts(storyParts).reduce((sum, p) => sum + utf8BytesLen(p), 0),
+    [storyParts, sanitizeParts]
+  )
+  const totalBytes = useMemo(() => {
+    return utf8BytesLen(templateTitle) + utf8BytesLen(templateDesc) + utf8BytesLen(templateTheme) + partsBytes
+  }, [templateTitle, templateDesc, templateTheme, partsBytes])
+
+  const currentCategory = presetCategories[catIdx] || { name: 'Custom', templates: [] }
+  const currentTemplates = currentCategory.templates || []
+  const currentPreset = currentTemplates[tmplIdx] || null
+
+  const applyPreset = useCallback(() => {
+    if (!currentPreset) return
+    setTemplateTitle(currentPreset.name || '')
+    setTemplateTheme(currentCategory.name || '')
+    setStoryParts(currentPreset.parts?.length ? currentPreset.parts : [''])
+    if (!templateDesc) {
+      setTemplateDesc(`Preset "${currentPreset.name}" in ${currentCategory.name}. Customize before minting.`)
+    }
+  }, [currentPreset, currentCategory, templateDesc])
 
   const switchToBase = useCallback(async () => {
     const prov = (typeof window !== 'undefined' && window.ethereum) || null
@@ -154,119 +262,68 @@ export default function MYO() {
     }
   }, [addToast])
 
-  // Read on-chain limits + price
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        if (!TEMPLATE_ADDR) return
-        const provider = new ethers.JsonRpcProvider(BASE_RPC)
-        const ct = new ethers.Contract(TEMPLATE_ADDR, ABI, provider)
+  /** ============
+   *  Preview render
+   *  ============ */
+  const selectedBg = useMemo(
+    () => BACKGROUNDS.find((b) => b.id === bgId) || BACKGROUNDS[0],
+    [bgId]
+  )
 
-        const [mp, mpb, mtb, price] = await Promise.all([
-          ct.MAX_PARTS().catch(() => 16n),
-          ct.MAX_PART_BYTES().catch(() => 256n),
-          ct.MAX_TOTAL_BYTES().catch(() => 2048n),
-          ct.getMintPriceWei().catch(() => 0n),
-        ])
-        if (cancelled) return
-        setMaxParts(Number(mp))
-        setMaxPartBytes(Number(mpb))
-        setMaxTotalBytes(Number(mtb))
-        setMintPriceWei(BigInt(price || 0n))
-      } catch {
-        // keep defaults
-      }
-    })()
-    return () => { cancelled = true }
-  }, [])
-
-  // USD display (informational)
-  useEffect(() => {
-    let aborted = false
-    ;(async () => {
-      if (mintPriceWei === 0n) { setUsdApprox(null); return }
-      try {
-        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
-        const j = await r.json()
-        const ethUsd = Number(j?.ethereum?.usd || 0)
-        if (!aborted && ethUsd > 0) {
-          const eth = Number(ethers.formatEther(mintPriceWei))
-          setUsdApprox(eth * ethUsd)
-        }
-      } catch {
-        setUsdApprox(null)
-      }
-    })()
-    return () => { aborted = true }
-  }, [mintPriceWei])
-
-  // Byte counters
-  const partsBytes = useMemo(() => sanitizeParts(storyParts).reduce((sum, p) => sum + utf8BytesLen(p), 0), [storyParts, sanitizeParts])
-  const titleBytes = utf8BytesLen(templateTitle)
-  const themeBytes = utf8BytesLen(templateTheme)
-  const descBytes  = utf8BytesLen(templateDesc)
-  const totalBytes = titleBytes + themeBytes + descBytes + partsBytes
-
-  // 🔹 Load preset into form
-  const currentCategory = presetCategories[catIdx] || { name: 'Custom', templates: [] }
-  const currentTemplates = currentCategory.templates || []
-  const currentPreset = currentTemplates[tmplIdx] || null
-
-  const applyPreset = useCallback(() => {
-    if (!currentPreset) return
-    setTemplateTitle(currentPreset.name || '')
-    setTemplateTheme(currentCategory.name || '')
-    setStoryParts(currentPreset.parts || [''])
-    if (!templateDesc) {
-      setTemplateDesc(`Preset "${currentPreset.name}" in ${currentCategory.name}. Customize before minting.`)
-    }
-  }, [currentPreset, currentCategory, templateDesc])
-
-  // Mint action
-  const handleMintTemplate = async () => {
-    if (!TEMPLATE_ADDR) {
-      addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS.' })
-      return
-    }
-    if (!isConnected) {
-      addToast({ type: 'error', title: 'Wallet Required', message: 'Please connect your wallet to mint.' })
-      return
-    }
-
+  // Build a pretty inline preview: part + styled blank + part + ...
+  const previewLines = useMemo(() => {
     const parts = sanitizeParts(storyParts)
-    if (!templateTitle || !templateTheme || !templateDesc || parts.length < 2) {
-      addToast({
-        type: 'error',
-        title: 'Missing Fields',
-        message: 'Title, description, theme, and at least two story parts are required.',
-      })
-      return
+    if (parts.length === 0) return []
+    const out = []
+    for (let i = 0; i < parts.length; i++) {
+      out.push({ type: 'text', value: parts[i] })
+      if (i < parts.length - 1) out.push({ type: 'blank', value: i }) // blank index
     }
-    if (parts.length > maxParts) {
-      addToast({ type: 'error', title: 'Too Many Parts', message: `Max ${maxParts} parts.` })
-      return
-    }
-    if (parts.some((p) => utf8BytesLen(p) > maxPartBytes)) {
-      addToast({ type: 'error', title: 'Part Too Long', message: `Each part must be ≤ ${maxPartBytes} bytes.` })
-      return
-    }
-    if (totalBytes > maxTotalBytes) {
-      addToast({
-        type: 'error',
-        title: 'Template Too Large',
-        message: `Total bytes (title+desc+theme+parts) must be ≤ ${maxTotalBytes}.`,
-      })
-      return
-    }
-    if (mintPriceWei === 0n) {
-      addToast({ type: 'error', title: 'Price Unavailable', message: 'Unable to fetch on-chain mint price. Try again.' })
+    return out
+  }, [storyParts, sanitizeParts])
+
+  /** ============
+   *  Mint action
+   *  ============ */
+  const canMint = useMemo(() => {
+    if (paused) return false
+    if (!TEMPLATE_ADDR) return false
+    if (!isConnected || !isOnBase) return false
+    const parts = sanitizeParts(storyParts)
+    if (!templateTitle || !templateDesc || !templateTheme) return false
+    if (parts.length < 2 || parts.length > maxParts) return false
+    if (parts.some((p) => utf8BytesLen(p) > maxPartBytes)) return false
+    if (totalBytes > maxTotalBytes) return false
+    // Must match chain price to avoid revert (your ask)
+    if (chainPriceWei !== 0n && chainPriceWei !== FIXED_PRICE_WEI) return false
+    return true
+  }, [
+    paused, isConnected, isOnBase, TEMPLATE_ADDR,
+    storyParts, templateTitle, templateDesc, templateTheme,
+    maxParts, maxPartBytes, maxTotalBytes, totalBytes, chainPriceWei
+  ])
+
+  const priceMismatch = chainPriceWei !== 0n && chainPriceWei !== FIXED_PRICE_WEI
+
+  const handleMintTemplate = async () => {
+    const parts = sanitizeParts(storyParts)
+    if (!canMint) {
+      const reasons = []
+      if (paused) reasons.push('Contract is paused')
+      if (!isConnected) reasons.push('Wallet not connected')
+      if (!isOnBase) reasons.push('Not on Base')
+      if (!templateTitle || !templateDesc || !templateTheme) reasons.push('Missing fields')
+      if (parts.length < 2) reasons.push('Need at least 2 parts')
+      if (parts.length > maxParts) reasons.push(`Max ${maxParts} parts`)
+      if (parts.some((p) => utf8BytesLen(p) > maxPartBytes)) reasons.push(`Each part ≤ ${maxPartBytes} bytes`)
+      if (totalBytes > maxTotalBytes) reasons.push(`Total bytes ≤ ${maxTotalBytes}`)
+      if (priceMismatch) reasons.push('On-chain mint price differs from UI fixed price')
+      addToast({ type: 'error', title: 'Cannot Mint', message: reasons.join(' · ') || 'Check form and try again.' })
       return
     }
 
     try {
       setIsLoading(true)
-
       const prov = (typeof window !== 'undefined' && window.ethereum) || null
       if (!prov) throw new Error('No wallet provider found')
       await prov.request?.({ method: 'eth_requestAccounts' })
@@ -283,16 +340,16 @@ export default function MYO() {
         String(templateDesc).slice(0, 2048),
         String(templateTheme).slice(0, 128),
         parts,
-        { value: mintPriceWei }
+        { value: FIXED_PRICE_WEI }
       )
       await tx.wait()
 
-      addToast({ type: 'success', title: 'NFT Minted!', message: 'Your template was minted successfully.' })
+      addToast({ type: 'success', title: 'Minted!', message: 'Your template NFT was minted successfully.' })
       setShowConfetti(true)
       clearTimeout(confettiTimer.current)
       confettiTimer.current = setTimeout(() => setShowConfetti(false), 1800)
 
-      // reset (keep chosen category/template selection)
+      // Reset fields (keep background selection)
       setTemplateTitle('')
       setTemplateDesc('')
       setTemplateTheme('')
@@ -310,16 +367,16 @@ export default function MYO() {
     }
   }
 
-  useEffect(() => () => clearTimeout(confettiTimer.current), [])
-
-  // ---- SEO / Farcaster ----
+  /** ============
+   *  SEO / Frames
+   *  ============ */
   const pageUrl = absoluteUrl('/myo')
   const ogImage = buildOgUrl({ screen: 'myo', title: 'Make Your Own' })
-  const mintPriceEth = useMemo(() => Number(ethers.formatEther(mintPriceWei || 0n)), [mintPriceWei])
 
   return (
     <Layout>
       <Head>
+        {/* Farcaster Mini App / Frame meta */}
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
         <meta property="fc:frame:button:1" content="Create Template" />
@@ -330,7 +387,7 @@ export default function MYO() {
 
       <SEO
         title="Make Your Own Templates — MadFill"
-        description="Start from curated prompts or your own idea and mint as an NFT on Base. Price is set on-chain."
+        description="Start from curated prompts or your own idea and mint as an NFT on Base."
         url={pageUrl}
         image={ogImage}
         type="website"
@@ -339,233 +396,314 @@ export default function MYO() {
 
       {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
-      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900">
+      <main className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-purple-950">
         {/* Header */}
-        <div className="relative py-20 px-4">
-          <div className="max-w-4xl mx-auto text-center">
-            <div className="text-8xl mb-6">🎨</div>
-            <h1 className="text-5xl font-bold text-white mb-4">Make Your Own Templates</h1>
-            <p className="text-xl text-purple-200 mb-6">
-              Create story templates from scratch or start from a preset. Mint them as NFTs on Base.
+        <div className="relative py-14 px-4">
+          <div className="max-w-5xl mx-auto text-center">
+            <h1 className="text-4xl md:text-5xl font-extrabold text-white tracking-tight">🎨 Make Your Own Template</h1>
+            <p className="text-indigo-200 mt-3">
+              Build a story template, pick a background, and mint it as an NFT on Base.
             </p>
 
-            <div className="text-purple-200 text-sm mb-8">
-              Current Mint Price:&nbsp;
-              <span className="font-semibold text-white">
-                {mintPriceWei === 0n ? '—' : `${mintPriceEth.toFixed(5)} ETH`}
-              </span>
-              {usdApprox != null && (
-                <span className="ml-2 opacity-80">(~${usdApprox.toFixed(2)} USD)</span>
-              )}
+            <div className="mt-4 inline-flex items-center gap-2 text-sm text-indigo-200 bg-slate-900/60 border border-indigo-700 px-3 py-1.5 rounded-lg">
+              <span className="font-semibold">Mint Price:</span>
+              <span className="text-white">{fmtEth(FIXED_PRICE_WEI)} BASE</span>
+              <span>+ gas</span>
+              {usdApprox != null && <span className="opacity-80">({fmtUsd(usdApprox)} approx)</span>}
+            </div>
+
+            <div className="mt-3 text-xs text-indigo-300">
+              We send the exact fixed price. If the contract price differs, minting is disabled to avoid reverts.
             </div>
 
             {!isConnected ? (
-              <div className="mb-8">
+              <div className="mt-5">
                 <Button
                   onClick={connect}
                   disabled={walletLoading}
-                  className="bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 text-black font-bold py-3 px-6 rounded-lg"
+                  className="bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 text-black font-semibold px-5 py-2.5 rounded-lg"
                 >
-                  {walletLoading ? 'Connecting...' : 'Connect Wallet'}
+                  {walletLoading ? 'Connecting…' : 'Connect Wallet'}
                 </Button>
               </div>
             ) : (
-              <div className="mb-8 bg-green-900/20 p-4 rounded-lg border border-green-500/30 max-w-md mx-auto">
-                <p className="text-green-300 text-sm">
-                  Connected: {address?.slice(0, 6)}…{address?.slice(-4)}
-                </p>
+              <div className="mt-5 inline-flex items-center gap-3 bg-green-900/20 border border-green-600/40 text-green-200 px-3 py-2 rounded-lg">
+                <span className="text-xs">Connected</span>
+                <span className="font-mono text-white">{address?.slice(0, 6)}…{address?.slice(-4)}</span>
                 {!isOnBase && (
-                  <div className="mt-3">
-                    <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600 text-sm">
-                      Switch to Base
-                    </Button>
-                  </div>
+                  <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600 text-xs">
+                    Switch to Base
+                  </Button>
                 )}
               </div>
             )}
           </div>
         </div>
 
-        {/* Main Content */}
-        <div className="max-w-6xl mx-auto px-4 pb-20">
-          <Card className="bg-white/10 backdrop-blur border-purple-500/30">
+        {/* Main */}
+        <div className="max-w-6xl mx-auto px-4 pb-20 grid lg:grid-cols-3 gap-8">
+          {/* Left: Preset + Background */}
+          <Card className="bg-slate-900/70 border-indigo-900/40">
             <CardHeader>
-              <h2 className="text-3xl font-bold text-white text-center">Create Your Template</h2>
+              <h2 className="text-xl text-white font-bold">Start from a Preset</h2>
             </CardHeader>
+            <CardContent className="space-y-4">
+              <label className="block text-sm text-indigo-200">Category</label>
+              <select
+                value={catIdx}
+                onChange={(e) => { setCatIdx(Number(e.target.value)); setTmplIdx(0) }}
+                className="w-full px-3 py-2 rounded-lg bg-slate-800/70 text-white border border-slate-700 focus:ring-2 focus:ring-indigo-400 outline-none"
+              >
+                {presetCategories.map((c, i) => (
+                  <option key={c.name || i} value={i} className="bg-slate-900 text-white">
+                    {c.name || `Category ${i + 1}`}
+                  </option>
+                ))}
+              </select>
 
-            <CardContent className="p-8">
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* Preset Selector */}
-                <div className="space-y-4">
-                  <div className="text-white font-semibold">Start from a Preset</div>
-                  <label className="block text-white text-sm font-medium mb-1">Category</label>
-                  <select
-                    value={catIdx}
-                    onChange={(e) => { setCatIdx(Number(e.target.value)); setTmplIdx(0) }}
-                    className="w-full px-3 py-2 rounded-lg bg-white/20 text-white border border-purple-300 focus:border-yellow-500 focus:outline-none"
-                  >
-                    {presetCategories.map((c, i) => (
-                      <option key={c.name || i} value={i} className="bg-purple-900 text-white">
-                        {c.name || `Category ${i + 1}`}
-                      </option>
-                    ))}
-                  </select>
+              <label className="block text-sm text-indigo-200">Template</label>
+              <select
+                value={tmplIdx}
+                onChange={(e) => setTmplIdx(Number(e.target.value))}
+                className="w-full px-3 py-2 rounded-lg bg-slate-800/70 text-white border border-slate-700 focus:ring-2 focus:ring-indigo-400 outline-none"
+              >
+                {currentTemplates.map((t, i) => (
+                  <option key={t.id ?? i} value={i} className="bg-slate-900 text-white">
+                    {(t.name || `Template ${i + 1}`)} ({t.blanks} blanks)
+                  </option>
+                ))}
+              </select>
 
-                  <label className="block text-white text-sm font-medium mb-1">Template</label>
-                  <select
-                    value={tmplIdx}
-                    onChange={(e) => setTmplIdx(Number(e.target.value))}
-                    className="w-full px-3 py-2 rounded-lg bg-white/20 text-white border border-purple-300 focus:border-yellow-500 focus:outline-none"
-                  >
-                    {currentTemplates.map((t, i) => (
-                      <option key={t.id ?? i} value={i} className="bg-purple-900 text-white">
-                        {(t.name || `Template ${i + 1}`)} ({t.blanks} blanks)
-                      </option>
-                    ))}
-                  </select>
+              <Button onClick={applyPreset} className="w-full bg-fuchsia-600 hover:bg-fuchsia-500" type="button">
+                Use This Preset
+              </Button>
 
-                  <Button
-                    onClick={applyPreset}
-                    className="w-full mt-2 bg-fuchsia-600 hover:bg-fuchsia-500"
-                    type="button"
-                  >
-                    Use This Preset
-                  </Button>
-
-                  {currentPreset && (
-                    <div className="text-purple-200 text-xs mt-2">
-                      Parts: {currentPreset.parts.length} • Derived blanks: {currentPreset.blanks}
-                    </div>
-                  )}
-                </div>
-
-                {/* Form */}
-                <div className="space-y-6">
-                  <div>
-                    <label className="block text-white text-sm font-medium mb-2">Template Title</label>
-                    <input
-                      type="text"
-                      value={templateTitle}
-                      onChange={(e) => setTemplateTitle(e.target.value)}
-                      placeholder="e.g., The Great Adventure"
-                      className="w-full px-4 py-3 rounded-lg bg-white/20 text-white placeholder-purple-200 border border-purple-300 focus:border-yellow-500 focus:outline-none"
+              <div className="pt-4 border-t border-slate-800/60">
+                <div className="text-sm text-white font-semibold mb-2">Card Background</div>
+                <div className="grid grid-cols-5 gap-3">
+                  {BACKGROUNDS.map((bg) => (
+                    <button
+                      key={bg.id}
+                      onClick={() => setBgId(bg.id)}
+                      className={`h-12 rounded-lg ring-2 ring-offset-2 ring-offset-slate-900 transition ${
+                        bgId === bg.id ? 'ring-fuchsia-400' : 'ring-transparent hover:ring-indigo-400/60'
+                      }`}
+                      style={{ background: bg.css }}
+                      aria-label={bg.label}
+                      title={bg.label}
                     />
-                    <div className="text-xs text-purple-200 mt-1">{utf8BytesLen(templateTitle)} bytes</div>
-                  </div>
-
-                  <div>
-                    <label className="block text-white text-sm font-medium mb-2">Description</label>
-                    <textarea
-                      value={templateDesc}
-                      onChange={(e) => setTemplateDesc(e.target.value)}
-                      placeholder="Describe your template for the NFT metadata"
-                      className="w-full px-4 py-3 rounded-lg bg-white/20 text-white placeholder-purple-200 border border-purple-300 focus:border-yellow-500 focus:outline-none h-24 resize-none"
-                    />
-                    <div className="text-xs text-purple-200 mt-1">{utf8BytesLen(templateDesc)} bytes</div>
-                  </div>
-
-                  <div>
-                    <label className="block text-white text-sm font-medium mb-2">Theme</label>
-                    <input
-                      type="text"
-                      value={templateTheme}
-                      onChange={(e) => setTemplateTheme(e.target.value)}
-                      placeholder="e.g., Space Adventure"
-                      className="w-full px-4 py-3 rounded-lg bg-white/20 text-white placeholder-purple-200 border border-purple-300 focus:border-yellow-500 focus:outline-none"
-                    />
-                    <div className="text-xs text-purple-200 mt-1">{utf8BytesLen(templateTheme)} bytes</div>
-                  </div>
-
-                  <div>
-                    <label className="block text-white text-sm font-medium mb-2">Story Parts</label>
-                    <p className="text-purple-200 text-sm mb-3">Each gap between parts becomes a blank for players to fill.</p>
-                    {storyParts.map((part, index) => (
-                      <div key={index} className="mb-3 flex gap-2">
-                        <textarea
-                          value={part}
-                          onChange={(e) => setStoryParts((p) => p.map((x, idx) => (idx === index ? e.target.value : x)))}
-                          placeholder={`Story part ${index + 1}...`}
-                          className="flex-1 px-4 py-3 rounded-lg bg-white/20 text-white placeholder-purple-200 border border-purple-300 focus:border-yellow-500 focus:outline-none h-24 resize-none"
-                        />
-                        {storyParts.length > 1 && (
-                          <Button
-                            onClick={() => setStoryParts((p) => p.filter((_, i) => i !== index))}
-                            variant="outline"
-                            className="px-3 py-1 text-red-300 border-red-300 hover:bg-red-500/20"
-                            type="button"
-                          >
-                            ✕
-                          </Button>
-                        )}
-                      </div>
-                    ))}
-                    <div className="flex items-center justify-between">
-                      <Button
-                        onClick={() => setStoryParts((p) => [...p, ''])}
-                        variant="outline"
-                        className="py-2 border-dashed border-purple-400 text-purple-300 hover:border-yellow-500 hover:text-yellow-400"
-                        type="button"
-                      >
-                        + Add Another Part
-                      </Button>
-                      <div className="text-xs text-purple-200">
-                        Parts: {sanitizeParts(storyParts).length}/{maxParts} • Bytes in parts: {partsBytes}
-                      </div>
-                    </div>
-
-                    <div className="text-xs text-purple-200 mt-2">
-                      Total payload bytes (title + description + theme + parts): <b>{totalBytes}</b> / {maxTotalBytes}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Preview + Mint */}
-                <div className="space-y-6">
-                  <h3 className="text-xl font-bold text-white">Preview</h3>
-                  <Card className="bg-white/5 border-purple-400/30">
-                    <CardContent className="p-4">
-                      <h4 className="text-white font-medium mb-1">{templateTitle || 'Your Template'}</h4>
-                      <p className="text-purple-300 text-sm mb-2">{templateTheme || 'Theme'}</p>
-                      <p className="text-purple-200 text-sm mb-3">{templateDesc || 'Short description for your NFT metadata'}</p>
-                      <div className="space-y-2">
-                        {sanitizeParts(storyParts).map((part, index, arr) => (
-                          <p key={index} className="text-purple-200 leading-relaxed">
-                            {part || <span className="text-purple-400 italic">Story part {index + 1}...</span>}
-                            {index < arr.length - 1 && <span className="text-yellow-400 mx-2">[ blank ]</span>}
-                          </p>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  <Button
-                    onClick={handleMintTemplate}
-                    disabled={
-                      isLoading ||
-                      !isConnected ||
-                      !templateTitle ||
-                      !templateDesc ||
-                      !templateTheme ||
-                      sanitizeParts(storyParts).length < 2 ||
-                      mintPriceWei === 0n
-                    }
-                    className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-bold py-3 px-6 rounded-lg disabled:opacity-50"
-                    type="button"
-                  >
-                    {isLoading
-                      ? 'Minting NFT...'
-                      : `Mint NFT Template (${mintPriceWei === 0n ? '—' : `${mintPriceEth.toFixed(5)} ETH`}${usdApprox != null ? ` ~ $${usdApprox.toFixed(2)}` : ''})`}
-                  </Button>
-
-                  {!isConnected && (
-                    <p className="text-yellow-400 text-sm text-center">Connect your wallet to mint NFT templates</p>
-                  )}
+                  ))}
                 </div>
               </div>
             </CardContent>
           </Card>
+
+          {/* Middle: Form */}
+          <Card className="bg-slate-900/70 border-indigo-900/40">
+            <CardHeader>
+              <h2 className="text-xl text-white font-bold">Template Details</h2>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div>
+                <label className="block text-sm text-indigo-200 mb-1">Title</label>
+                <input
+                  type="text"
+                  value={templateTitle}
+                  onChange={(e) => setTemplateTitle(e.target.value)}
+                  placeholder="e.g., The Great Adventure"
+                  className="w-full px-3 py-2 rounded-lg bg-slate-800/70 text-white border border-slate-700 focus:ring-2 focus:ring-indigo-400 outline-none"
+                />
+                <div className="text-xs text-slate-400 mt-1">{utf8BytesLen(templateTitle)} bytes</div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-indigo-200 mb-1">Description</label>
+                <textarea
+                  value={templateDesc}
+                  onChange={(e) => setTemplateDesc(e.target.value)}
+                  placeholder="Describe your template for the NFT metadata"
+                  className="w-full px-3 py-2 rounded-lg bg-slate-800/70 text-white border border-slate-700 focus:ring-2 focus:ring-indigo-400 outline-none h-24 resize-none"
+                />
+                <div className="text-xs text-slate-400 mt-1">{utf8BytesLen(templateDesc)} bytes</div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-indigo-200 mb-1">Theme</label>
+                <input
+                  type="text"
+                  value={templateTheme}
+                  onChange={(e) => setTemplateTheme(e.target.value)}
+                  placeholder="e.g., Space Adventure"
+                  className="w-full px-3 py-2 rounded-lg bg-slate-800/70 text-white border border-slate-700 focus:ring-2 focus:ring-indigo-400 outline-none"
+                />
+                <div className="text-xs text-slate-400 mt-1">{utf8BytesLen(templateTheme)} bytes</div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm text-indigo-200 mb-1">Story Parts</label>
+                  <div className="text-xs text-slate-400">
+                    Parts: {sanitizeParts(storyParts).length}/{maxParts} • Bytes in parts: {partsBytes}
+                  </div>
+                </div>
+
+                {/* Each part with removable control */}
+                {storyParts.map((part, i) => (
+                  <div key={i} className="mb-3">
+                    <div className="flex gap-2">
+                      <textarea
+                        value={part}
+                        onChange={(e) => setStoryParts((p) => p.map((x, idx) => (idx === i ? e.target.value : x)))}
+                        placeholder={`Story part ${i + 1}...`}
+                        className="flex-1 px-3 py-2 rounded-lg bg-slate-800/70 text-white border border-slate-700 focus:ring-2 focus:ring-indigo-400 outline-none h-20 resize-none"
+                      />
+                      {storyParts.length > 1 && (
+                        <Button
+                          onClick={() => setStoryParts((p) => p.filter((_, idx) => idx !== i))}
+                          variant="outline"
+                          className="px-3 py-2 text-red-300 border-red-300 hover:bg-red-500/20"
+                          type="button"
+                          title="Remove this part"
+                        >
+                          ✕
+                        </Button>
+                      )}
+                    </div>
+
+                    {/* A visual hint: between each part is a blank */}
+                    {i < storyParts.length - 1 && (
+                      <div className="mt-2 flex items-center gap-2">
+                        <div className="h-8 px-3 inline-flex items-center rounded-lg bg-fuchsia-700/30 border border-fuchsia-500/40 text-fuchsia-200 text-sm">
+                          [ blank ]
+                        </div>
+                        <div className="text-xs text-slate-400">Players will fill this blank</div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                <div className="flex items-center justify-between">
+                  <Button
+                    onClick={() => setStoryParts((p) => [...p, ''])}
+                    variant="outline"
+                    className="py-2 border-dashed border-indigo-400 text-indigo-300 hover:border-indigo-300 hover:text-indigo-200"
+                    type="button"
+                  >
+                    + Add Another Part
+                  </Button>
+                  <div className="text-xs text-slate-400">
+                    Total payload bytes: <b>{totalBytes}</b> / {maxTotalBytes}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Right: Live Card Preview + Mint */}
+          <div className="space-y-6">
+            <Card className="bg-slate-900/70 border-indigo-900/40">
+              <CardHeader>
+                <h2 className="text-xl text-white font-bold">Live Preview</h2>
+              </CardHeader>
+              <CardContent>
+                {/* Fixed ratio card, centered, with selectable background */}
+                <div className="mx-auto w-full max-w-md">
+                  <div
+                    className="relative rounded-2xl shadow-2xl ring-1 ring-white/10 overflow-hidden"
+                    style={{
+                      background: selectedBg.css,
+                      aspectRatio: '3 / 4',
+                    }}
+                  >
+                    <div className="absolute inset-0 bg-black/20" />
+                    <div className="relative h-full w-full p-5 flex flex-col">
+                      <div className="text-xs uppercase tracking-widest text-white/80">{templateTheme || 'Theme'}</div>
+                      <div className="mt-1 text-white font-extrabold text-2xl leading-tight line-clamp-2">
+                        {templateTitle || 'Your Template'}
+                      </div>
+
+                      <div className="mt-3 text-base leading-relaxed text-white/95 bg-white/10 rounded-xl p-3 backdrop-blur">
+                        {previewLines.length === 0 ? (
+                          <span className="text-white/70 italic">Add at least two parts below — blanks will appear between them.</span>
+                        ) : (
+                          <div className="whitespace-pre-wrap break-words">
+                            {previewLines.map((seg, idx) =>
+                              seg.type === 'text' ? (
+                                <span key={idx}>{seg.value}</span>
+                              ) : (
+                                <span
+                                  key={idx}
+                                  className="align-baseline inline-block min-w-[60px] px-2 py-0.5 mx-1 text-center rounded-md bg-yellow-300 text-black font-semibold"
+                                  title={`Blank #${seg.value + 1}`}
+                                >
+                                  ____ 
+                                </span>
+                              )
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="mt-auto flex items-center justify-between pt-3 text-white/90">
+                        <div className="text-xs">madfill • base</div>
+                        <div className="text-xs">
+                          {sanitizeParts(storyParts).length - 1 >= 0 ? `${sanitizeParts(storyParts).length - 1} blanks` : '0 blanks'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Mint Panel */}
+            <Card className="bg-slate-900/70 border-indigo-900/40">
+              <CardContent className="p-5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm text-indigo-200">
+                    <span className="font-semibold text-white">Mint Price:</span>{' '}
+                    <span className="text-white">{fmtEth(FIXED_PRICE_WEI)} BASE</span>{' '}
+                    <span className="opacity-80">+ gas</span>
+                    {usdApprox != null && <span className="ml-2 opacity-80">({fmtUsd(usdApprox)} approx)</span>}
+                  </div>
+                  {priceMismatch && (
+                    <div className="text-xs text-amber-300 bg-amber-900/30 border border-amber-600/40 px-2 py-1 rounded">
+                      On-chain price differs — update fixed price or contract.
+                    </div>
+                  )}
+                  {paused && (
+                    <div className="text-xs text-rose-300 bg-rose-900/30 border border-rose-600/40 px-2 py-1 rounded">
+                      Contract is paused
+                    </div>
+                  )}
+                </div>
+
+                <Button
+                  onClick={handleMintTemplate}
+                  disabled={!canMint || isLoading}
+                  className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-bold py-3 rounded-lg disabled:opacity-50"
+                  type="button"
+                >
+                  {isLoading
+                    ? 'Minting…'
+                    : `Mint Template (${fmtEth(FIXED_PRICE_WEI)} BASE + gas)`}
+                </Button>
+
+                {!isConnected && (
+                  <p className="text-yellow-400 text-xs text-center">Connect your wallet to mint</p>
+                )}
+                {isConnected && !isOnBase && (
+                  <div className="text-center">
+                    <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600 text-xs">
+                      Switch to Base
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </div>
-      </div>
+      </main>
     </Layout>
   )
 }
