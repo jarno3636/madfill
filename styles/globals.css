@@ -31,21 +31,35 @@
 /* Base element tweaks – low specificity so Tailwind utilities still win */
 * {
   border-color: hsl(var(--border));
-  box-sizing: border-box; /* (Tailwind preflight sets this; kept for clarity) */
+  box-sizing: border-box; /* Tailwind preflight sets this; kept for clarity */
+}
+
+/* HARD CLAMP: nothing is allowed to create horizontal scroll */
+html, body, #__next {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* Helpful default: prefer wrapping over overflow on long strings */
+body, input, button, textarea, select {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 html {
   scroll-behavior: smooth;
+  -webkit-tap-highlight-color: transparent; /* nicer on mobile */
 }
 
 body {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
   font-feature-settings: "rlig" 1, "calt" 1;
+  text-rendering: optimizeLegibility;
 }
 
 /* Media elements */
-img {
+img, video, canvas, svg {
   max-width: 100%;
   height: auto;
 }
