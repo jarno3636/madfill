@@ -28,7 +28,9 @@ function sanitizeWord(raw) {
 
 function parseWordsParam(param, blanks) {
   if (!param) return {}
-  const arr = (param || '').split(',').map((w) => sanitizeWord(decodeURIComponent(w)))
+  const arr = String(param)
+    .split(',')
+    .map((w) => sanitizeWord(decodeURIComponent(w)))
   const obj = {}
   for (let i = 0; i < Math.min(arr.length, blanks); i++) obj[i] = arr[i]
   return obj
@@ -63,9 +65,11 @@ export default function FreeGame() {
         if (typeof window === 'undefined') return
         const fid = localStorage.getItem('fc_fid')
         if (!fid) return
-        const p = await fetchFarcasterProfile(fid)
+        const p = await fetchFarcasterProfile(fid) // TODO: confirm helper supports fid; otherwise switch to /api/fc-profile?fid=
         if (!cancelled) setProfile(p)
-      } catch {}
+      } catch {
+        // ignore
+      }
     })()
     return () => { cancelled = true }
   }, [])
@@ -75,19 +79,21 @@ export default function FreeGame() {
     if (typeof window === 'undefined') return
     const u = new URL(window.location.href)
     const c = Number(u.searchParams.get('c') || '0')
-    const t = Number(u.searchParams.get('t') || '0')
-    const wordsParam = u.searchParams.get('w') || ''
     const safeCat = Number.isFinite(c) ? Math.max(0, Math.min(categories.length - 1, c)) : 0
-    const safeTpl = Number.isFinite(t)
-      ? Math.max(0, Math.min((categories[safeCat]?.templates.length || 1) - 1, t))
-      : 0
+
+    const tRaw = Number(u.searchParams.get('t') || '0')
+    const tplLen = categories[safeCat]?.templates.length || 1
+    const safeTpl = Number.isFinite(tRaw) ? Math.max(0, Math.min(tplLen - 1, tRaw)) : 0
+
     setCatIdx(safeCat)
     setTplIdx(safeTpl)
+
     const blanks = categories[safeCat]?.templates?.[safeTpl]?.blanks || 0
+    const wordsParam = u.searchParams.get('w') || ''
     setWords(parseWordsParam(wordsParam, blanks))
   }, [])
 
-  // Keep URL in sync
+  // Keep URL in sync when selection/words change
   useEffect(() => {
     if (typeof window === 'undefined') return
     const blanks = template.blanks
@@ -171,11 +177,13 @@ export default function FreeGame() {
 
   async function copyToClipboard() {
     try {
-      await navigator.clipboard.writeText(filledText)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(filledText)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1500)
+      }
     } catch {
-      alert('Failed to copy')
+      // Silent fail to avoid alert in frames/mini
     }
   }
 
@@ -337,7 +345,7 @@ export default function FreeGame() {
 
                 <ShareBar
                   url={permalink}
-                  text={`I just played the Free MadFill Game!\n\n${filledText}\n\nPlay free:`}
+                  text={shareText}
                   embedUrl={permalink}
                   og={{
                     screen: 'free',
