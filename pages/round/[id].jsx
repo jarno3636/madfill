@@ -2,11 +2,12 @@
 'use client'
 
 import { useRouter } from 'next/router'
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import dynamic from 'next/dynamic'
 import Head from 'next/head'
 import Link from 'next/link'
 import { ethers } from 'ethers'
+import { useWindowSize } from 'react-use'
 
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import Layout from '@/components/Layout'
@@ -16,7 +17,18 @@ import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
-import { useWindowSize } from 'react-use'
+
+// 🔗 Unified wallet helpers (Mini App aware, request-shimmed)
+import {
+  initWallet,
+  getReadonlyProvider,
+  getBrowserProvider,
+  getAddress,
+  ensureBaseChain,
+  onAccountsChanged,
+  onChainChanged,
+  BASE_CHAIN_ID_DEC as BASE_CHAIN_ID,
+} from '@/lib/wallet'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -24,13 +36,8 @@ const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
 
-const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
-const BASE_CHAIN_ID = 8453n
-const BASE_CHAIN_ID_HEX = '0x2105' // 8453
-
 /* ---------- Error helpers ---------- */
 function extractDeepError(e) {
-  // ethers v6 errors are... creative across wallets. Flatten best-effort.
   const guess =
     e?.shortMessage ||
     e?.reason ||
@@ -38,25 +45,18 @@ function extractDeepError(e) {
     e?.info?.error?.message ||
     e?.data?.message ||
     e?.message
-
-  // Some wallets push revert data to .data or .error.data
   const payload = e?.data || e?.error?.data || e?.info?.error?.data || null
   if (!payload) return guess || 'Transaction failed'
-
-  // Try decode Error(string)
   try {
     const iface = new ethers.Interface(['function Error(string)'])
     const [reason] = iface.decodeErrorResult('Error', payload)
     if (reason) return String(reason)
   } catch {}
-
-  // Try panic code
   try {
     const panicIface = new ethers.Interface(['function Panic(uint256)'])
     const [code] = panicIface.decodeErrorResult('Panic', payload)
     if (code) return `Panic: 0x${BigInt(code).toString(16)}`
   } catch {}
-
   return guess || 'Transaction would revert'
 }
 
@@ -126,23 +126,8 @@ export default function RoundDetailPage() {
   const { width, height } = useWindowSize()
   const [tick, setTick] = useState(0)
 
-  // prefer Mini App EIP-1193 if available
-  const miniProvRef = useRef(null)
-  const warmed = useRef(false)
-
-  // Tiny warm-up so the mini wallet is ready by the time the user taps
-  useEffect(() => {
-    if (warmed.current) return
-    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
-    if (!inWarpcast) return
-    ;(async () => {
-      try {
-        const mod = await import('@farcaster/miniapp-sdk')
-        await mod.sdk.wallet.getEthereumProvider().catch(() => {})
-      } catch {}
-      warmed.current = true
-    })()
-  }, [])
+  // 🧊 init Mini App provider early so users appear connected inside Warpcast
+  useEffect(() => { initWallet().catch(() => {}) }, [])
 
   const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
   const toEth = (wei) => {
@@ -188,109 +173,48 @@ export default function RoundDetailPage() {
 
   useEffect(() => {
     if (!blanksCount) return
+    const taken = [...takenSet]
     const firstOpen = [...Array(blanksCount).keys()].find((i) => !takenSet.has(i))
     if (firstOpen !== undefined) setSelectedBlank(firstOpen)
-  }, [blanksCount, takenSet])
+    else setSelectedBlank(Math.min(selectedBlank, Math.max(0, blanksCount - 1)))
+  }, [blanksCount, takenSet]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ---------- Unified provider getter (mini app first) ---------- */
-  const getEip1193 = useCallback(async () => {
-    // 1) Warpcast Mini App
-    try {
-      const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
-      if (inWarpcast) {
-        if (miniProvRef.current) return miniProvRef.current
-        const mod = await import('@farcaster/miniapp-sdk')
-        const prov = await mod.sdk.wallet.getEthereumProvider()
-        miniProvRef.current = prov
-        return prov
-      }
-    } catch {}
-    // 2) Injected wallet
-    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
-    // 3) None
-    return null
-  }, [])
-
-  /* ---------- Observe wallet + chain ---------- */
+  /* ---------- Observe wallet + chain (shared helpers) ---------- */
   useEffect(() => {
-    if (!isReady) return
-    let cancelled = false
-    let remove = () => {}
+    let off1 = () => {}
+    let off2 = () => {}
 
     ;(async () => {
-      const eip = await getEip1193()
-
-      if (eip && eip !== window.ethereum) {
-        // Mini provider path
-        try {
-          const p = new ethers.BrowserProvider(eip)
-          const signer = await p.getSigner().catch(() => null)
-          const addr = await signer?.getAddress().catch(() => null)
-          if (!cancelled) setAddress(addr || null)
-          const net = await p.getNetwork()
-          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-        } catch {}
-        // Some mini providers don’t emit events consistently; we poll light via tick anyway.
-        return
-      }
-
-      // Injected path with events
-      if (typeof window !== 'undefined' && window.ethereum) {
-        try {
-          const accts = await window.ethereum.request({ method: 'eth_accounts' })
-          if (!cancelled) setAddress(accts?.[0] || null)
-        } catch {}
-        try {
-          const provider = new ethers.BrowserProvider(window.ethereum)
-          const net = await provider.getNetwork()
-          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-        } catch { if (!cancelled) setIsOnBase(true) }
-
-        const onChainChanged = async () => {
-          try {
-            const provider = new ethers.BrowserProvider(window.ethereum)
-            const net = await provider.getNetwork()
-            if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-          } catch { if (!cancelled) setIsOnBase(false) }
+      try {
+        const addr = await getAddress()
+        if (addr) setAddress(addr)
+      } catch {}
+      try {
+        const bp = await getBrowserProvider()
+        if (bp) {
+          const net = await bp.getNetwork()
+          setIsOnBase(net?.chainId === BASE_CHAIN_ID)
         }
-        const onAccountsChanged = (accs) => setAddress(accs?.[0] || null)
+      } catch { setIsOnBase(true) }
 
-        window.ethereum.on?.('chainChanged', onChainChanged)
-        window.ethereum.on?.('accountsChanged', onAccountsChanged)
-        remove = () => {
-          window.ethereum?.removeListener?.('chainChanged', onChainChanged)
-          window.ethereum?.removeListener?.('accountsChanged', onAccountsChanged)
-        }
-      }
+      off1 = await onAccountsChanged((a) => setAddress(a))
+      off2 = await onChainChanged(async () => {
+        try {
+          const bp = await getBrowserProvider()
+          const net = await bp?.getNetwork()
+          setIsOnBase(net?.chainId === BASE_CHAIN_ID)
+        } catch { setIsOnBase(false) }
+      })
     })()
 
-    return () => { cancelled = true; try { remove() } catch {} }
-  }, [getEip1193, isReady])
+    return () => { try { off1() } catch {}; try { off2() } catch {} }
+  }, [])
 
-  async function switchToBase() {
-    const eip = await getEip1193()
-    if (!eip) return
-    try {
-      await eip.request?.({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] })
-      setIsOnBase(true)
-    } catch (e) {
-      if (e?.code === 4902) {
-        try {
-          await eip.request?.({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: BASE_CHAIN_ID_HEX,
-              chainName: 'Base',
-              rpcUrls: [BASE_RPC],
-              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-              blockExplorerUrls: ['https://basescan.org']
-            }]
-          })
-          setIsOnBase(true)
-        } catch {}
-      }
-    }
-  }
+  const switchToBase = useCallback(async () => {
+    const ok = await ensureBaseChain()
+    setIsOnBase(ok)
+    return ok
+  }, [])
 
   /* ---------- price + share + tick ---------- */
   useEffect(() => {
@@ -307,7 +231,7 @@ export default function RoundDetailPage() {
     return () => clearInterval(intId)
   }, [router.asPath, id, isReady])
 
-  /* ---------- load round ---------- */
+  /* ---------- load round (read-only provider) ---------- */
   useEffect(() => {
     if (!isReady || !id) return
     let cancelled = false
@@ -315,7 +239,7 @@ export default function RoundDetailPage() {
 
     ;(async () => {
       try {
-        const provider = new ethers.JsonRpcProvider(BASE_RPC)
+        const provider = getReadonlyProvider()
         const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
 
         const info = await ct.getPool1Info(BigInt(id))
@@ -385,8 +309,6 @@ export default function RoundDetailPage() {
           poolBalance,
           entrants: participants?.length ?? subms.length,
         })
-
-        setSelectedBlank((prev) => Math.min(Math.max(prev, 0), Math.max(0, parts.length - 2)))
       } catch (e) {
         console.error(e)
         if (!cancelled) setError(extractDeepError(e))
@@ -416,8 +338,6 @@ export default function RoundDetailPage() {
   /* ---------- actions ---------- */
   async function handleJoin() {
     try {
-      const eip = await getEip1193()
-      if (!eip) throw new Error('Wallet not found')
       if (!round) throw new Error('Round not ready')
       if (ended) throw new Error('Round ended')
       if (!wordInput.trim()) throw new Error('Please enter one word')
@@ -426,14 +346,15 @@ export default function RoundDetailPage() {
       if (takenSet.has(selectedBlank)) throw new Error('That blank is already taken')
 
       setBusy(true); setStatus('Submitting your entry…')
-      await eip.request?.({ method: 'eth_requestAccounts' })
 
-      const provider = new ethers.BrowserProvider(eip)
-      const net = await provider.getNetwork()
-      if (net?.chainId !== BASE_CHAIN_ID) await switchToBase()
+      const ok = await switchToBase()
+      if (!ok) throw new Error('Please switch to Base')
 
-      const signer = await provider.getSigner()
+      const bp = await getBrowserProvider()
+      if (!bp) throw new Error('Wallet not found')
+      const signer = await bp.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
+
       const fee = round.feeBase ?? 0n
       if (fee <= 0n) throw new Error('Entry fee not available yet, try again.')
       const value = typeof fee === 'bigint' ? fee : BigInt(fee.toString())
@@ -441,7 +362,6 @@ export default function RoundDetailPage() {
       const cleanWord = sanitizeWord(wordInput)
       const username = (usernameInput || '').trim().slice(0, 32)
 
-      // preflight with static call to surface revert reasons in-app
       await ct.joinPool1.staticCall(BigInt(id), cleanWord, username, Number(selectedBlank), { value })
       const tx = await ct.joinPool1(BigInt(id), cleanWord, username, Number(selectedBlank), { value })
       await tx.wait()
@@ -457,17 +377,15 @@ export default function RoundDetailPage() {
 
   async function handleFinalizePayout() {
     try {
-      const eip = await getEip1193()
-      if (!eip) throw new Error('Wallet not found')
       if (!round) throw new Error('Round not ready')
       setBusy(true); setStatus('Finalizing and paying out…')
 
-      await eip.request?.({ method: 'eth_requestAccounts' })
-      const provider = new ethers.BrowserProvider(eip)
-      const net = await provider.getNetwork()
-      if (net?.chainId !== BASE_CHAIN_ID) await switchToBase()
+      const ok = await switchToBase()
+      if (!ok) throw new Error('Please switch to Base')
 
-      const signer = await provider.getSigner()
+      const bp = await getBrowserProvider()
+      if (!bp) throw new Error('Wallet not found')
+      const signer = await bp.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
       await ct.claimPool1.staticCall(BigInt(id))
