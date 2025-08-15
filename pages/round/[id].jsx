@@ -3,19 +3,20 @@
 
 import { useRouter } from 'next/router'
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import dynamic from 'next/dynamic'
+import Head from 'next/head'
+import Link from 'next/link'
 import { ethers } from 'ethers'
-import abi from '@/abi/FillInStoryV3_ABI.json' // V3 ABI
+
+import abi from '@/abi/FillInStoryV3_ABI.json'
+import Layout from '@/components/Layout'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import Layout from '@/components/Layout'
-import { useWindowSize } from 'react-use'
-import Link from 'next/link'
-import Head from 'next/head'
 import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
-import dynamic from 'next/dynamic'
+import { useWindowSize } from 'react-use'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -26,20 +27,14 @@ const CONTRACT_ADDRESS =
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID_HEX = '0x2105' // 8453
 
-// ---------- error surfacing ----------
 const extractError = (e) =>
-  e?.shortMessage ||
-  e?.reason ||
-  e?.error?.message ||
-  e?.data?.message ||
-  e?.message ||
-  'Transaction failed'
+  e?.shortMessage || e?.reason || e?.error?.message || e?.data?.message || e?.message || 'Transaction failed'
 
 export default function RoundDetailPage() {
   useMiniAppReady()
 
   const router = useRouter()
-  const isReady = router?.isReady // guard for dynamic routes
+  const isReady = router?.isReady
   const idParam = isReady ? router.query?.id : undefined
   const id = useMemo(() => (Array.isArray(idParam) ? idParam[0] : idParam), [idParam])
 
@@ -50,7 +45,7 @@ export default function RoundDetailPage() {
   const [isOnBase, setIsOnBase] = useState(true)
 
   const [round, setRound] = useState(null)
-  const [submissions, setSubmissions] = useState([]) // [{addr, username, word, index, preview}]
+  const [submissions, setSubmissions] = useState([])
   const [takenSet, setTakenSet] = useState(new Set())
 
   const [wordInput, setWordInput] = useState('')
@@ -66,21 +61,17 @@ export default function RoundDetailPage() {
   const [shareUrl, setShareUrl] = useState('')
 
   const { width, height } = useWindowSize()
-  const [tick, setTick] = useState(0) // steady, explicit ticker for countdown
+  const [tick, setTick] = useState(0)
 
-  // in-app EIP-1193 provider stash (Warpcast Mini wallet)
   const miniProvRef = useRef(null)
 
-  // ---------- utils ----------
   const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
   const toEth = (wei) => {
     try {
       if (wei == null) return 0
       const bi = typeof wei === 'bigint' ? wei : BigInt(wei.toString())
       return Number(ethers.formatEther(bi))
-    } catch {
-      return 0
-    }
+    } catch { return 0 }
   }
   const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
   const explorer = (path) => `https://basescan.org/${path}`
@@ -146,39 +137,33 @@ export default function RoundDetailPage() {
 
   const blanksCount = useMemo(() => Math.max(0, (round?.parts?.length || 0) - 1), [round?.parts])
 
-  // Auto-pick first available blank whenever taken set updates
   useEffect(() => {
     if (!blanksCount) return
     const firstOpen = [...Array(blanksCount).keys()].find((i) => !takenSet.has(i))
     if (firstOpen !== undefined) setSelectedBlank(firstOpen)
   }, [blanksCount, takenSet])
 
-  // ---------- prefer Mini App provider if present ----------
+  // Prefer Mini App provider if present
   const getEip1193 = useCallback(async () => {
     if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
     if (miniProvRef.current) return miniProvRef.current
-    const inWarpcast =
-      typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
     if (!inWarpcast) return null
     try {
-      // try the mini app SDK; fail gracefully at runtime if unavailable
       const mod = await import('@farcaster/miniapp-sdk')
       const prov = await mod.sdk.wallet.getEthereumProvider()
       miniProvRef.current = prov
       return prov
-    } catch {
-      return null
-    }
+    } catch { return null }
   }, [])
 
-  // ---------- wallet + chain (observe only) ----------
+  // Wallet + chain (observe)
   useEffect(() => {
-    if (!isReady) return // wait for router
+    if (!isReady) return
     let cancelled = false
-    let removeListeners = () => {}
+    let remove = () => {}
 
     ;(async () => {
-      // Injected wallet branch
       if (typeof window !== 'undefined' && window.ethereum) {
         try {
           const accts = await window.ethereum.request({ method: 'eth_accounts' })
@@ -188,38 +173,24 @@ export default function RoundDetailPage() {
           const provider = new ethers.BrowserProvider(window.ethereum)
           const net = await provider.getNetwork()
           if (!cancelled) setIsOnBase(net?.chainId === 8453n)
-        } catch {
-          if (!cancelled) setIsOnBase(true)
-        }
+        } catch { if (!cancelled) setIsOnBase(true) }
 
         const onChainChanged = async () => {
           try {
             const provider = new ethers.BrowserProvider(window.ethereum)
             const net = await provider.getNetwork()
             if (!cancelled) setIsOnBase(net?.chainId === 8453n)
-          } catch {
-            if (!cancelled) setIsOnBase(false)
-          }
+          } catch { if (!cancelled) setIsOnBase(false) }
         }
-        const onAccountsChanged = async (accs) => {
-          const a = accs?.[0] || null
-          setAddress(a)
-          if (a) {
-            try {
-              const p = new ethers.BrowserProvider(window.ethereum)
-              await p.getSigner()
-            } catch {}
-          }
-        }
+        const onAccountsChanged = (accs) => setAddress(accs?.[0] || null)
 
         window.ethereum.on?.('chainChanged', onChainChanged)
         window.ethereum.on?.('accountsChanged', onAccountsChanged)
-        removeListeners = () => {
+        remove = () => {
           window.ethereum?.removeListener?.('chainChanged', onChainChanged)
           window.ethereum?.removeListener?.('accountsChanged', onAccountsChanged)
         }
       } else {
-        // Mini app provider branch
         const mini = await getEip1193()
         if (mini && !cancelled) {
           try {
@@ -229,76 +200,54 @@ export default function RoundDetailPage() {
             if (!cancelled) setAddress(addr || null)
             const net = await p.getNetwork()
             if (!cancelled) setIsOnBase(net?.chainId === 8453n)
-          } catch {
-            /* noop */
-          }
+          } catch {}
         }
       }
     })()
 
-    return () => {
-      cancelled = true
-      try { removeListeners() } catch {}
-    }
+    return () => { cancelled = true; try { remove() } catch {} }
   }, [getEip1193, isReady])
 
   async function switchToBase() {
     const eip = await getEip1193()
     if (!eip) return
     try {
-      await eip.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: BASE_CHAIN_ID_HEX }],
-      })
+      await eip.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] })
       setIsOnBase(true)
     } catch (e) {
       if (e?.code === 4902) {
         try {
           await eip.request({
             method: 'wallet_addEthereumChain',
-            params: [
-              {
-                chainId: BASE_CHAIN_ID_HEX,
-                chainName: 'Base',
-                rpcUrls: [BASE_RPC],
-                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-                blockExplorerUrls: ['https://basescan.org'],
-              },
-            ],
+            params: [{ chainId: BASE_CHAIN_ID_HEX, chainName: 'Base', rpcUrls: [BASE_RPC],
+              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 }, blockExplorerUrls: ['https://basescan.org'] }]
           })
           setIsOnBase(true)
-        } catch (err) {
-          console.error(err)
-        }
+        } catch (err) { console.error(err) }
       }
     }
   }
 
-  // ---------- price + share url + ticker ----------
+  // price + share + tick
   useEffect(() => {
     if (!isReady) return
     ;(async () => {
       try {
-        const r = await fetch(
-          'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd'
-        )
+        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
         const j = await r.json()
         setPriceUsd(j?.ethereum?.usd || 3800)
-      } catch {
-        setPriceUsd(3800)
-      }
+      } catch { setPriceUsd(3800) }
     })()
     setShareUrl(absoluteUrl(router.asPath || `/round/${id || ''}`))
     const intId = setInterval(() => setTick((t) => t + 1), 1000)
     return () => clearInterval(intId)
   }, [router.asPath, id, isReady])
 
-  // ---------- load pool1 from V3 ----------
+  // load round
   useEffect(() => {
     if (!isReady || !id) return
     let cancelled = false
-    setLoading(true)
-    setError(null)
+    setLoading(true); setError(null)
 
     ;(async () => {
       try {
@@ -350,7 +299,7 @@ export default function RoundDetailPage() {
         }
 
         try {
-          const taken = await ct.getPool1Taken(BigInt(id)) // bool[]
+          const taken = await ct.getPool1Taken(BigInt(id))
           takenSetLocal = new Set((taken || []).map((b, i) => (b ? i : null)).filter((x) => x !== null))
         } catch {
           takenSetLocal = new Set(subms.map((s) => s.index))
@@ -382,12 +331,10 @@ export default function RoundDetailPage() {
       }
     })()
 
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [id, isReady])
 
-  // ---------- input handling ----------
+  // inputs
   function sanitizeWord(raw) {
     return (raw || '')
       .replace(/\s+/g, ' ')
@@ -396,118 +343,94 @@ export default function RoundDetailPage() {
       .replace(/[^a-zA-Z0-9\-_]/g, '')
       .slice(0, 16)
   }
-
   function onWordChange(e) {
     const clean = sanitizeWord(e.target.value)
     setWordInput(clean)
-    if (!clean) setInputError('Please enter one word (max 16 chars).')
-    else setInputError('')
+    setInputError(clean ? '' : 'Please enter one word (max 16 chars).')
   }
 
-  // ---------- actions (V3) ----------
+  // actions
   async function handleJoin() {
     try {
       const eip = await getEip1193()
       if (!eip) throw new Error('Wallet not found')
-      if (round == null) throw new Error('Round not ready')
+      if (!round) throw new Error('Round not ready')
       if (ended) throw new Error('Round ended')
       if (!wordInput.trim()) throw new Error('Please enter one word')
       if (inputError) throw new Error(inputError)
       if (alreadyEntered) throw new Error('You already entered this round')
       if (takenSet.has(selectedBlank)) throw new Error('That blank is already taken')
 
-      setBusy(true)
-      setStatus('Submitting your entry…')
-
+      setBusy(true); setStatus('Submitting your entry…')
       await eip.request?.({ method: 'eth_requestAccounts' })
 
       const provider = new ethers.BrowserProvider(eip)
       const net = await provider.getNetwork()
-      if (net?.chainId !== 8453n) {
-        await switchToBase()
-      }
+      if (net?.chainId !== 8453n) await switchToBase()
 
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
-
-      const fee = round?.feeBase ?? 0n
+      const fee = round.feeBase ?? 0n
       if (fee <= 0n) throw new Error('Entry fee not available yet, try again.')
       const value = typeof fee === 'bigint' ? fee : BigInt(fee.toString())
 
       const cleanWord = sanitizeWord(wordInput)
       const username = (usernameInput || '').trim().slice(0, 32)
 
-      // Preflight for clearer reverts
-      await ct.joinPool1.staticCall(
-        BigInt(id),
-        cleanWord,
-        username,
-        Number(selectedBlank),
-        { value }
-      )
-
-      const tx = await ct.joinPool1(
-        BigInt(id),
-        cleanWord,
-        username,
-        Number(selectedBlank),
-        { value }
-      )
+      await ct.joinPool1.staticCall(BigInt(id), cleanWord, username, Number(selectedBlank), { value })
+      const tx = await ct.joinPool1(BigInt(id), cleanWord, username, Number(selectedBlank), { value })
       await tx.wait()
-      setStatus('Entry submitted!')
-      setShowConfetti(true)
+
+      setStatus('Entry submitted!'); setShowConfetti(true)
       router.replace(router.asPath)
     } catch (e) {
       console.error(e)
-      const msg = extractError(e)
-      setStatus(msg.split('\n')[0])
+      setStatus(extractError(e).split('\n')[0])
       setShowConfetti(false)
-    } finally {
-      setBusy(false)
-    }
+    } finally { setBusy(false) }
   }
 
   async function handleFinalizePayout() {
     try {
       const eip = await getEip1193()
       if (!eip) throw new Error('Wallet not found')
-      if (round == null) throw new Error('Round not ready')
-      setBusy(true)
-      setStatus('Finalizing and paying out…')
+      if (!round) throw new Error('Round not ready')
+      setBusy(true); setStatus('Finalizing and paying out…')
 
       await eip.request?.({ method: 'eth_requestAccounts' })
       const provider = new ethers.BrowserProvider(eip)
       const net = await provider.getNetwork()
-      if (net?.chainId !== 8453n) {
-        await switchToBase()
-      }
+      if (net?.chainId !== 8453n) await switchToBase()
+
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
 
-      // Preflight
       await ct.claimPool1.staticCall(BigInt(id))
-
       const tx = await ct.claimPool1(BigInt(id))
       await tx.wait()
-      setStatus('Payout executed')
-      setClaimedNow(true)
-      setShowConfetti(true)
+
+      setStatus('Payout executed'); setClaimedNow(true); setShowConfetti(true)
       setTimeout(() => router.replace(router.asPath), 1500)
     } catch (e) {
       console.error(e)
-      const msg = extractError(e)
-      setStatus(msg.split('\n')[0])
+      setStatus(extractError(e).split('\n')[0])
       setShowConfetti(false)
-    } finally {
-      setBusy(false)
-    }
+    } finally { setBusy(false) }
   }
 
-  // ---------- render ----------
-  const feeEth = useMemo(() => toEth(round?.feeBase), [round?.feeBase])
+  // derived for ShareBar
+  const feeEthNum = useMemo(() => toEth(round?.feeBase), [round?.feeBase])
+  const feeEthStr = useMemo(() => (Number.isFinite(feeEthNum) ? feeEthNum.toFixed(4) : '0.0000'), [feeEthNum])
+  const minutesLeft = useMemo(() => {
+    if (!round?.deadline) return 60
+    const s = Math.max(0, Number(round.deadline) - Math.floor(Date.now() / 1000))
+    return Math.max(1, Math.round(s / 60))
+  }, [round?.deadline, tick])
+
   const poolEth = useMemo(() => toEth(round?.poolBalance), [round?.poolBalance])
-  const feeUsd = feeEth * priceUsd
+  const feeUsd = feeEthNum * priceUsd
   const poolUsd = poolEth * priceUsd
+
   const canJoin =
     !ended &&
     !alreadyEntered &&
@@ -516,18 +439,18 @@ export default function RoundDetailPage() {
     blanksCount > 0 &&
     !takenSet.has(selectedBlank) &&
     !busy
+
   const canFinalize = ended && !round?.claimed && !claimedNow && (round?.entrants || 0) > 0 && !busy
 
-  // SEO bits
+  // SEO
   const pageTitle = round?.name ? `${round.name} — MadFill` : id ? `MadFill Round #${id}` : 'MadFill Round'
   const pageDesc = 'Join a MadFill round on Base. Fill the blank, compete, and win the pot.'
   const pageUrl = shareUrl || absoluteUrl(`/round/${id || ''}`)
-  const ogImage = buildOgUrl({ screen: 'round', roundId: String(id || '') }) // stringify id
+  const ogImage = buildOgUrl({ screen: 'round', roundId: String(id || '') })
 
   return (
     <Layout>
       <Head>
-        {/* Farcaster Mini App frame meta */}
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
         <meta property="fc:frame:button:1" content="Open Round" />
@@ -537,7 +460,6 @@ export default function RoundDetailPage() {
       <SEO title={pageTitle} description={pageDesc} url={pageUrl} image={ogImage} />
 
       <main className="max-w-5xl mx-auto p-4 md:p-6 text-white">
-        {/* Header */}
         <div className="mb-6 text-center">
           <h1 className="text-3xl md:text-4xl font-extrabold bg-gradient-to-r from-indigo-300 via-fuchsia-300 to-cyan-300 bg-clip-text text-transparent drop-shadow-sm">
             {round?.name || (id ? `Round #${id}` : 'Round')}
@@ -553,18 +475,11 @@ export default function RoundDetailPage() {
           </div>
         </div>
 
-        {/* Status / Errors */}
         {loading && <div className="rounded-xl bg-slate-900/70 p-6 animate-pulse text-slate-300">Loading round…</div>}
-        {error && (
-          <div className="rounded-xl bg-red-900/40 border border-red-500/40 p-4 text-red-200">
-            Error: {error}
-          </div>
-        )}
+        {error && <div className="rounded-xl bg-red-900/40 border border-red-500/40 p-4 text-red-200">Error: {error}</div>}
 
-        {/* Body */}
         {!loading && !error && round && (
           <>
-            {/* Hero + Join */}
             <div className="grid md:grid-cols-2 gap-6">
               <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
                 <CardHeader className="text-center font-bold bg-slate-800/60 border-b border-slate-700">
@@ -581,12 +496,7 @@ export default function RoundDetailPage() {
                   </p>
                   <div className="mt-3 text-center text-slate-300 text-sm">
                     by{' '}
-                    <a
-                      className="underline decoration-dotted"
-                      href={explorer(`address/${round.creator}`)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
+                    <a className="underline decoration-dotted" href={explorer(`address/${round.creator}`)} target="_blank" rel="noopener noreferrer">
                       {shortAddr(round.creator)}
                     </a>
                   </div>
@@ -666,7 +576,7 @@ export default function RoundDetailPage() {
 
                     <div className="flex flex-wrap items-center gap-3 text-sm">
                       <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
-                        Entry Fee: {fmt(feeEth, 6)} ETH (~${fmt(feeUsd)})
+                        Entry Fee: {fmt(feeEthNum, 6)} ETH (~${fmt(feeUsd)})
                       </span>
                       <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
                         Entrants: {round.entrants}
@@ -691,16 +601,11 @@ export default function RoundDetailPage() {
                         className="bg-green-600 hover:bg-green-500"
                         disabled={!canJoin}
                         title={
-                          ended
-                            ? 'Round ended'
-                            : alreadyEntered
-                            ? 'You already entered'
-                            : takenSet.has(selectedBlank)
-                            ? 'That blank is taken'
-                            : inputError
-                            ? inputError
-                            : busy
-                            ? 'Submitting…'
+                          ended ? 'Round ended'
+                            : alreadyEntered ? 'You already entered'
+                            : takenSet.has(selectedBlank) ? 'That blank is taken'
+                            : inputError ? inputError
+                            : busy ? 'Submitting…'
                             : 'Join this round'
                         }
                       >
@@ -739,9 +644,6 @@ export default function RoundDetailPage() {
                       </a>
                     </span>
                   )}
-                  {youWon && (round.claimed || claimedNow) && (
-                    <span className="text-sm font-semibold text-emerald-300">You won this round!</span>
-                  )}
                 </div>
               </div>
             </div>
@@ -761,9 +663,7 @@ export default function RoundDetailPage() {
                           width={28}
                           height={28}
                           className="rounded-full ring-1 ring-slate-700"
-                          onError={(e) => {
-                            e.currentTarget.src = '/Capitalize.PNG'
-                          }}
+                          onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
                         />
                         <div className="truncate text-sm">{s.username || shortAddr(s.addr)}</div>
                       </div>
@@ -783,16 +683,18 @@ export default function RoundDetailPage() {
             <div className="mt-6 rounded-xl bg-slate-900/70 border border-slate-700 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <ShareBar
-                  url={absoluteUrl(`/round/${roundId}`)}     // a real URL for THIS page
-                  title={`🧠 Play MadFill Round #${roundId}!`}
+                  url={absoluteUrl(`/round/${id}`)}             // ✅ real URL for THIS page
+                  title={`🧠 Play MadFill Round #${id}!`}
                   theme={round?.theme || 'MadFill'}
-                  templateName={round?.name || `Round #${roundId}`}
-                  feeEth={round?.feeBase || '0.0005'}        // string
-                  durationMins={round?.minutesLeft || 60}    // number
+                  templateName={round?.name || `Round #${id}`}
+                  feeEth={feeEthStr}                            // ✅ string like "0.0005"
+                  durationMins={minutesLeft}                    // ✅ derived minutes
+                  word={wordInput || undefined}
+                  blankIndex={selectedBlank}
                   hashtags={['MadFill','Base','Farcaster']}
                   embed="/og/cover.PNG"
                 />
-                {/* ensures an image embed */}
+
                 <Link href="/active" className="underline text-indigo-300">
                   ← Back to Active Rounds
                 </Link>
