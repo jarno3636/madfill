@@ -783,17 +783,15 @@ export default function RoundDetailPage() {
             <div className="mt-6 rounded-xl bg-slate-900/70 border border-slate-700 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <ShareBar
-                  url={`/pool/${poolId}`}                 // or absolute URL
-                  title={title}                           // round title
-                  theme={theme}                           // category/theme
-                  templateName={template?.name}
-                  feeEth={feeEth}                         // string like "0.0005"
-                  durationMins={durationMins}             // number
-                  word={creatorWord}                      // their word
-                  blankIndex={blankIndex}                 // 0-based
+                  url={absoluteUrl(`/round/${roundId}`)}     // a real URL for THIS page
+                  title={`🧠 Play MadFill Round #${roundId}!`}
+                  theme={round?.theme || 'MadFill'}
+                  templateName={round?.name || `Round #${roundId}`}
+                  feeEth={round?.feeBase || '0.0005'}        // string
+                  durationMins={round?.minutesLeft || 60}    // number
                   hashtags={['MadFill','Base','Farcaster']}
-                  embed="/og/cover.PNG"                   // optional: your OG image
-                 />   
+                  embed="/og/cover.PNG"
+                />
                 {/* ensures an image embed */}
                 <Link href="/active" className="underline text-indigo-300">
                   ← Back to Active Rounds
