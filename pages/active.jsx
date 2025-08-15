@@ -1,7 +1,7 @@
 // pages/active.jsx
 'use client'
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import { motion } from 'framer-motion'
@@ -64,9 +64,7 @@ function ShareBoundary({ children }) {
       </div>
     )
   }
-  return (
-    <ErrorCatcher onError={setError}>{children}</ErrorCatcher>
-  )
+  return <ErrorCatcher onError={setError}>{children}</ErrorCatcher>
 }
 
 class ErrorCatcher extends React.Component {
@@ -87,6 +85,21 @@ class ErrorCatcher extends React.Component {
 /* ------------------ Page -------------------- */
 export default function ActivePools() {
   useMiniAppReady()
+
+  // 🔥 Mini-wallet warm-up so Warpcast provider is ready by the time users click into a round
+  const warmed = useRef(false)
+  useEffect(() => {
+    if (warmed.current) return
+    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+    if (!inWarpcast) return
+    ;(async () => {
+      try {
+        const mod = await import('@farcaster/miniapp-sdk')
+        await mod.sdk.wallet.getEthereumProvider().catch(() => {})
+      } catch {}
+      warmed.current = true
+    })()
+  }, [])
 
   const [rounds, setRounds] = useState([])
   const [search, setSearch] = useState('')
@@ -273,6 +286,8 @@ export default function ActivePools() {
     setPage(1)
   }, [search, sortBy, filter])
 
+  const [likes, setLikesState] = useState({}) // (shadow state is above for SSR safety)
+  useEffect(() => setLikesState((typeof window !== 'undefined' && JSON.parse(localStorage.getItem('madfillLikes') || '{}')) || {}), [])
   const handleLike = (roundId, submissionIdx) => {
     const key = `${roundId}-${submissionIdx}`
     const updated = { ...likes, [key]: !likes[key] }
@@ -302,6 +317,7 @@ export default function ActivePools() {
     })
   }, [filtered, sortBy])
 
+  const roundsPerPage = 6
   const totalPages = Math.ceil(sorted.length / roundsPerPage)
   const paginated = sorted.slice((page - 1) * roundsPerPage, page * roundsPerPage)
 
@@ -368,7 +384,11 @@ export default function ActivePools() {
         {paginated.length === 0 ? (
           <div className="mt-8 text-lg text-center space-y-3">
             <p>No active rounds right now. Be the first to start one! 🚀</p>
-            <Link href="/"><Button className="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded-lg">➕ Create New Round</Button></Link>
+            <Link href="/">
+              <Button className="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded-lg">
+                ➕ Create New Round
+              </Button>
+            </Link>
           </div>
         ) : (
           <motion.div
