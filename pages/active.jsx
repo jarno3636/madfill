@@ -10,19 +10,20 @@ import Layout from '@/components/Layout'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import Countdown from '@/components/Countdown' // ✅ default export
+import Countdown from '@/components/Countdown'
 import ShareBar from '@/components/ShareBar'
 import SEO from '@/components/SEO'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
+/* ------------------ Config ------------------ */
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // ✅ sensible fallback
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // fallback
 
-// --- helpers ---
+/* ------------------ Utils ------------------- */
 const needsSpaceBefore = (str) => {
   if (!str) return false
   const ch = str[0]
@@ -53,6 +54,37 @@ const buildPreviewSingle = (parts, word, idx) => {
   return out.join('')
 }
 
+/* --------- Tiny error boundary for Share ------- */
+function ShareBoundary({ children }) {
+  const [error, setError] = useState(null)
+  if (error) {
+    return (
+      <div className="text-xs text-amber-300 border border-amber-500/30 bg-amber-500/10 rounded px-2 py-1">
+        Share unavailable right now.
+      </div>
+    )
+  }
+  return (
+    <ErrorCatcher onError={setError}>{children}</ErrorCatcher>
+  )
+}
+
+class ErrorCatcher extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false }
+  }
+  static getDerivedStateFromError() { return { hasError: true } }
+  componentDidCatch(error) {
+    if (this.props.onError) this.props.onError(error)
+  }
+  render() {
+    if (this.state.hasError) return null
+    return this.props.children
+  }
+}
+
+/* ------------------ Page -------------------- */
 export default function ActivePools() {
   useMiniAppReady()
 
@@ -78,19 +110,15 @@ export default function ActivePools() {
     return new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
   }, [provider])
 
-  // Load ETH price (Coinbase → CoinGecko → Alchemy → hard fallback)
+  // price loaders (same as your version, trimmed a bit)
   const loadPrice = async (signal) => {
     let price = 0
     try {
       const cbRes = await fetch('https://api.coinbase.com/v2/prices/ETH-USD/spot', { signal })
       const cbJson = await cbRes.json()
       const cbPrice = parseFloat(cbJson?.data?.amount)
-      if (cbPrice && cbPrice > 0.5) {
-        setBaseUsd(cbPrice)
-        setFallbackPrice(false)
-        return cbPrice
-      }
-      throw new Error('Invalid Coinbase price')
+      if (cbPrice && cbPrice > 0.5) { setBaseUsd(cbPrice); setFallbackPrice(false); return cbPrice }
+      throw new Error('bad cb')
     } catch {}
 
     try {
@@ -100,40 +128,27 @@ export default function ActivePools() {
       )
       const json = await res.json()
       price = json['l2-standard-bridged-weth-base']?.usd
-      if (price && price > 0.5) {
-        setBaseUsd(price)
-        setFallbackPrice(false)
-        return price
-      }
-      throw new Error('Invalid CoinGecko price')
+      if (price && price > 0.5) { setBaseUsd(price); setFallbackPrice(false); return price }
+      throw new Error('bad cg')
     } catch {}
 
     try {
       const apiKey = process.env.NEXT_PUBLIC_ALCHEMY_KEY
       if (apiKey) {
-        const alchemyRes = await fetch(
-          `https://eth-mainnet.g.alchemy.com/v2/${apiKey}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              id: 1,
-              jsonrpc: '2.0',
-              method: 'alchemy_getTokenMetadata',
-              params: ['0x4200000000000000000000000000000000000006'],
-            }),
-            signal,
-          }
-        )
+        const alchemyRes = await fetch(`https://eth-mainnet.g.alchemy.com/v2/${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: 1, jsonrpc: '2.0', method: 'alchemy_getTokenMetadata',
+            params: ['0x4200000000000000000000000000000000000006'],
+          }),
+          signal,
+        })
         const data = await alchemyRes.json()
         price = data?.result?.price?.usd
-        if (price && price > 0.5) {
-          setBaseUsd(price)
-          setFallbackPrice(false)
-          return price
-        }
+        if (price && price > 0.5) { setBaseUsd(price); setFallbackPrice(false); return price }
       }
-      throw new Error('Invalid Alchemy price')
+      throw new Error('bad alchemy')
     } catch {
       price = 3800
       setBaseUsd(price)
@@ -153,7 +168,6 @@ export default function ActivePools() {
       const countRaw = await contract.pool1Count()
       count = Number(countRaw || 0n)
     } catch {
-      // If count fails, bail gracefully
       setRounds([])
       return
     }
@@ -168,13 +182,12 @@ export default function ActivePools() {
         const theme = info.theme_ ?? info[1]
         const parts = info.parts_ ?? info[2]
         const feeBaseWei = info.feeBase_ ?? info[3] ?? 0n
-        const feeBase = Number(ethers.formatEther(feeBaseWei)) // ✅ ETH value used consistently
+        const feeBase = Number(ethers.formatEther(feeBaseWei))
         const deadline = Number(info.deadline_ ?? info[4])
         const participants = info.participants_ ?? info[6] ?? []
         const claimed = Boolean(info.claimed_ ?? info[8])
 
         if (!claimed && deadline > now) {
-          // avatars
           const avatars = await Promise.all(
             participants.map(async (addr) => {
               try {
@@ -195,7 +208,6 @@ export default function ActivePools() {
           )
           if (signal?.aborted) break
 
-          // submissions (V3)
           const submissions = await Promise.all(
             participants.map(async (addr) => {
               try {
@@ -233,7 +245,6 @@ export default function ActivePools() {
       } catch (e) {
         if (signal?.aborted) break
         console.warn(`Error loading round ${i}`, e)
-        // continue with next
       }
     }
 
@@ -256,7 +267,7 @@ export default function ActivePools() {
       clearInterval(interval)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contract]) // provider/addr changes rebuild contract which retriggers
+  }, [contract])
 
   useEffect(() => {
     setPage(1)
@@ -276,7 +287,7 @@ export default function ActivePools() {
       const matchesSearch = r.name.toLowerCase().includes(search.toLowerCase())
       const matchesFilter =
         filter === 'all' ||
-        filter === 'unclaimed' || // kept for future toggle
+        filter === 'unclaimed' ||
         (filter === 'high' && parseFloat(r.usd) >= 5)
       return matchesSearch && matchesFilter
     })
@@ -294,13 +305,12 @@ export default function ActivePools() {
   const totalPages = Math.ceil(sorted.length / roundsPerPage)
   const paginated = sorted.slice((page - 1) * roundsPerPage, page * roundsPerPage)
 
-  // SEO + Frame
+  // SEO / Frame
   const pageUrl = absoluteUrl('/active')
   const ogImage = buildOgUrl({ screen: 'active', title: 'Active Rounds' })
 
   return (
     <Layout>
-      {/* Farcaster Mini App / Frame meta */}
       <Head>
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
@@ -309,7 +319,6 @@ export default function ActivePools() {
         <meta property="fc:frame:button:1:target" content={pageUrl} />
       </Head>
 
-      {/* Standard SEO (OG/Twitter) */}
       <SEO
         title="🧠 Active Rounds — MadFill"
         description="Browse live MadFill rounds on Base. Enter with one word, vote, and win the pot."
@@ -359,11 +368,7 @@ export default function ActivePools() {
         {paginated.length === 0 ? (
           <div className="mt-8 text-lg text-center space-y-3">
             <p>No active rounds right now. Be the first to start one! 🚀</p>
-            <Link href="/">
-              <Button className="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded-lg">
-                ➕ Create New Round
-              </Button>
-            </Link>
+            <Link href="/"><Button className="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded-lg">➕ Create New Round</Button></Link>
           </div>
         ) : (
           <motion.div
@@ -375,7 +380,8 @@ export default function ActivePools() {
           >
             {paginated.map((r) => {
               const rUrl = absoluteUrl(`/round/${r.id}`)
-              const shareTxt = `Play MadFill Round #${r.id}!`
+              const minsLeft = Math.max(1, Math.round((r.deadline - Math.floor(Date.now() / 1000)) / 60))
+
               return (
                 <Card
                   key={r.id}
@@ -385,14 +391,8 @@ export default function ActivePools() {
                     <div className="flex items-start gap-3">
                       <div className="text-3xl">{r.emoji}</div>
                       <div>
-                        <h2 className="text-lg font-bold">
-                          #{r.id} — {r.name}
-                        </h2>
-                        {r.badge && (
-                          <span className="text-sm text-yellow-400 animate-pulse font-semibold">
-                            {r.badge}
-                          </span>
-                        )}
+                        <h2 className="text-lg font-bold">#{r.id} — {r.name}</h2>
+                        {r.badge && <span className="text-sm text-yellow-400 animate-pulse font-semibold">{r.badge}</span>}
                         <p className="text-xs text-slate-400 mt-1">Theme: {r.theme}</p>
                       </div>
                     </div>
@@ -402,36 +402,28 @@ export default function ActivePools() {
                   </CardHeader>
 
                   <CardContent className="space-y-2 text-sm font-medium">
-                    <p>
-                      <strong>Entry Fee:</strong> {r.feeBase} ETH
-                    </p>
-                    <p>
-                      <strong>Participants:</strong> {r.count}
-                    </p>
-                    <p>
-                      <strong>Total Pool:</strong> {r.usdApprox ? '~' : ''}${r.usd}
-                    </p>
+                    <p><strong>Entry Fee:</strong> {r.feeBase} ETH</p>
+                    <p><strong>Participants:</strong> {r.count}</p>
+                    <p><strong>Total Pool:</strong> {r.usdApprox ? '~' : ''}${r.usd}</p>
 
-                    {/* Share active round — use OG image so Warpcast shows an embed */}
+                    {/* 🔗 Share — SAFE props from r, wrapped in an error boundary */}
                     <div className="pt-1">
-                      <ShareBar
-                        url={`/pool/${poolId}`}                 // or absolute URL
-                        title={title}                           // round title
-                        theme={theme}                           // category/theme
-                        templateName={template?.name}
-                        feeEth={feeEth}                         // string like "0.0005"
-                        durationMins={durationMins}             // number
-                        word={creatorWord}                      // their word
-                        blankIndex={blankIndex}                 // 0-based
-                        hashtags={['MadFill','Base','Farcaster']}
-                        embed="/og/cover.PNG"                   // optional: your OG image
-                       />
+                      <ShareBoundary>
+                        <ShareBar
+                          url={rUrl}
+                          title={`🧠 Join MadFill Round #${r.id}!`}
+                          theme={r.theme || 'MadFill'}
+                          templateName={r.name || `Round #${r.id}`}
+                          feeEth={r.feeBase}
+                          durationMins={minsLeft}
+                          hashtags={['MadFill', 'Base', 'Farcaster']}
+                          embed="/og/cover.PNG"
+                        />
+                      </ShareBoundary>
                     </div>
 
                     <button
-                      onClick={() =>
-                        setExpanded((prev) => ({ ...prev, [r.id]: !prev[r.id] }))
-                      }
+                      onClick={() => setExpanded((prev) => ({ ...prev, [r.id]: !prev[r.id] }))}
                       className="text-indigo-400 text-xs underline"
                     >
                       {expanded[r.id] ? 'Hide Entries' : 'Show Entries'}
@@ -457,9 +449,7 @@ export default function ActivePools() {
                                 width={24}
                                 height={24}
                                 className="rounded-full border border-white mt-1"
-                                onError={(e) => {
-                                  e.currentTarget.src = '/Capitalize.PNG'
-                                }}
+                                onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
                               />
                               <div className="flex-1">
                                 <p className="text-slate-300 font-semibold">@{displayName}</p>
@@ -479,9 +469,7 @@ export default function ActivePools() {
                     )}
 
                     <Link href={`/round/${r.id}`}>
-                      <Button className="mt-3 bg-indigo-600 hover:bg-indigo-500 w-full">
-                        ✏️ Enter Round
-                      </Button>
+                      <Button className="mt-3 bg-indigo-600 hover:bg-indigo-500 w-full">✏️ Enter Round</Button>
                     </Link>
                   </CardContent>
                 </Card>
@@ -495,9 +483,7 @@ export default function ActivePools() {
             {Array.from({ length: totalPages }).map((_, i) => (
               <Button
                 key={i}
-                className={`px-4 py-1 rounded-full ${
-                  page === i + 1 ? 'bg-indigo-600' : 'bg-slate-700'
-                } text-sm`}
+                className={`px-4 py-1 rounded-full ${page === i + 1 ? 'bg-indigo-600' : 'bg-slate-700'} text-sm`}
                 onClick={() => setPage(i + 1)}
               >
                 {i + 1}
@@ -510,6 +496,5 @@ export default function ActivePools() {
   )
 }
 
-// (Optional hints for your app wrapper; safe to keep or remove)
 ActivePools.usesOwnSEO = true
 ActivePools.disableLayout = false
