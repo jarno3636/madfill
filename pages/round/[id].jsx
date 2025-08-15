@@ -63,6 +63,7 @@ export default function RoundDetailPage() {
   const { width, height } = useWindowSize()
   const [tick, setTick] = useState(0)
 
+  // prefer Mini App EIP-1193 if available
   const miniProvRef = useRef(null)
 
   const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
@@ -143,7 +144,7 @@ export default function RoundDetailPage() {
     if (firstOpen !== undefined) setSelectedBlank(firstOpen)
   }, [blanksCount, takenSet])
 
-  // Prefer Mini App provider if present
+  // Mini App provider (or injected) — single source of truth for EIP-1193
   const getEip1193 = useCallback(async () => {
     if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
     if (miniProvRef.current) return miniProvRef.current
@@ -157,13 +158,14 @@ export default function RoundDetailPage() {
     } catch { return null }
   }, [])
 
-  // Wallet + chain (observe)
+  // Observe wallet + chain
   useEffect(() => {
     if (!isReady) return
     let cancelled = false
     let remove = () => {}
 
     ;(async () => {
+      // injected first
       if (typeof window !== 'undefined' && window.ethereum) {
         try {
           const accts = await window.ethereum.request({ method: 'eth_accounts' })
@@ -191,6 +193,7 @@ export default function RoundDetailPage() {
           window.ethereum?.removeListener?.('accountsChanged', onAccountsChanged)
         }
       } else {
+        // Mini app provider
         const mini = await getEip1193()
         if (mini && !cancelled) {
           try {
@@ -219,11 +222,16 @@ export default function RoundDetailPage() {
         try {
           await eip.request({
             method: 'wallet_addEthereumChain',
-            params: [{ chainId: BASE_CHAIN_ID_HEX, chainName: 'Base', rpcUrls: [BASE_RPC],
-              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 }, blockExplorerUrls: ['https://basescan.org'] }]
+            params: [{
+              chainId: BASE_CHAIN_ID_HEX,
+              chainName: 'Base',
+              rpcUrls: [BASE_RPC],
+              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+              blockExplorerUrls: ['https://basescan.org']
+            }]
           })
           setIsOnBase(true)
-        } catch (err) { console.error(err) }
+        } catch {}
       }
     }
   }
@@ -377,6 +385,7 @@ export default function RoundDetailPage() {
       const cleanWord = sanitizeWord(wordInput)
       const username = (usernameInput || '').trim().slice(0, 32)
 
+      // preflight
       await ct.joinPool1.staticCall(BigInt(id), cleanWord, username, Number(selectedBlank), { value })
       const tx = await ct.joinPool1(BigInt(id), cleanWord, username, Number(selectedBlank), { value })
       await tx.wait()
@@ -683,18 +692,17 @@ export default function RoundDetailPage() {
             <div className="mt-6 rounded-xl bg-slate-900/70 border border-slate-700 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <ShareBar
-                  url={absoluteUrl(`/round/${id}`)}             // ✅ real URL for THIS page
+                  url={absoluteUrl(`/round/${id}`)}
                   title={`🧠 Play MadFill Round #${id}!`}
                   theme={round?.theme || 'MadFill'}
                   templateName={round?.name || `Round #${id}`}
-                  feeEth={feeEthStr}                            // ✅ string like "0.0005"
-                  durationMins={minutesLeft}                    // ✅ derived minutes
+                  feeEth={feeEthStr}
+                  durationMins={minutesLeft}
                   word={wordInput || undefined}
                   blankIndex={selectedBlank}
                   hashtags={['MadFill','Base','Farcaster']}
                   embed="/og/cover.PNG"
                 />
-
                 <Link href="/active" className="underline text-indigo-300">
                   ← Back to Active Rounds
                 </Link>
