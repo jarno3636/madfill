@@ -123,7 +123,7 @@ export default function ActivePools() {
     return new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
   }, [provider])
 
-  // price loaders (same as your version, trimmed a bit)
+  // price loaders
   const loadPrice = async (signal) => {
     let price = 0
     try {
@@ -286,8 +286,6 @@ export default function ActivePools() {
     setPage(1)
   }, [search, sortBy, filter])
 
-  const [likes, setLikesState] = useState({}) // (shadow state is above for SSR safety)
-  useEffect(() => setLikesState((typeof window !== 'undefined' && JSON.parse(localStorage.getItem('madfillLikes') || '{}')) || {}), [])
   const handleLike = (roundId, submissionIdx) => {
     const key = `${roundId}-${submissionIdx}`
     const updated = { ...likes, [key]: !likes[key] }
@@ -317,7 +315,6 @@ export default function ActivePools() {
     })
   }, [filtered, sortBy])
 
-  const roundsPerPage = 6
   const totalPages = Math.ceil(sorted.length / roundsPerPage)
   const paginated = sorted.slice((page - 1) * roundsPerPage, page * roundsPerPage)
 
