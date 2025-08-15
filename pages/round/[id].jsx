@@ -25,10 +25,73 @@ const CONTRACT_ADDRESS =
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
 
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+const BASE_CHAIN_ID = 8453n
 const BASE_CHAIN_ID_HEX = '0x2105' // 8453
 
-const extractError = (e) =>
-  e?.shortMessage || e?.reason || e?.error?.message || e?.data?.message || e?.message || 'Transaction failed'
+/* ---------- Error helpers ---------- */
+function extractDeepError(e) {
+  // ethers v6 errors are... creative across wallets. Flatten best-effort.
+  const guess =
+    e?.shortMessage ||
+    e?.reason ||
+    e?.error?.message ||
+    e?.info?.error?.message ||
+    e?.data?.message ||
+    e?.message
+
+  // Some wallets push revert data to .data or .error.data
+  const payload = e?.data || e?.error?.data || e?.info?.error?.data || null
+  if (!payload) return guess || 'Transaction failed'
+
+  // Try decode Error(string)
+  try {
+    const iface = new ethers.Interface(['function Error(string)'])
+    const [reason] = iface.decodeErrorResult('Error', payload)
+    if (reason) return String(reason)
+  } catch {}
+
+  // Try panic code
+  try {
+    const panicIface = new ethers.Interface(['function Panic(uint256)'])
+    const [code] = panicIface.decodeErrorResult('Panic', payload)
+    if (code) return `Panic: 0x${BigInt(code).toString(16)}`
+  } catch {}
+
+  return guess || 'Transaction would revert'
+}
+
+/* ---------- Text helpers ---------- */
+const needsSpaceBefore = (str) => {
+  if (!str) return false
+  const ch = str[0]
+  return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
+}
+
+function buildPreviewSingle(parts, word, blankIndex) {
+  const n = parts?.length || 0
+  if (n === 0) return ''
+  const blanks = Math.max(0, n - 1)
+  const idx = Math.max(0, Math.min(Math.max(0, blanks - 1), blankIndex || 0))
+  const out = []
+  for (let i = 0; i < n; i++) {
+    out.push(parts[i] || '')
+    if (i < n - 1) {
+      if (i === idx) {
+        if (word) {
+          out.push(word)
+          if (needsSpaceBefore(parts[i + 1] || '')) out.push(' ')
+        } else {
+          out.push('____')
+        }
+      } else {
+        out.push('____')
+      }
+    }
+  }
+  return out.join('')
+}
+
+/* ===================================================== */
 
 export default function RoundDetailPage() {
   useMiniAppReady()
@@ -65,6 +128,21 @@ export default function RoundDetailPage() {
 
   // prefer Mini App EIP-1193 if available
   const miniProvRef = useRef(null)
+  const warmed = useRef(false)
+
+  // Tiny warm-up so the mini wallet is ready by the time the user taps
+  useEffect(() => {
+    if (warmed.current) return
+    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+    if (!inWarpcast) return
+    ;(async () => {
+      try {
+        const mod = await import('@farcaster/miniapp-sdk')
+        await mod.sdk.wallet.getEthereumProvider().catch(() => {})
+      } catch {}
+      warmed.current = true
+    })()
+  }, [])
 
   const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
   const toEth = (wei) => {
@@ -76,36 +154,6 @@ export default function RoundDetailPage() {
   }
   const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
   const explorer = (path) => `https://basescan.org/${path}`
-
-  const needsSpaceBefore = (str) => {
-    if (!str) return false
-    const ch = str[0]
-    return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
-  }
-
-  function buildPreviewSingle(parts, word, blankIndex) {
-    const n = parts?.length || 0
-    if (n === 0) return ''
-    const blanks = Math.max(0, n - 1)
-    const idx = Math.max(0, Math.min(Math.max(0, blanks - 1), blankIndex || 0))
-    const out = []
-    for (let i = 0; i < n; i++) {
-      out.push(parts[i] || '')
-      if (i < n - 1) {
-        if (i === idx) {
-          if (word) {
-            out.push(word)
-            if (needsSpaceBefore(parts[i + 1] || '')) out.push(' ')
-          } else {
-            out.push('____')
-          }
-        } else {
-          out.push('____')
-        }
-      }
-    }
-    return out.join('')
-  }
 
   const ended = useMemo(() => {
     if (!round?.deadline) return false
@@ -144,28 +192,49 @@ export default function RoundDetailPage() {
     if (firstOpen !== undefined) setSelectedBlank(firstOpen)
   }, [blanksCount, takenSet])
 
-  // Mini App provider (or injected) — single source of truth for EIP-1193
+  /* ---------- Unified provider getter (mini app first) ---------- */
   const getEip1193 = useCallback(async () => {
-    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
-    if (miniProvRef.current) return miniProvRef.current
-    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
-    if (!inWarpcast) return null
+    // 1) Warpcast Mini App
     try {
-      const mod = await import('@farcaster/miniapp-sdk')
-      const prov = await mod.sdk.wallet.getEthereumProvider()
-      miniProvRef.current = prov
-      return prov
-    } catch { return null }
+      const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+      if (inWarpcast) {
+        if (miniProvRef.current) return miniProvRef.current
+        const mod = await import('@farcaster/miniapp-sdk')
+        const prov = await mod.sdk.wallet.getEthereumProvider()
+        miniProvRef.current = prov
+        return prov
+      }
+    } catch {}
+    // 2) Injected wallet
+    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
+    // 3) None
+    return null
   }, [])
 
-  // Observe wallet + chain
+  /* ---------- Observe wallet + chain ---------- */
   useEffect(() => {
     if (!isReady) return
     let cancelled = false
     let remove = () => {}
 
     ;(async () => {
-      // injected first
+      const eip = await getEip1193()
+
+      if (eip && eip !== window.ethereum) {
+        // Mini provider path
+        try {
+          const p = new ethers.BrowserProvider(eip)
+          const signer = await p.getSigner().catch(() => null)
+          const addr = await signer?.getAddress().catch(() => null)
+          if (!cancelled) setAddress(addr || null)
+          const net = await p.getNetwork()
+          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
+        } catch {}
+        // Some mini providers don’t emit events consistently; we poll light via tick anyway.
+        return
+      }
+
+      // Injected path with events
       if (typeof window !== 'undefined' && window.ethereum) {
         try {
           const accts = await window.ethereum.request({ method: 'eth_accounts' })
@@ -174,14 +243,14 @@ export default function RoundDetailPage() {
         try {
           const provider = new ethers.BrowserProvider(window.ethereum)
           const net = await provider.getNetwork()
-          if (!cancelled) setIsOnBase(net?.chainId === 8453n)
+          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
         } catch { if (!cancelled) setIsOnBase(true) }
 
         const onChainChanged = async () => {
           try {
             const provider = new ethers.BrowserProvider(window.ethereum)
             const net = await provider.getNetwork()
-            if (!cancelled) setIsOnBase(net?.chainId === 8453n)
+            if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
           } catch { if (!cancelled) setIsOnBase(false) }
         }
         const onAccountsChanged = (accs) => setAddress(accs?.[0] || null)
@@ -191,19 +260,6 @@ export default function RoundDetailPage() {
         remove = () => {
           window.ethereum?.removeListener?.('chainChanged', onChainChanged)
           window.ethereum?.removeListener?.('accountsChanged', onAccountsChanged)
-        }
-      } else {
-        // Mini app provider
-        const mini = await getEip1193()
-        if (mini && !cancelled) {
-          try {
-            const p = new ethers.BrowserProvider(mini)
-            const signer = await p.getSigner().catch(() => null)
-            const addr = await signer?.getAddress().catch(() => null)
-            if (!cancelled) setAddress(addr || null)
-            const net = await p.getNetwork()
-            if (!cancelled) setIsOnBase(net?.chainId === 8453n)
-          } catch {}
         }
       }
     })()
@@ -215,12 +271,12 @@ export default function RoundDetailPage() {
     const eip = await getEip1193()
     if (!eip) return
     try {
-      await eip.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] })
+      await eip.request?.({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] })
       setIsOnBase(true)
     } catch (e) {
       if (e?.code === 4902) {
         try {
-          await eip.request({
+          await eip.request?.({
             method: 'wallet_addEthereumChain',
             params: [{
               chainId: BASE_CHAIN_ID_HEX,
@@ -236,7 +292,7 @@ export default function RoundDetailPage() {
     }
   }
 
-  // price + share + tick
+  /* ---------- price + share + tick ---------- */
   useEffect(() => {
     if (!isReady) return
     ;(async () => {
@@ -251,7 +307,7 @@ export default function RoundDetailPage() {
     return () => clearInterval(intId)
   }, [router.asPath, id, isReady])
 
-  // load round
+  /* ---------- load round ---------- */
   useEffect(() => {
     if (!isReady || !id) return
     let cancelled = false
@@ -333,7 +389,7 @@ export default function RoundDetailPage() {
         setSelectedBlank((prev) => Math.min(Math.max(prev, 0), Math.max(0, parts.length - 2)))
       } catch (e) {
         console.error(e)
-        if (!cancelled) setError(e?.shortMessage || e?.message || 'Failed to load round')
+        if (!cancelled) setError(extractDeepError(e))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -342,7 +398,7 @@ export default function RoundDetailPage() {
     return () => { cancelled = true }
   }, [id, isReady])
 
-  // inputs
+  /* ---------- inputs ---------- */
   function sanitizeWord(raw) {
     return (raw || '')
       .replace(/\s+/g, ' ')
@@ -357,7 +413,7 @@ export default function RoundDetailPage() {
     setInputError(clean ? '' : 'Please enter one word (max 16 chars).')
   }
 
-  // actions
+  /* ---------- actions ---------- */
   async function handleJoin() {
     try {
       const eip = await getEip1193()
@@ -374,7 +430,7 @@ export default function RoundDetailPage() {
 
       const provider = new ethers.BrowserProvider(eip)
       const net = await provider.getNetwork()
-      if (net?.chainId !== 8453n) await switchToBase()
+      if (net?.chainId !== BASE_CHAIN_ID) await switchToBase()
 
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
@@ -385,7 +441,7 @@ export default function RoundDetailPage() {
       const cleanWord = sanitizeWord(wordInput)
       const username = (usernameInput || '').trim().slice(0, 32)
 
-      // preflight
+      // preflight with static call to surface revert reasons in-app
       await ct.joinPool1.staticCall(BigInt(id), cleanWord, username, Number(selectedBlank), { value })
       const tx = await ct.joinPool1(BigInt(id), cleanWord, username, Number(selectedBlank), { value })
       await tx.wait()
@@ -394,7 +450,7 @@ export default function RoundDetailPage() {
       router.replace(router.asPath)
     } catch (e) {
       console.error(e)
-      setStatus(extractError(e).split('\n')[0])
+      setStatus(extractDeepError(e).split('\n')[0])
       setShowConfetti(false)
     } finally { setBusy(false) }
   }
@@ -409,7 +465,7 @@ export default function RoundDetailPage() {
       await eip.request?.({ method: 'eth_requestAccounts' })
       const provider = new ethers.BrowserProvider(eip)
       const net = await provider.getNetwork()
-      if (net?.chainId !== 8453n) await switchToBase()
+      if (net?.chainId !== BASE_CHAIN_ID) await switchToBase()
 
       const signer = await provider.getSigner()
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
@@ -422,12 +478,12 @@ export default function RoundDetailPage() {
       setTimeout(() => router.replace(router.asPath), 1500)
     } catch (e) {
       console.error(e)
-      setStatus(extractError(e).split('\n')[0])
+      setStatus(extractDeepError(e).split('\n')[0])
       setShowConfetti(false)
     } finally { setBusy(false) }
   }
 
-  // derived for ShareBar
+  /* ---------- derived for ShareBar ---------- */
   const feeEthNum = useMemo(() => toEth(round?.feeBase), [round?.feeBase])
   const feeEthStr = useMemo(() => (Number.isFinite(feeEthNum) ? feeEthNum.toFixed(4) : '0.0000'), [feeEthNum])
   const minutesLeft = useMemo(() => {
@@ -451,7 +507,7 @@ export default function RoundDetailPage() {
 
   const canFinalize = ended && !round?.claimed && !claimedNow && (round?.entrants || 0) > 0 && !busy
 
-  // SEO
+  /* ---------- SEO ---------- */
   const pageTitle = round?.name ? `${round.name} — MadFill` : id ? `MadFill Round #${id}` : 'MadFill Round'
   const pageDesc = 'Join a MadFill round on Base. Fill the blank, compete, and win the pot.'
   const pageUrl = shareUrl || absoluteUrl(`/round/${id || ''}`)
