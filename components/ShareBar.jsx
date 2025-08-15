@@ -1,7 +1,9 @@
+// components/ShareBar.jsx
 'use client'
 
 import { useMemo, useState } from 'react'
 import {
+  safeUrl,
   buildCastText,
   buildShareUrls,
   copyToClipboard,
@@ -9,7 +11,6 @@ import {
   shareToWarpcast,
   openShareWindow,
 } from '@/lib/share'
-import { absoluteUrl } from '@/lib/seo'
 
 /**
  * A fun, mini-app-aware Share Bar.
@@ -19,7 +20,7 @@ import { absoluteUrl } from '@/lib/seo'
  * - embed: image URL (e.g., OG card), or embeds: []
  */
 export default function ShareBar({
-  url,
+  url = '/',
   title = 'MadFill',
   theme = '',
   templateName = '',
@@ -32,39 +33,66 @@ export default function ShareBar({
   embeds = [],// string[]
   className = '',
 }) {
-  const shareUrl = absoluteUrl(url || '/')
-  const blankLabel = `Blank #${(Number(blankIndex) | 0) + 1}`
+  // Avoid pulling in lib/seo.absoluteUrl — keep everything client-safe
+  const shareUrl = useMemo(() => safeUrl(url), [url])
+
+  const blankLabel = useMemo(
+    () => `Blank #${(Number(blankIndex) | 0) + 1}`,
+    [blankIndex]
+  )
+
   const allEmbeds = useMemo(() => {
     const arr = []
     if (embed) arr.push(embed)
     if (Array.isArray(embeds) && embeds.length) arr.push(...embeds)
-    return arr
+    // Normalize to absolute URLs and drop any bad ones
+    return arr.map(e => safeUrl(e)).filter(Boolean)
   }, [embed, embeds])
 
   const [style, setStyle] = useState('playful') // 'short' | 'playful' | 'serious'
-  const castText = useMemo(
-    () =>
-      buildCastText({
+
+  const castText = useMemo(() => {
+    try {
+      return buildCastText({
         style, title, theme, templateName, feeEth, durationMins,
         word, blankLabel, url: shareUrl, hashtagList: hashtags,
-      }),
-    [style, title, theme, templateName, feeEth, durationMins, word, blankLabel, shareUrl, hashtags]
-  )
+      })
+    } catch {
+      // Never crash the page—fallback to something simple
+      return `🧠 MadFill — ${title}\nPlay → ${shareUrl}\n#MadFill #Base #Farcaster`
+    }
+  }, [style, title, theme, templateName, feeEth, durationMins, word, blankLabel, shareUrl, hashtags])
 
-  const { twitter, telegram } = useMemo(
-    () => buildShareUrls({ url: shareUrl, text: castText, embeds: allEmbeds }),
-    [shareUrl, castText, allEmbeds]
-  )
+  const shareTargets = useMemo(() => {
+    try {
+      return buildShareUrls({ url: shareUrl, text: castText, embeds: allEmbeds })
+    } catch {
+      return { twitter: '', telegram: '' }
+    }
+  }, [shareUrl, castText, allEmbeds])
 
   const onCast = async () => {
-    await shareToWarpcast({
-      style, url: shareUrl, word, blankLabel, title, theme, templateName,
-      feeEth, durationMins, hashtagList: hashtags, embeds: allEmbeds,
-    })
+    try {
+      await shareToWarpcast({
+        style, url: shareUrl, word, blankLabel, title, theme, templateName,
+        feeEth, durationMins, hashtagList: hashtags, embeds: allEmbeds,
+      })
+    } catch (e) {
+      // As a last resort, copy the text so users can paste in-app
+      await copyToClipboard(`${castText}`)
+    }
   }
 
-  const onShareX = async () => openShareWindow(twitter)
-  const onShareTelegram = async () => openShareWindow(telegram)
+  const onShareX = async () => {
+    if (!shareTargets.twitter) return
+    await openShareWindow(shareTargets.twitter)
+  }
+
+  const onShareTelegram = async () => {
+    if (!shareTargets.telegram) return
+    await openShareWindow(shareTargets.telegram)
+  }
+
   const onSystemShare = async () => {
     const ok = await nativeShare({ title, text: castText, url: shareUrl })
     if (!ok) await copyToClipboard(shareUrl)
