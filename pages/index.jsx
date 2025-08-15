@@ -88,7 +88,7 @@ function IndexPage() {
   const [tplIdx, setTplIdx] = useState(0)
   const currentCategory = presetCategories[catIdx] || { name: 'Custom', templates: [] }
   const currentTemplates = currentCategory.templates || []
-  the currentTemplate = currentTemplates[tplIdx] || null
+  const currentTemplate = currentTemplates[tplIdx] || null
 
   // round meta
   const [title, setTitle] = useState('')
@@ -115,11 +115,14 @@ function IndexPage() {
     if (Array.isArray(currentTemplate?.durationDaysOptions) && currentTemplate.durationDaysOptions.length) {
       return currentTemplate.durationDaysOptions
     }
+    // Fallback: 1–6 days + 7 (1 week)
     return [1,2,3,4,5,6,7]
   }, [currentTemplate])
 
   const [durationDays, setDurationDays] = useState(templateDayOptions[0] || 1)
-  useEffect(() => { setDurationDays(templateDayOptions[0] || 1) }, [templateDayOptions])
+  useEffect(() => {
+    setDurationDays(templateDayOptions[0] || 1)
+  }, [templateDayOptions])
 
   const durationSecs = useMemo(() => BigInt(Math.max(1, Number(durationDays)) * 24 * 60 * 60), [durationDays])
 
@@ -140,14 +143,14 @@ function IndexPage() {
     return found.cls
   }, [bgKey])
 
-  /* ---------- Mini Wallet support ---------- */
+  /* ---------- Mini Wallet support (Warpcast) ---------- */
   const miniProvRef = useRef(null)
   const getEip1193 = useCallback(async () => {
-    // Injected wallet first
+    // Injected wallet first (OK on desktop/mobile browsers)
     if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
     // Cached mini provider
     if (miniProvRef.current) return miniProvRef.current
-    // Detect Warpcast
+    // Detect Warpcast (Farcaster Mini App)
     const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
     if (!inWarpcast) return null
     try {
@@ -182,10 +185,12 @@ function IndexPage() {
           const p = new ethers.BrowserProvider(mini)
           const net = await p.getNetwork().catch(() => null)
           if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-        } else {
-          if (!cancelled) setIsOnBase(true)
+        } else if (!cancelled) {
+          setIsOnBase(true)
         }
-      } catch { if (!cancelled) setIsOnBase(true) }
+      } catch {
+        if (!cancelled) setIsOnBase(true)
+      }
     })()
     return () => { cancelled = true; unsub() }
   }, [getEip1193])
@@ -264,6 +269,7 @@ function IndexPage() {
     if (!t) return
     setTitle(t.name || '')
     setTheme(currentCategory.name || '')
+    // duration from template (days)
     if (Array.isArray(t.durationDaysOptions) && t.durationDaysOptions.length) {
       setDurationDays(Number(t.durationDaysOptions[0]))
     } else {
@@ -692,7 +698,7 @@ function IndexPage() {
           </Card>
         </div>
 
-        {/* Fee breakdown */}
+        {/* Fee breakdown + ShareBar */}
         <Card className="bg-slate-900/70 border border-slate-700">
           <CardHeader className="border-b border-slate-700">
             <h3 className="text-lg font-bold">Fee Breakdown</h3>
@@ -710,7 +716,7 @@ function IndexPage() {
               <b>Gas:</b> Network fee paid to miners/validators. Varies with network congestion.
             </p>
 
-            {/* 🔗 Simple Share bar for the homepage */}
+            {/* 🔗 Simple Share bar for the homepage (safe, plain values) */}
             <div className="mt-4">
               <ShareBar
                 url={pageUrl}
