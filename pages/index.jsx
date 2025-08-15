@@ -1,7 +1,7 @@
 // pages/index.jsx
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -19,36 +19,20 @@ import { useToast } from '@/components/Toast'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { categories as presetCategories } from '@/data/templates'
 
+// ✅ unified wallet + tx helpers (Mini App + injected)
+import { getBrowserProvider, ensureBaseChain, BASE_RPC } from '@/lib/wallet'
+import { createPool1Tx } from '@/lib/tx'
+
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
-/* ========== Pools Contract ========== */
-const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
-const BASE_CHAIN_ID = 8453n
-const BASE_CHAIN_ID_HEX = '0x2105'
-
+/* ========== Read-only Pools Contract bits ========== */
 const POOLS_ADDR =
-  process.env.NEXT_PUBLIC_POOLS_ADDRESS ||
-  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // replace with your deploy
+  process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
 
 const POOLS_ABI = [
   { inputs: [], name: 'FEE_BPS', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'BPS_DENOMINATOR', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
-  {
-    inputs: [
-      { type: 'string', name: 'name' },
-      { type: 'string', name: 'theme' },
-      { type: 'string[]', name: 'parts' },
-      { type: 'string', name: 'word' },
-      { type: 'string', name: 'username' },
-      { type: 'uint256', name: 'feeBase' },
-      { type: 'uint256', name: 'duration' },
-      { type: 'uint8', name: 'blankIndex' }
-    ],
-    name: 'createPool1',
-    outputs: [],
-    stateMutability: 'payable',
-    type: 'function'
-  }
 ]
 
 /* ========== Helpers ========== */
@@ -67,7 +51,8 @@ const BG_CHOICES = [
   { key: 'forest',       label: 'Forest',        cls: 'from-emerald-700 via-teal-700 to-slate-900' },
 ]
 
-/* ========== Page ========== */
+const BASE_CHAIN_ID = 8453n
+
 function IndexPage() {
   useMiniAppReady()
   const { addToast } = useToast()
@@ -83,7 +68,7 @@ function IndexPage() {
   const [showConfetti, setShowConfetti] = useState(false)
   const [loading, setLoading] = useState(false)
 
-  // templates pickers
+  // template pickers
   const [catIdx, setCatIdx] = useState(0)
   const [tplIdx, setTplIdx] = useState(0)
   const currentCategory = presetCategories[catIdx] || { name: 'Custom', templates: [] }
@@ -110,23 +95,19 @@ function IndexPage() {
     try { return ethers.parseEther((feeEth || '0').trim()) } catch { return 0n }
   }, [feeEth])
 
-  // duration (from template days)
+  // duration (days → secs)
   const templateDayOptions = useMemo(() => {
     if (Array.isArray(currentTemplate?.durationDaysOptions) && currentTemplate.durationDaysOptions.length) {
       return currentTemplate.durationDaysOptions
     }
-    // Fallback: 1–6 days + 7 (1 week)
     return [1,2,3,4,5,6,7]
   }, [currentTemplate])
 
   const [durationDays, setDurationDays] = useState(templateDayOptions[0] || 1)
-  useEffect(() => {
-    setDurationDays(templateDayOptions[0] || 1)
-  }, [templateDayOptions])
-
+  useEffect(() => { setDurationDays(templateDayOptions[0] || 1) }, [templateDayOptions])
   const durationSecs = useMemo(() => BigInt(Math.max(1, Number(durationDays)) * 24 * 60 * 60), [durationDays])
 
-  // usd display (estimate)
+  // usd display
   const [usd, setUsd] = useState(null)
 
   // preview words map (show creator word in chosen blank)
@@ -143,58 +124,22 @@ function IndexPage() {
     return found.cls
   }, [bgKey])
 
-  /* ---------- Mini Wallet support (Warpcast) ---------- */
-  const miniProvRef = useRef(null)
-  const getEip1193 = useCallback(async () => {
-    // Injected wallet first (OK on desktop/mobile browsers)
-    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
-    // Cached mini provider
-    if (miniProvRef.current) return miniProvRef.current
-    // Detect Warpcast (Farcaster Mini App)
-    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
-    if (!inWarpcast) return null
-    try {
-      const mod = await import('@farcaster/miniapp-sdk')
-      const prov = await mod.sdk.wallet.getEthereumProvider()
-      miniProvRef.current = prov
-      return prov
-    } catch {
-      return null
-    }
-  }, [])
-
-  /* ---------- chain observe & fee bps ---------- */
+  /* ---------- chain observe via shared provider ---------- */
   useEffect(() => {
     let cancelled = false
-    let unsub = () => {}
     ;(async () => {
       try {
-        const injected = (typeof window !== 'undefined' && window.ethereum) || null
-        if (injected) {
-          const provider = new ethers.BrowserProvider(injected)
+        const provider = await getBrowserProvider().catch(() => null)
+        if (provider) {
           const net = await provider.getNetwork().catch(() => null)
           if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-          const onChain = () => location.reload()
-          injected.on?.('chainChanged', onChain)
-          unsub = () => injected.removeListener?.('chainChanged', onChain)
-          return
-        }
-        // else: try mini app provider
-        const mini = await getEip1193()
-        if (mini) {
-          const p = new ethers.BrowserProvider(mini)
-          const net = await p.getNetwork().catch(() => null)
-          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-        } else if (!cancelled) {
-          setIsOnBase(true)
-        }
-      } catch {
-        if (!cancelled) setIsOnBase(true)
-      }
+        } else if (!cancelled) setIsOnBase(true)
+      } catch { if (!cancelled) setIsOnBase(true) }
     })()
-    return () => { cancelled = true; unsub() }
-  }, [getEip1193])
+    return () => { cancelled = true }
+  }, [])
 
+  /* ---------- read fee bps (read-only RPC) ---------- */
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -235,33 +180,16 @@ function IndexPage() {
   }, [blanksCount])
 
   const switchToBase = useCallback(async () => {
-    const eip = await getEip1193()
-    if (!eip) { addToast({ type: 'error', title: 'No Wallet', message: 'No wallet provider found.' }); return }
     try {
-      await eip.request?.({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] })
+      const provider = await getBrowserProvider()
+      await ensureBaseChain(provider) // unifies switch/add per Mini App docs
       setIsOnBase(true)
     } catch (e) {
-      if (e?.code === 4902) {
-        try {
-          await eip.request?.({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: BASE_CHAIN_ID_HEX,
-              chainName: 'Base',
-              rpcUrls: [BASE_RPC],
-              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-              blockExplorerUrls: ['https://basescan.org']
-            }]
-          })
-          setIsOnBase(true)
-        } catch {
-          addToast({ type: 'error', title: 'Switch Failed', message: 'Could not add/switch to Base.' })
-        }
-      } else {
-        addToast({ type: 'error', title: 'Switch Failed', message: e?.message || 'Could not switch to Base.' })
-      }
+      console.error(e)
+      const msg = e?.shortMessage || e?.reason || e?.message || 'Could not switch to Base.'
+      addToast({ type: 'error', title: 'Switch Failed', message: msg })
     }
-  }, [addToast, getEip1193])
+  }, [addToast])
 
   /* ---------- apply template ---------- */
   const applyTemplate = useCallback(() => {
@@ -269,7 +197,6 @@ function IndexPage() {
     if (!t) return
     setTitle(t.name || '')
     setTheme(currentCategory.name || '')
-    // duration from template (days)
     if (Array.isArray(t.durationDaysOptions) && t.durationDaysOptions.length) {
       setDurationDays(Number(t.durationDaysOptions[0]))
     } else {
@@ -277,7 +204,7 @@ function IndexPage() {
     }
   }, [currentTemplate, currentCategory])
 
-  /* ---------- validation & tx ---------- */
+  /* ---------- validation & tx (shared tx lib) ---------- */
   const validate = () => {
     if (!POOLS_ADDR) { addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_POOLS_ADDRESS.' }); return false }
     if (!isConnected) { addToast({ type: 'error', title: 'Wallet Required', message: 'Connect your wallet to create a round.' }); return false }
@@ -296,31 +223,18 @@ function IndexPage() {
     if (!validate()) return
     try {
       setLoading(true)
-      const eip = await getEip1193()
-      if (!eip) throw new Error('No wallet provider found')
-      await eip.request?.({ method: 'eth_requestAccounts' })
 
-      const provider = new ethers.BrowserProvider(eip)
-      const net = await provider.getNetwork()
-      if (net?.chainId !== BASE_CHAIN_ID) await switchToBase()
-
-      const signer = await provider.getSigner()
-      const ct = new ethers.Contract(POOLS_ADDR, POOLS_ABI, signer)
-      const word = sanitizeOneWord(creatorWord)
-      const value = feeWei
-
-      const tx = await ct.createPool1(
-        String(title).slice(0, 128),
-        String(theme).slice(0, 128),
+      // ✅ Use shared tx helper (handles Mini App provider, account request, Base chain, preflight)
+      await createPool1Tx({
+        title: String(title).slice(0, 128),
+        theme: String(theme).slice(0, 128),
         parts,
-        word,
-        String(username || '').slice(0, 64),
-        value,
-        durationSecs,                   // seconds (days * 24h)
-        Number(blankIndex) & 0xff,
-        { value }
-      )
-      await tx.wait()
+        word: sanitizeOneWord(creatorWord),
+        username: String(username || '').slice(0, 64),
+        feeBaseWei: feeWei,
+        durationSecs,
+        blankIndex: Number(blankIndex) & 0xff,
+      })
 
       addToast({ type: 'success', title: 'Round Created!', message: 'Your Pool 1 round is live.' })
       setShowConfetti(true)
@@ -716,7 +630,6 @@ function IndexPage() {
               <b>Gas:</b> Network fee paid to miners/validators. Varies with network congestion.
             </p>
 
-            {/* 🔗 Simple Share bar for the homepage (safe, plain values) */}
             <div className="mt-4">
               <ShareBar
                 url={pageUrl}
