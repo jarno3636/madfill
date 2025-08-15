@@ -1,4 +1,3 @@
-// components/Layout.jsx
 'use client'
 
 import Head from 'next/head'
@@ -10,6 +9,9 @@ import { useRouter } from 'next/router'
 // Wallet buttons loaded client-side only
 const MiniConnectButton = dynamic(() => import('./MiniConnectButton'), { ssr: false })
 const WalletConnectButton = dynamic(() => import('./WalletConnectButton'), { ssr: false })
+
+// Mini App SDK "ready" ping (client-only)
+const AppReady = dynamic(() => import('./AppReady'), { ssr: false })
 
 function NavLink({ href, children, onClick }) {
   const router = useRouter()
@@ -47,6 +49,9 @@ export default function Layout({ children }) {
 
   return (
     <div className="bg-gradient-to-br from-slate-950 via-indigo-900 to-purple-950 min-h-screen text-white flex flex-col">
+      {/* Farcaster Mini App: signal UI is ready (no-op on web) */}
+      <AppReady />
+
       <Head>
         <meta name="fc:frame" content="vNext" />
         <meta property="og:title" content="MadFill — Fill the blank, win the pot." />
@@ -56,6 +61,10 @@ export default function Layout({ children }) {
         <meta name="twitter:card" content="summary_large_image" />
         <link rel="icon" href="/favicon.ico" />
         <link rel="canonical" href="https://madfill.vercel.app" />
+
+        {/* Helpful mobile / mini-app meta tweaks */}
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="theme-color" content="#0b1020" />
       </Head>
 
       <nav className="sticky top-0 z-40 backdrop-blur bg-slate-950/90 border-b border-indigo-700">
