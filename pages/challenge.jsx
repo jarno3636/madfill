@@ -580,10 +580,14 @@ export default function ChallengePage() {
             {String(status).toLowerCase().includes('submitted') && (
               <div className="text-sm mt-4 flex items-center justify-between">
                 <ShareBar
-                  url={`${origin}/vote`}
-                  text={shareText}
-                  embedUrl={`${origin}/vote`}
-                  small
+                  url={absoluteUrl(`/round/${roundId}`)}     // a real URL for THIS page
+                  title={`🧠 Play MadFill Round #${roundId}!`}
+                  theme={round?.theme || 'MadFill'}
+                  templateName={round?.name || `Round #${roundId}`}
+                  feeEth={round?.feeBase || '0.0005'}        // string
+                  durationMins={round?.minutesLeft || 60}    // number
+                  hashtags={['MadFill','Base','Farcaster']}
+                  embed="/og/cover.PNG"
                 />
               </div>
             )}
