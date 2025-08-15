@@ -1,7 +1,7 @@
 // pages/index.jsx
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -12,6 +12,7 @@ import SEO from '@/components/SEO'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import StyledCard from '@/components/StyledCard'
+import ShareBar from '@/components/ShareBar'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useMiniWallet } from '@/hooks/useMiniWallet'
 import { useToast } from '@/components/Toast'
@@ -87,7 +88,7 @@ function IndexPage() {
   const [tplIdx, setTplIdx] = useState(0)
   const currentCategory = presetCategories[catIdx] || { name: 'Custom', templates: [] }
   const currentTemplates = currentCategory.templates || []
-  const currentTemplate = currentTemplates[tplIdx] || null
+  the currentTemplate = currentTemplates[tplIdx] || null
 
   // round meta
   const [title, setTitle] = useState('')
@@ -114,14 +115,11 @@ function IndexPage() {
     if (Array.isArray(currentTemplate?.durationDaysOptions) && currentTemplate.durationDaysOptions.length) {
       return currentTemplate.durationDaysOptions
     }
-    // Fallback: 1–6 days + 7 (1 week)
     return [1,2,3,4,5,6,7]
   }, [currentTemplate])
 
   const [durationDays, setDurationDays] = useState(templateDayOptions[0] || 1)
-  useEffect(() => {
-    setDurationDays(templateDayOptions[0] || 1)
-  }, [templateDayOptions])
+  useEffect(() => { setDurationDays(templateDayOptions[0] || 1) }, [templateDayOptions])
 
   const durationSecs = useMemo(() => BigInt(Math.max(1, Number(durationDays)) * 24 * 60 * 60), [durationDays])
 
@@ -142,24 +140,55 @@ function IndexPage() {
     return found.cls
   }, [bgKey])
 
+  /* ---------- Mini Wallet support ---------- */
+  const miniProvRef = useRef(null)
+  const getEip1193 = useCallback(async () => {
+    // Injected wallet first
+    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
+    // Cached mini provider
+    if (miniProvRef.current) return miniProvRef.current
+    // Detect Warpcast
+    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
+    if (!inWarpcast) return null
+    try {
+      const mod = await import('@farcaster/miniapp-sdk')
+      const prov = await mod.sdk.wallet.getEthereumProvider()
+      miniProvRef.current = prov
+      return prov
+    } catch {
+      return null
+    }
+  }, [])
+
   /* ---------- chain observe & fee bps ---------- */
   useEffect(() => {
     let cancelled = false
+    let unsub = () => {}
     ;(async () => {
       try {
-        const prov = (typeof window !== 'undefined' && window.ethereum) || null
-        if (prov) {
-          const provider = new ethers.BrowserProvider(prov)
+        const injected = (typeof window !== 'undefined' && window.ethereum) || null
+        if (injected) {
+          const provider = new ethers.BrowserProvider(injected)
           const net = await provider.getNetwork().catch(() => null)
           if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
           const onChain = () => location.reload()
-          prov.on?.('chainChanged', onChain)
-          return () => prov.removeListener?.('chainChanged', onChain)
-        } else if (!cancelled) setIsOnBase(true)
+          injected.on?.('chainChanged', onChain)
+          unsub = () => injected.removeListener?.('chainChanged', onChain)
+          return
+        }
+        // else: try mini app provider
+        const mini = await getEip1193()
+        if (mini) {
+          const p = new ethers.BrowserProvider(mini)
+          const net = await p.getNetwork().catch(() => null)
+          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
+        } else {
+          if (!cancelled) setIsOnBase(true)
+        }
       } catch { if (!cancelled) setIsOnBase(true) }
     })()
-    return () => { cancelled = true }
-  }, [])
+    return () => { cancelled = true; unsub() }
+  }, [getEip1193])
 
   useEffect(() => {
     let cancelled = false
@@ -201,15 +230,15 @@ function IndexPage() {
   }, [blanksCount])
 
   const switchToBase = useCallback(async () => {
-    const prov = (typeof window !== 'undefined' && window.ethereum) || null
-    if (!prov) { addToast({ type: 'error', title: 'No Wallet', message: 'No wallet provider found.' }); return }
+    const eip = await getEip1193()
+    if (!eip) { addToast({ type: 'error', title: 'No Wallet', message: 'No wallet provider found.' }); return }
     try {
-      await prov.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] })
+      await eip.request?.({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] })
       setIsOnBase(true)
     } catch (e) {
       if (e?.code === 4902) {
         try {
-          await prov.request({
+          await eip.request?.({
             method: 'wallet_addEthereumChain',
             params: [{
               chainId: BASE_CHAIN_ID_HEX,
@@ -227,7 +256,7 @@ function IndexPage() {
         addToast({ type: 'error', title: 'Switch Failed', message: e?.message || 'Could not switch to Base.' })
       }
     }
-  }, [addToast])
+  }, [addToast, getEip1193])
 
   /* ---------- apply template ---------- */
   const applyTemplate = useCallback(() => {
@@ -235,7 +264,6 @@ function IndexPage() {
     if (!t) return
     setTitle(t.name || '')
     setTheme(currentCategory.name || '')
-    // duration from template (days)
     if (Array.isArray(t.durationDaysOptions) && t.durationDaysOptions.length) {
       setDurationDays(Number(t.durationDaysOptions[0]))
     } else {
@@ -262,15 +290,15 @@ function IndexPage() {
     if (!validate()) return
     try {
       setLoading(true)
-      const prov = (typeof window !== 'undefined' && window.ethereum) || null
-      if (!prov) throw new Error('No wallet provider found')
-      await prov.request?.({ method: 'eth_requestAccounts' })
+      const eip = await getEip1193()
+      if (!eip) throw new Error('No wallet provider found')
+      await eip.request?.({ method: 'eth_requestAccounts' })
 
-      const browserProvider = new ethers.BrowserProvider(prov)
-      const net = await browserProvider.getNetwork()
+      const provider = new ethers.BrowserProvider(eip)
+      const net = await provider.getNetwork()
       if (net?.chainId !== BASE_CHAIN_ID) await switchToBase()
 
-      const signer = await browserProvider.getSigner()
+      const signer = await provider.getSigner()
       const ct = new ethers.Contract(POOLS_ADDR, POOLS_ABI, signer)
       const word = sanitizeOneWord(creatorWord)
       const value = feeWei
@@ -339,9 +367,8 @@ function IndexPage() {
 
       {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
-      {/* Hero (centered, no overflow) */}
+      {/* Hero */}
       <section className="mx-auto max-w-6xl px-4 pt-8 md:pt-12">
-        {/* What is MadFill */}
         <div className="rounded-2xl bg-gradient-to-br from-slate-900 via-indigo-900/70 to-purple-900/70 border border-indigo-700 p-6 md:p-8 shadow-xl">
           <div className="grid gap-6 md:grid-cols-3">
             <div className="md:col-span-2">
@@ -375,7 +402,7 @@ function IndexPage() {
         </div>
       </section>
 
-      {/* Builder (centered grid) */}
+      {/* Builder */}
       <main className="mx-auto max-w-6xl px-4 py-8 space-y-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left: Setup */}
@@ -415,7 +442,7 @@ function IndexPage() {
                 Use This Template
               </Button>
 
-              {/* Title / Theme (pre-filled, editable if you want) */}
+              {/* Title / Theme */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <label className="text-sm text-slate-300 md:col-span-2">
                   Title
@@ -464,7 +491,7 @@ function IndexPage() {
                 </label>
               </div>
 
-              {/* Which blank to fill (from template parts) */}
+              {/* Which blank to fill */}
               <div className="space-y-2">
                 <div className="text-sm text-slate-300">Choose which blank you’ll fill</div>
                 {blanksCount === 0 ? (
@@ -503,7 +530,7 @@ function IndexPage() {
                 )}
               </div>
 
-              {/* Fee selector — single line, burn inline */}
+              {/* Fee selector */}
               <div className="space-y-2">
                 <div className="text-sm text-slate-300">Entry Fee (per player)</div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -542,7 +569,7 @@ function IndexPage() {
                 </div>
               </div>
 
-              {/* Duration — from template days */}
+              {/* Duration */}
               <div className="space-y-2">
                 <div className="text-sm text-slate-300">Duration</div>
                 <div className="flex items-center gap-2">
@@ -665,7 +692,7 @@ function IndexPage() {
           </Card>
         </div>
 
-        {/* Fee breakdown card near bottom */}
+        {/* Fee breakdown */}
         <Card className="bg-slate-900/70 border border-slate-700">
           <CardHeader className="border-b border-slate-700">
             <h3 className="text-lg font-bold">Fee Breakdown</h3>
@@ -682,6 +709,20 @@ function IndexPage() {
             <p>
               <b>Gas:</b> Network fee paid to miners/validators. Varies with network congestion.
             </p>
+
+            {/* 🔗 Simple Share bar for the homepage */}
+            <div className="mt-4">
+              <ShareBar
+                url={pageUrl}
+                title="🧠 I’m creating MadFill rounds on Base — come play!"
+                theme="MadFill"
+                templateName={title || 'Create a Round'}
+                feeEth={feeEth}
+                durationMins={Number(durationDays) * 24 * 60}
+                hashtags={['MadFill','Base','Farcaster']}
+                embed="/og/cover.PNG"
+              />
+            </div>
           </CardContent>
         </Card>
       </main>
