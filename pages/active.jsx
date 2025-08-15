@@ -415,11 +415,17 @@ export default function ActivePools() {
                     {/* Share active round — use OG image so Warpcast shows an embed */}
                     <div className="pt-1">
                       <ShareBar
-                        url={rUrl}
-                        text={shareTxt}
-                        og={{ screen: 'round', roundId: String(r.id) }}
-                        small
-                      />
+                        url={`/pool/${poolId}`}                 // or absolute URL
+                        title={title}                           // round title
+                        theme={theme}                           // category/theme
+                        templateName={template?.name}
+                        feeEth={feeEth}                         // string like "0.0005"
+                        durationMins={durationMins}             // number
+                        word={creatorWord}                      // their word
+                        blankIndex={blankIndex}                 // 0-based
+                        hashtags={['MadFill','Base','Farcaster']}
+                        embed="/og/cover.PNG"                   // optional: your OG image
+                       />
                     </div>
 
                     <button
