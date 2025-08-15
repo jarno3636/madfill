@@ -1,144 +1,104 @@
 // components/ShareBar.jsx
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import {
-  buildShareUrls,
-  buildWarpcastCompose,
-  openWarpcastComposeUrl,
+  buildXIntentUrl,
+  openWarpcastCompose,
   nativeShare,
   copyToClipboard,
+  safeAbsoluteUrl,
 } from '@/lib/share'
 
 /**
- * SSR-safe ShareBar:
- * - Dynamically loads `react-share` on client only.
- * - "Cast" button opens Warpcast composer via Farcaster Mini App SDK when available.
+ * Minimal, reliable ShareBar that:
+ * - Opens Warpcast compose in-app via the Mini App SDK when available
+ * - Falls back to web compose in a popup (no download page redirect)
+ * - Provides X intent + native share + copy fallback
+ *
+ * Props:
+ *   url: string (can be relative)
+ *   text: string (cast body / tweet text; URL will be appended if not present)
+ *   embeds: string[] (absolute/relative URLs to embed in Warpcast)
  */
 export default function ShareBar({
-  url,
-  title = 'Check out MadFill!',
-  text,                 // optional: custom text for X/Warpcast; falls back to title
-  embeds = [],          // optional: array of URLs to embed on Warpcast
-  hashtags = ['MadFill', 'Base', 'Farcaster'],
+  url = '/',
+  text = 'Fill the blank with me on MadFill!',
+  embeds = [],
   className = '',
-  onShared,             // optional callback after a share/copy attempt
+  onShared, // optional callback
 }) {
-  const shareText = text || title
-  const { twitter, warpcast } = useMemo(
-    () => buildShareUrls({ url, text: shareText, embeds }),
-    [url, shareText, embeds]
-  )
+  const shareUrl = useMemo(() => safeAbsoluteUrl(url), [url])
 
-  // Load react-share only on client
-  const [lib, setLib] = useState(null)
-  useEffect(() => {
-    let mounted = true
-    ;(async () => {
-      try {
-        const mod = await import('react-share')
-        if (mounted) setLib(mod)
-      } catch {
-        // ignore; fallback UI remains
-      }
-    })()
-    return () => { mounted = false }
-  }, [])
-
-  const Buttons = useMemo(() => {
-    if (!lib) return null
-    const {
-      FacebookShareButton,
-      TwitterShareButton,
-      TelegramShareButton,
-      FacebookIcon,
-      TwitterIcon,
-      TelegramIcon,
-    } = lib
-    return {
-      FacebookShareButton,
-      TwitterShareButton,
-      TelegramShareButton,
-      FacebookIcon,
-      TwitterIcon,
-      TelegramIcon,
+  async function handleCast() {
+    const ok = await openWarpcastCompose({ text, url: shareUrl, embeds })
+    if (!ok) {
+      // As a last resort, try native share or copy
+      const didNative = await nativeShare({ title: 'MadFill', text, url: shareUrl })
+      if (!didNative) await copyToClipboard(`${text} ${shareUrl}`.trim())
     }
-  }, [lib])
-
-  const handleNativeShareOrCopy = async () => {
-    const opened = await nativeShare({ title: shareText, url })
-    if (!opened) {
-      const ok = await copyToClipboard(url)
-      if (ok) {
-        // replace with your toast system if available
-        console.info('Link copied to clipboard')
-      }
-    }
-    onShared?.('native_or_copy')
+    onShared?.('warpcast')
   }
 
-  const handleCast = async () => {
-    const composeUrl = buildWarpcastCompose({ text: shareText, url, embeds })
-    await openWarpcastComposeUrl(composeUrl)
-    onShared?.('warpcast')
+  function handleX() {
+    const href = buildXIntentUrl({ text, url: shareUrl })
+    // open in popup
+    window?.open?.(href, '_blank', 'noopener,noreferrer,width=680,height=760')
+    onShared?.('x')
+  }
+
+  async function handleCopy() {
+    const ok = await copyToClipboard(shareUrl)
+    if (!ok) {
+      // soft fallback: open the URL so users can copy from the bar
+      window?.open?.(shareUrl, '_blank', 'noopener,noreferrer')
+    }
+    onShared?.('copy')
+  }
+
+  async function handleNative() {
+    const ok = await nativeShare({ title: 'MadFill', text, url: shareUrl })
+    if (!ok) await handleCopy()
   }
 
   return (
     <div className={`flex items-center gap-2 ${className}`}>
-      <span className="text-sm text-purple-200 mr-2">Share:</span>
+      <span className="text-sm text-purple-200 mr-1">Share:</span>
 
-      {/* X / Twitter */}
-      {Buttons ? (
-        <Buttons.TwitterShareButton
-          url={url}
-          title={shareText}
-          hashtags={hashtags}
-          className="hover:scale-110 transition-transform"
-        >
-          <Buttons.TwitterIcon size={32} round alt="Share on X" />
-        </Buttons.TwitterShareButton>
-      ) : null}
-
-      {/* Facebook */}
-      {Buttons ? (
-        <Buttons.FacebookShareButton
-          url={url}
-          quote={shareText}
-          className="hover:scale-110 transition-transform"
-        >
-          <Buttons.FacebookIcon size={32} round alt="Share on Facebook" />
-        </Buttons.FacebookShareButton>
-      ) : null}
-
-      {/* Telegram */}
-      {Buttons ? (
-        <Buttons.TelegramShareButton
-          url={url}
-          title={shareText}
-          className="hover:scale-110 transition-transform"
-        >
-          <Buttons.TelegramIcon size={32} round alt="Share on Telegram" />
-        </Buttons.TelegramShareButton>
-      ) : null}
-
-      {/* Warpcast (Farcaster) — Mini App–aware */}
+      {/* Cast (Warpcast) */}
       <button
         onClick={handleCast}
-        className="inline-flex items-center gap-2 rounded-full bg-violet-500 hover:bg-violet-400 text-black px-3 py-1.5 transition"
-        title="Cast on Farcaster"
-        aria-label="Cast on Farcaster"
+        className="px-3 h-9 rounded-full bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium transition-all"
+        title="Cast on Warpcast"
       >
-        {/* Simple Warpcast glyph (W) */}
-        <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-black/20 font-bold">W</span>
-        <span className="text-sm font-semibold">Cast</span>
+        ✨ Cast
       </button>
 
-      {/* Native share / copy fallback */}
+      {/* X / Twitter */}
       <button
-        onClick={handleNativeShareOrCopy}
-        className="w-8 h-8 rounded-full bg-purple-600 hover:bg-purple-700 flex items-center justify-center text-white hover:scale-110 transition-all"
-        title="Share or Copy Link"
-        aria-label="Share or copy link"
+        onClick={handleX}
+        className="px-3 h-9 rounded-full bg-slate-800 hover:bg-slate-700 text-white text-sm font-medium transition-all"
+        title="Share on X"
+      >
+        𝕏
+      </button>
+
+      {/* Native share (mobile) */}
+      <button
+        onClick={handleNative}
+        className="w-9 h-9 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white transition-all"
+        title="Share"
+        aria-label="Share"
+      >
+        📤
+      </button>
+
+      {/* Copy fallback */}
+      <button
+        onClick={handleCopy}
+        className="w-9 h-9 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white transition-all"
+        title="Copy link"
+        aria-label="Copy link"
       >
         📋
       </button>
