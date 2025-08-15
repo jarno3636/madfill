@@ -3,102 +3,70 @@
 
 import { useMemo } from 'react'
 import {
-  buildXIntentUrl,
-  openWarpcastCompose,
-  nativeShare,
-  copyToClipboard,
-  safeAbsoluteUrl,
+  absoluteUrl,
+  openFarcasterCompose,
+  openXIntent,
+  tryNativeShareOrCopy,
 } from '@/lib/share'
 
-/**
- * Minimal, reliable ShareBar that:
- * - Opens Warpcast compose in-app via the Mini App SDK when available
- * - Falls back to web compose in a popup (no download page redirect)
- * - Provides X intent + native share + copy fallback
- *
- * Props:
- *   url: string (can be relative)
- *   text: string (cast body / tweet text; URL will be appended if not present)
- *   embeds: string[] (absolute/relative URLs to embed in Warpcast)
- */
 export default function ShareBar({
-  url = '/',
+  url,
   text = 'Fill the blank with me on MadFill!',
-  embeds = [],
+  embeds = [],          // e.g. OG image or pool image(s)
   className = '',
-  onShared, // optional callback
 }) {
-  const shareUrl = useMemo(() => safeAbsoluteUrl(url), [url])
+  const shareUrl = useMemo(() => absoluteUrl(url || '/'), [url])
+  const castText = useMemo(() => {
+    // short, catchy default
+    return text || 'Fill the blank with me on MadFill!'
+  }, [text])
 
-  async function handleCast() {
-    const ok = await openWarpcastCompose({ text, url: shareUrl, embeds })
+  const onCast = async () => {
+    await openFarcasterCompose({ text: castText, url: shareUrl, embeds })
+  }
+
+  const onX = () => {
+    openXIntent({ text: castText, url: shareUrl })
+  }
+
+  const onShareCopy = async () => {
+    const ok = await tryNativeShareOrCopy({ title: 'MadFill', text: castText, url: shareUrl })
     if (!ok) {
-      // As a last resort, try native share or copy
-      const didNative = await nativeShare({ title: 'MadFill', text, url: shareUrl })
-      if (!didNative) await copyToClipboard(`${text} ${shareUrl}`.trim())
+      // optional: toast UI
+      console.info('Link copied (or attempted)!')
     }
-    onShared?.('warpcast')
-  }
-
-  function handleX() {
-    const href = buildXIntentUrl({ text, url: shareUrl })
-    // open in popup
-    window?.open?.(href, '_blank', 'noopener,noreferrer,width=680,height=760')
-    onShared?.('x')
-  }
-
-  async function handleCopy() {
-    const ok = await copyToClipboard(shareUrl)
-    if (!ok) {
-      // soft fallback: open the URL so users can copy from the bar
-      window?.open?.(shareUrl, '_blank', 'noopener,noreferrer')
-    }
-    onShared?.('copy')
-  }
-
-  async function handleNative() {
-    const ok = await nativeShare({ title: 'MadFill', text, url: shareUrl })
-    if (!ok) await handleCopy()
   }
 
   return (
     <div className={`flex items-center gap-2 ${className}`}>
-      <span className="text-sm text-purple-200 mr-1">Share:</span>
+      <span className="text-sm text-purple-200 mr-2">Share:</span>
 
-      {/* Cast (Warpcast) */}
+      {/* Cast (Farcaster) */}
       <button
-        onClick={handleCast}
-        className="px-3 h-9 rounded-full bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium transition-all"
-        title="Cast on Warpcast"
+        onClick={onCast}
+        className="px-3 h-8 rounded-full bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium hover:scale-[1.02] transition-all"
+        title="Cast on Farcaster"
+        aria-label="Cast on Farcaster"
       >
-        ✨ Cast
+        Cast
       </button>
 
       {/* X / Twitter */}
       <button
-        onClick={handleX}
-        className="px-3 h-9 rounded-full bg-slate-800 hover:bg-slate-700 text-white text-sm font-medium transition-all"
+        onClick={onX}
+        className="w-8 h-8 rounded-full bg-slate-700 hover:bg-slate-600 text-white text-base flex items-center justify-center hover:scale-110 transition-all"
         title="Share on X"
+        aria-label="Share on X"
       >
         𝕏
       </button>
 
-      {/* Native share (mobile) */}
+      {/* Native Share / Copy */}
       <button
-        onClick={handleNative}
-        className="w-9 h-9 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white transition-all"
-        title="Share"
-        aria-label="Share"
-      >
-        📤
-      </button>
-
-      {/* Copy fallback */}
-      <button
-        onClick={handleCopy}
-        className="w-9 h-9 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white transition-all"
-        title="Copy link"
-        aria-label="Copy link"
+        onClick={onShareCopy}
+        className="w-8 h-8 rounded-full bg-slate-700 hover:bg-slate-600 text-white flex items-center justify-center hover:scale-110 transition-all"
+        title="Share or Copy link"
+        aria-label="Share or copy link"
       >
         📋
       </button>
