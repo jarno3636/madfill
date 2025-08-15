@@ -344,6 +344,16 @@ export default function ChallengePage() {
       // Slight buffer to avoid rounding reverts
       const value = (feeBase * 1005n) / 1000n
 
+      // Preflight to surface clear reverts before sending tx
+      await ct.createPool2.staticCall(
+        BigInt(roundId),
+        encodedWord,
+        (username || '').slice(0, 32),
+        feeBase,
+        duration,
+        { value }
+      )
+
       const tx = await ct.createPool2(
         BigInt(roundId),
         encodedWord,
@@ -365,16 +375,6 @@ export default function ChallengePage() {
       setBusy(false)
     }
   }
-
-  // share text after success
-  const origin =
-    typeof window !== 'undefined'
-      ? window.location.origin
-      : 'https://madfill.vercel.app'
-  const shareText = useMemo(() => {
-    const link = `${origin}/vote`
-    return `I just submitted a challenger for Round #${roundId}! Vote here: ${link}`
-  }, [roundId, origin])
 
   // ---------- SEO / Mini App ----------
   const pageUrl = absoluteUrl('/challenge')
@@ -513,7 +513,7 @@ export default function ChallengePage() {
                       onChange={(e) => setWord(e.target.value)}
                       onBlur={() => setWord((w) => w.trim())}
                       placeholder="e.g., neon"
-                      className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                      className="mt-1 w_FULL rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                     />
                     {word && wordError && (
                       <div className="text-xs text-amber-300 mt-1">{wordError}</div>
@@ -548,7 +548,7 @@ export default function ChallengePage() {
                         <option value={5 * 24 * 60 * 60}>5 days</option>
                         <option value={7 * 24 * 60 * 60}>7 days</option>
                       </select>
-                      <div className="text-[11px] text-slate-400 mt-1">How long the vote stays open.</div>
+                      <div className="text_[11px] text-slate-400 mt-1">How long the vote stays open.</div>
                     </label>
                   </div>
                 </div>
@@ -577,17 +577,18 @@ export default function ChallengePage() {
 
             {status && <div className="text-sm text-yellow-300">{status}</div>}
 
+            {/* ✅ Safe ShareBar after submit (no undefined round refs) */}
             {String(status).toLowerCase().includes('submitted') && (
-              <div className="text-sm mt-4 flex items-center justify-between">
+              <div className="text-sm mt-4">
                 <ShareBar
-                  url={absoluteUrl(`/round/${roundId}`)}     // a real URL for THIS page
-                  title={`🧠 Play MadFill Round #${roundId}!`}
-                  theme={round?.theme || 'MadFill'}
-                  templateName={round?.name || `Round #${roundId}`}
-                  feeEth={round?.feeBase || '0.0005'}        // string
-                  durationMins={round?.minutesLeft || 60}    // number
-                  hashtags={['MadFill','Base','Farcaster']}
-                  embed="/og/cover.PNG"
+                  url={absoluteUrl('/vote')} // send friends straight to the voting page
+                  title={`🧠 Vote in MadFill Round #${roundId}!`}
+                  theme="MadFill"
+                  templateName={roundName || `Round #${roundId}`}
+                  feeEth={String(feeEth)}
+                  durationMins={Math.floor(durationSec / 60)}
+                  hashtags={['MadFill', 'Base', 'Farcaster']}
+                  embed="/og/cover.png"
                 />
               </div>
             )}
