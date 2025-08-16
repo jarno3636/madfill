@@ -23,6 +23,20 @@ const NFT_ADDRESS =
 /** ---------- Context ---------- */
 const TxContext = createContext(null)
 
+/** ---------- Helper: gasLimit buffer (for wallet-driven paths) ---------- */
+/** Keep small & conservative; wallet will still estimate/adjust internally. */
+function buildBufferedOverrides({ from, value, gasLimitBase = 250_000, gasJitter = 50_000 }) {
+  const overrides = {}
+  if (from) overrides.from = from
+  if (value !== undefined && value !== null) overrides.value = ethers.toBigInt(value)
+
+  // Add a small deterministic buffer + jitter to avoid edge underestimates
+  const buffer = BigInt(Math.max(0, gasLimitBase + Math.floor(Math.random() * Math.max(1, gasJitter)))))
+  overrides.gasLimit = buffer
+  // IMPORTANT: Do NOT set gasPrice / maxFeePerGas here; let the wallet do it.
+  return overrides
+}
+
 export function TxProvider({ children }) {
   const { provider, signer, isOnBase, connect, switchToBase, address } = useWallet()
 
@@ -56,8 +70,8 @@ export function TxProvider({ children }) {
   }, [address, isOnBase, connect, switchToBase])
 
   /**
-   * Preflight + fees on the public read RPC. Avoids relying on wallet RPCs
-   * that may not support estimateGas / feeHistory (esp. mini-wallets).
+   * Preflight + fees on the public read RPC.
+   * We KEEP using this for Pool 1 so feeBaseWei semantics remain unchanged.
    */
   const estimateWithRead = useCallback(
     async (contractAddress, abi, fnName, args, { from, value } = {}) => {
@@ -82,7 +96,7 @@ export function TxProvider({ children }) {
         const est = await ctRead[fnName].estimateGas(...args, { from, value })
         gasLimit = (est * 12n) / 10n + 50_000n
       } catch {
-        // proceed without explicit gasLimit
+        // proceed without explicit gasLimit (wallet will handle)
       }
 
       // 3) Fee data (EIP-1559 if available)
@@ -127,7 +141,7 @@ export function TxProvider({ children }) {
     }
   }
 
-  /** ---------------- Pool 1: create ---------------- */
+  /** ---------------- Pool 1: create (UNCHANGED strategy) ---------------- */
   const createPool1 = useCallback(async ({
     title, theme, parts, word, username, feeBaseWei, durationSecs, blankIndex,
   }) => {
@@ -158,7 +172,7 @@ export function TxProvider({ children }) {
     return await runTx(() => fillin.createPool1(...args, overrides))
   }, [ensureReady, getContracts, estimateWithRead, address])
 
-  /** ---------------- Pool 1: join ---------------- */
+  /** ---------------- Pool 1: join (UNCHANGED strategy) ---------------- */
   const joinPool1 = useCallback(async ({ id, word, username, blankIndex, feeBaseWei }) => {
     await ensureReady()
     const { fillin } = getContracts(true)
@@ -183,7 +197,7 @@ export function TxProvider({ children }) {
     return await runTx(() => fillin.joinPool1(...args, overrides))
   }, [ensureReady, getContracts, estimateWithRead, address])
 
-  /** ---------------- Pool 1: claim ---------------- */
+  /** ---------------- Pool 1: claim (UNCHANGED strategy) ---------------- */
   const claimPool1 = useCallback(async (id) => {
     await ensureReady()
     const { fillin } = getContracts(true)
@@ -201,7 +215,12 @@ export function TxProvider({ children }) {
     return await runTx(() => fillin.claimPool1(...args, overrides))
   }, [ensureReady, getContracts, estimateWithRead, address])
 
-  /** ---------------- NFT: mint template ---------------- */
+  /**
+   * ---------------- NFT: mint template (WALLET-DRIVEN strategy) ----------------
+   * We REMOVE preflight + explicit fee fields to avoid rate-limit/revert flakiness.
+   * - You pass only { value } and a small gasLimit buffer.
+   * - Wallet (MetaMask/Coinbase) computes the exact fees at confirmation time.
+   */
   const mintTemplateNFT = useCallback(async (title, description, theme, parts, { value } = {}) => {
     await ensureReady()
     const { nft } = getContracts(true)
@@ -213,19 +232,18 @@ export function TxProvider({ children }) {
       Array.isArray(parts) ? parts.map((p) => String(p ?? '')) : [],
     ]
 
-    const overrides = await estimateWithRead(
-      NFT_ADDRESS,
-      nftAbi,
-      'mintTemplate',
-      args,
-      { from: address, value: BigInt(value ?? 0n) }
-    )
+    const overrides = buildBufferedOverrides({
+      from: address,
+      value: BigInt(value ?? 0n),
+      gasLimitBase: 250_000,   // tweak if needed
+      gasJitter: 50_000        // small randomness helps avoid edge cases
+    })
 
     return await runTx(() => nft.mintTemplate(...args, overrides))
-  }, [ensureReady, getContracts, estimateWithRead, address])
+  }, [ensureReady, getContracts, address])
 
   /** ---------------- Context Value ---------------- */
-  const value = useMemo(() => ({
+  const valueCtx = useMemo(() => ({
     // connection
     address,
     isConnected: !!address,
@@ -259,7 +277,7 @@ export function TxProvider({ children }) {
     txStatus, pendingTx, lastTx
   ])
 
-  return <TxContext.Provider value={value}>{children}</TxContext.Provider>
+  return <TxContext.Provider value={valueCtx}>{children}</TxContext.Provider>
 }
 
 export const useTx = () => useContext(TxContext)
