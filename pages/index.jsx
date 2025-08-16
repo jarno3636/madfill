@@ -16,12 +16,13 @@ import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useToast } from '@/components/Toast'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { categories as presetCategories } from '@/data/templates'
-import { useWallet } from '@/components/WalletProvider'
-// ✅ use unified provider
+
+// ✅ unified provider (the only wallet/tx source)
 import { useTx } from '@/components/TxProvider'
 
+// Client-only confetti
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
-const { isConnected, connect } = useWallet()
+
 /* ========== Read-only Pools Contract bits ========== */
 const FILLIN_ADDR =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
@@ -53,7 +54,7 @@ function IndexPage() {
   const { addToast } = useToast()
   const { width, height } = useWindowSize()
 
-  // ✅ from unified provider
+  // ✅ single unified source
   const { createPool1, isConnected, connect, isOnBase, switchToBase, BASE_RPC } = useTx()
 
   // chain / fees
@@ -77,7 +78,7 @@ function IndexPage() {
   const [username, setUsername] = useState('')
   const [bgKey, setBgKey] = useState(BG_CHOICES[0].key)
 
-  // story parts come from template ONLY
+  // parts come from template ONLY
   const parts = useMemo(() => currentTemplate?.parts ?? [], [currentTemplate])
   const blanksCount = Math.max(0, (parts?.length || 0) - 1)
   const [blankIndex, setBlankIndex] = useState(0)
@@ -85,7 +86,7 @@ function IndexPage() {
   // creator entry
   const [creatorWord, setCreatorWord] = useState('')
 
-  // entry fee (ETH)
+  // entry fee (ETH → WEI)
   const [feeEth, setFeeEth] = useState('0.0005')
   const feeWei = useMemo(() => {
     try { return ethers.parseEther((feeEth || '0').trim()) } catch { return 0n }
@@ -106,7 +107,7 @@ function IndexPage() {
   // usd display
   const [usd, setUsd] = useState(null)
 
-  // preview words map (show creator word in chosen blank)
+  // preview words map
   const wordsMapForPreview = useMemo(() => {
     const w = {}
     for (let i = 0; i < blanksCount; i++) w[i] = ''
@@ -227,19 +228,6 @@ function IndexPage() {
   const pageUrl = absoluteUrl('/')
   const ogImage = buildOgUrl({ screen: 'home', title: 'MadFill — Create a Round' })
   const feeUsd = (usd && feeEth) ? (parseFloat(feeEth || '0') * usd) : null
-  const burnPct = (feeBps != null && bpsDen) ? (feeBps / bpsDen * 100) : null
-
-  // context snippet for each blank (left/right words)
-  const blankContexts = useMemo(() => {
-    const out = []
-    const n = Math.max(0, parts.length - 1)
-    for (let i = 0; i < n; i++) {
-      const left = (parts[i] || '').split(/\s+/).slice(-3).join(' ')
-      const right = (parts[i + 1] || '').split(/\s+/).slice(0, 3).join(' ')
-      out.push(`${left} [____] ${right}`.trim())
-    }
-    return out
-  }, [parts])
 
   return (
     <Layout>
