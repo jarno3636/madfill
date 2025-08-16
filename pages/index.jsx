@@ -20,11 +20,14 @@ import { categories as presetCategories } from '@/data/templates'
 // ✅ unified provider (the only wallet/tx source)
 import { useTx } from '@/components/TxProvider'
 
+// For decoding events (already in your project per TxProvider)
+import fillinAbi from '@/abi/FillInStoryV3_ABI.json'
+
 // Client-only confetti
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 /* ========== Read-only Pools Contract bits ========== */
-const FILLIN_ADDR =
+const FILLIN_ADDR_FALLBACK =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
 
@@ -32,6 +35,10 @@ const POOLS_ABI = [
   { inputs: [], name: 'FEE_BPS', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'BPS_DENOMINATOR', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
 ]
+
+/* ---------- optional deploy blocks to speed up log queries ---------- */
+const FILLIN_DEPLOY_BLOCK = Number(process.env.NEXT_PUBLIC_FILLIN_DEPLOY_BLOCK || 0) || null
+const NFT_DEPLOY_BLOCK    = Number(process.env.NEXT_PUBLIC_NFT_DEPLOY_BLOCK || 0) || null
 
 /* ========== Helpers ========== */
 const sanitizeOneWord = (raw) =>
@@ -49,13 +56,25 @@ const BG_CHOICES = [
   { key: 'forest',       label: 'Forest',        cls: 'from-emerald-700 via-teal-700 to-slate-900' },
 ]
 
+/* ---------- tiny UI helper ---------- */
+const StatTile = ({ label, value, sub, className = '' }) => (
+  <div className={`rounded-xl border border-slate-700 bg-slate-900/60 p-4 ${className}`}>
+    <div className="text-xs uppercase tracking-wide text-slate-400">{label}</div>
+    <div className="mt-1 text-3xl font-extrabold">{value}</div>
+    {sub ? <div className="text-xs text-slate-400 mt-1">{sub}</div> : null}
+  </div>
+)
+
 function IndexPage() {
   useMiniAppReady()
   const { addToast } = useToast()
   const { width, height } = useWindowSize()
 
   // ✅ single unified source
-  const { createPool1, isConnected, connect, isOnBase, switchToBase, BASE_RPC } = useTx()
+  const {
+    createPool1, isConnected, connect, isOnBase, switchToBase,
+    BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS
+  } = useTx()
 
   // chain / fees
   const [feeBps, setFeeBps] = useState(null)
@@ -105,6 +124,7 @@ function IndexPage() {
   const durationSecs = useMemo(() => BigInt(Math.max(1, Number(durationDays)) * 24 * 60 * 60), [durationDays])
 
   // usd display
+  the:
   const [usd, setUsd] = useState(null)
 
   // preview words map
@@ -127,7 +147,8 @@ function IndexPage() {
     ;(async () => {
       try {
         const p = new ethers.JsonRpcProvider(BASE_RPC)
-        const ct = new ethers.Contract(FILLIN_ADDR, POOLS_ABI, p)
+        const addr = FILLIN_ADDRESS || FILLIN_ADDR_FALLBACK
+        const ct = new ethers.Contract(addr, POOLS_ABI, p)
         const [fee, den] = await Promise.all([
           ct.FEE_BPS().catch(() => null),
           ct.BPS_DENOMINATOR().catch(() => 10000n),
@@ -141,7 +162,7 @@ function IndexPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [BASE_RPC])
+  }, [BASE_RPC, FILLIN_ADDRESS])
 
   // usd (display)
   useEffect(() => {
@@ -183,7 +204,8 @@ function IndexPage() {
 
   /* ---------- validation & tx ---------- */
   const validate = () => {
-    if (!FILLIN_ADDR) { addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_FILLIN_ADDRESS.' }); return false }
+    const addr = FILLIN_ADDRESS || FILLIN_ADDR_FALLBACK
+    if (!addr) { addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_FILLIN_ADDRESS.' }); return false }
     if (!isConnected) { addToast({ type: 'error', title: 'Wallet Required', message: 'Connect your wallet to create a round.' }); return false }
     if (!currentTemplate) { addToast({ type: 'error', title: 'Choose a Template', message: 'Pick a category and template.' }); return false }
     if (!title.trim() || !theme.trim()) { addToast({ type: 'error', title: 'Missing Fields', message: 'Title and Theme are required.' }); return false }
@@ -228,6 +250,109 @@ function IndexPage() {
   const pageUrl = absoluteUrl('/')
   const ogImage = buildOgUrl({ screen: 'home', title: 'MadFill — Create a Round' })
   const feeUsd = (usd && feeEth) ? (parseFloat(feeEth || '0') * usd) : null
+
+  /* ================== LIVE STATS (bottom card) ================== */
+  const [statsLoading, setStatsLoading] = useState(true)
+  const [statsError, setStatsError] = useState(null)
+  const [stats, setStats] = useState({
+    totalPools: 0,
+    claimedPools: 0,
+    activePools: 0,
+    totalChallenges: 0,
+    nftsMinted: 0,
+  })
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      setStatsLoading(true)
+      setStatsError(null)
+      try {
+        const provider = new ethers.JsonRpcProvider(BASE_RPC)
+
+        const poolsAddr = (FILLIN_ADDRESS || FILLIN_ADDR_FALLBACK)
+        const nftAddr   = NFT_ADDRESS
+
+        // fromBlock windows
+        const latest = await provider.getBlockNumber()
+        const defaultWindow = Math.max(0, latest - 500_000) // fallback window if deploy block unknown
+        const poolsFrom = FILLIN_DEPLOY_BLOCK ?? defaultWindow
+        const nftFrom   = NFT_DEPLOY_BLOCK ?? defaultWindow
+
+        // ----- Pools logs: fetch all events for FillIn (bounded by fromBlock)
+        let poolLogs = []
+        try {
+          poolLogs = await provider.getLogs({
+            address: poolsAddr,
+            fromBlock: poolsFrom,
+            toBlock: 'latest',
+          })
+        } catch {}
+
+        const iface = new ethers.Interface(fillinAbi)
+        let totalPools = 0
+        let claimedPools = 0
+        let totalChallenges = 0
+
+        for (const lg of poolLogs) {
+          try {
+            const parsed = iface.parseLog(lg)
+            const name = parsed?.name || ''
+            const lname = name.toLowerCase()
+            if (lname.includes('poolcreated')) totalPools += 1
+            if (lname.includes('poolclaimed') || lname.includes('claimed')) claimedPools += 1
+            if (lname.includes('join') || lname.includes('challenge')) totalChallenges += 1
+          } catch {
+            // ignore unknown events
+          }
+        }
+
+        const activePools = Math.max(0, totalPools - claimedPools)
+
+        // ----- NFT mints: ERC-721 Transfer where from == 0x0
+        let nftsMinted = 0
+        if (nftAddr) {
+          const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)')
+          const ZERO_TOPIC = ethers.zeroPadValue(ethers.ZeroAddress, 32)
+          let nftLogs = []
+          try {
+            nftLogs = await provider.getLogs({
+              address: nftAddr,
+              fromBlock: nftFrom,
+              toBlock: 'latest',
+              topics: [TRANSFER_TOPIC, ZERO_TOPIC], // mint events only
+            })
+          } catch {}
+          nftsMinted = nftLogs.length
+        }
+
+        if (!cancelled) {
+          setStats({ totalPools, claimedPools, activePools, totalChallenges, nftsMinted })
+          setStatsLoading(false)
+        }
+      } catch (err) {
+        console.error('stats error', err)
+        if (!cancelled) {
+          setStatsError('Could not load on-chain stats')
+          setStatsLoading(false)
+        }
+      }
+    }
+
+    load()
+    const id = setInterval(load, 60_000) // refresh every minute
+    return () => { cancelled = true; clearInterval(id) }
+  }, [BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS])
+
+  const pctClaimed = useMemo(() => {
+    const tot = stats.totalPools || 0
+    return tot > 0 ? Math.min(100, Math.round((stats.claimedPools / tot) * 100)) : 0
+  }, [stats.totalPools, stats.claimedPools])
+
+  const pctActive = useMemo(() => {
+    const tot = stats.totalPools || 0
+    return tot > 0 ? Math.min(100, Math.round((stats.activePools / tot) * 100)) : 0
+  }, [stats.totalPools, stats.activePools])
 
   return (
     <Layout>
@@ -605,6 +730,51 @@ function IndexPage() {
                 hashtags={['MadFill','Base','Farcaster']}
                 embed="/og/cover.PNG"
               />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ===================== Live Network Stats ===================== */}
+        <Card className="bg-slate-900/70 border border-slate-700">
+          <CardHeader className="border-b border-slate-700">
+            <h3 className="text-lg font-bold">Network Activity</h3>
+            {statsError && <div className="mt-2 text-xs text-rose-300">{statsError}</div>}
+          </CardHeader>
+          <CardContent className="p-5 space-y-5">
+            {/* Tiles */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <StatTile label="Active Pools"   value={statsLoading ? '—' : stats.activePools} sub={!statsLoading && `${pctActive}% of total`} />
+              <StatTile label="Claimed Pools"  value={statsLoading ? '—' : stats.claimedPools} sub={!statsLoading && `${pctClaimed}% of total`} />
+              <StatTile label="Total Pools"    value={statsLoading ? '—' : stats.totalPools} />
+              <StatTile label="Challenges"     value={statsLoading ? '—' : stats.totalChallenges} />
+              <StatTile label="NFTs Minted"    value={statsLoading ? '—' : stats.nftsMinted} />
+            </div>
+
+            {/* Simple progress bars */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
+                <div className="flex justify-between text-xs text-slate-300">
+                  <span>Active vs Total</span>
+                  <span>{statsLoading ? '—' : `${stats.activePools}/${stats.totalPools}`}</span>
+                </div>
+                <div className="mt-2 h-2 rounded bg-slate-700">
+                  <div className="h-2 rounded bg-emerald-400 transition-all" style={{ width: `${pctActive}%` }} />
+                </div>
+              </div>
+              <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
+                <div className="flex justify-between text-xs text-slate-300">
+                  <span>Claimed vs Total</span>
+                  <span>{statsLoading ? '—' : `${stats.claimedPools}/${stats.totalPools}`}</span>
+                </div>
+                <div className="mt-2 h-2 rounded bg-slate-700">
+                  <div className="h-2 rounded bg-indigo-400 transition-all" style={{ width: `${pctClaimed}%` }} />
+                </div>
+              </div>
+            </div>
+
+            {/* Tiny legend */}
+            <div className="text-xs text-slate-400">
+              Updated every minute from Base via <span className="font-mono">BASE_RPC</span>. Set <span className="font-mono">NEXT_PUBLIC_FILLIN_DEPLOY_BLOCK</span> and <span className="font-mono">NEXT_PUBLIC_NFT_DEPLOY_BLOCK</span> for faster queries.
             </div>
           </CardContent>
         </Card>
