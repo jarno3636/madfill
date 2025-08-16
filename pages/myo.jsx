@@ -1,3 +1,4 @@
+// pages/myo.jsx
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -14,20 +15,13 @@ import StyledCard from '@/components/StyledCard'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useToast } from '@/components/Toast'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
-import { useWallet } from '@/components/WalletProvider'
-// ✅ unified wallet + contracts + tx helpers
 import { useTx } from '@/components/TxProvider'
 
-const { isConnected, connect } = useWallet()
-// Client-only confetti (optional flourish)
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
-/* ===============================
-   Small helpers
-=================================*/
+/* ---------- helpers ---------- */
 const bytes = (s) => new TextEncoder().encode(String(s || '')).length
 
-// Friendly random starters (users can modify freely)
 const PROMPT_STARTERS = [
   'My day started with [BLANK], then I found a [BLANK] under the couch.',
   'In space, no one can hear your [BLANK], but everyone sees your [BLANK].',
@@ -37,7 +31,6 @@ const PROMPT_STARTERS = [
   'The prophecy spoke of [BLANK] and the legendary [BLANK].'
 ]
 
-// Polished gradient / image-like backgrounds (utility classes)
 const BG_CHOICES = [
   { key: 'indigoNebula', label: 'Indigo Nebula', cls: 'from-indigo-900 via-purple-800 to-slate-900' },
   { key: 'candy',        label: 'Candy',         cls: 'from-pink-600 via-fuchsia-600 to-purple-700' },
@@ -46,14 +39,12 @@ const BG_CHOICES = [
   { key: 'forest',       label: 'Forest',        cls: 'from-emerald-700 via-teal-700 to-slate-900' },
 ]
 
-// Convert the author’s story (with [BLANK] markers) to parts.
-// If a blank has a fill, we merge it into the previous part (so that blank disappears).
+// Convert story with [BLANK]s → parts (filled blanks get merged into previous part)
 function deriveParts(story, fills) {
   const chunks = String(story || '').split(/\[BLANK\]/g)
   const blanks = Math.max(0, chunks.length - 1)
   const safeFills = Array.from({ length: blanks }, (_, i) => (fills?.[i] || '').trim())
   if (chunks.length === 0) return { parts: [''], blanksRemaining: 0 }
-
   const parts = [chunks[0] || '']
   for (let i = 0; i < blanks; i++) {
     const fill = safeFills[i]
@@ -67,9 +58,7 @@ function deriveParts(story, fills) {
   return { parts, blanksRemaining: Math.max(0, parts.length - 1) }
 }
 
-/* ===============================
-   Minimal ABI for limits, price
-=================================*/
+/* ---------- minimal read ABI ---------- */
 const TEMPLATE_ABI = [
   { inputs: [], name: 'MAX_PARTS', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_PART_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
@@ -77,9 +66,6 @@ const TEMPLATE_ABI = [
   { inputs: [], name: 'getMintPriceWei', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
 ]
 
-/* ===============================
-   Page Component
-=================================*/
 function MYOPage() {
   useMiniAppReady()
   const { addToast } = useToast()
@@ -99,10 +85,7 @@ function MYOPage() {
   const [mintPriceWei, setMintPriceWei] = useState(0n)
   const mintPriceEth = useMemo(() => Number(ethers.formatEther(mintPriceWei || 0n)), [mintPriceWei])
 
-  // ETH/USD display (optional nicety)
   const [usd, setUsd] = useState(null)
-
-  // UI state
   const [loading, setLoading] = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
 
@@ -115,12 +98,12 @@ function MYOPage() {
   const storyRef = useRef(null)
   const [story, setStory] = useState(PROMPT_STARTERS[0])
   const blanksInStory = Math.max(0, story.split(/\[BLANK\]/g).length - 1)
-  const [fills, setFills] = useState(Array(blanksInStory).fill('')) // optional pre-fills
+  const [fills, setFills] = useState(Array(blanksInStory).fill(''))
 
   // Background
   const [bgKey, setBgKey] = useState(BG_CHOICES[0].key)
 
-  // Keep fills array aligned with number of [BLANK]s
+  // Keep fills aligned with number of [BLANK]s
   useEffect(() => {
     setFills((prev) => {
       const next = Array(blanksInStory).fill('')
@@ -129,7 +112,7 @@ function MYOPage() {
     })
   }, [blanksInStory])
 
-  // Load on-chain limits + mint price (read-only)
+  // Load limits + mint price (read-only)
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -148,14 +131,12 @@ function MYOPage() {
         setMaxPartBytes(Number(mpb))
         setMaxTotalBytes(Number(mtb))
         setMintPriceWei(BigInt(price || 0n))
-      } catch {
-        // keep defaults
-      }
+      } catch {}
     })()
     return () => { cancelled = true }
   }, [BASE_RPC, NFT_ADDRESS])
 
-  // ETH/USD for display (does not affect tx)
+  // ETH→USD (display only)
   useEffect(() => {
     let aborted = false
     ;(async () => {
@@ -170,20 +151,15 @@ function MYOPage() {
     return () => { aborted = true }
   }, [])
 
-  // Derived parts (removing blanks the user pre-filled)
+  // Derived parts & byte accounting
   const { parts, blanksRemaining } = useMemo(() => deriveParts(story, fills), [story, fills])
-
-  // Byte accounting
   const partsBytes = useMemo(() => parts.reduce((sum, p) => sum + bytes(p), 0), [parts])
   const totalBytes = bytes(title) + bytes(description) + bytes(theme) + partsBytes
 
   // Background class
-  const bgCls = useMemo(() => {
-    const found = BG_CHOICES.find((b) => b.key === bgKey) || BG_CHOICES[0]
-    return found.cls
-  }, [bgKey])
+  const bgCls = useMemo(() => (BG_CHOICES.find((b) => b.key === bgKey) || BG_CHOICES[0]).cls, [bgKey])
 
-  // Insert a [BLANK] at cursor position
+  // Editor helpers
   const insertBlankAtCursor = () => {
     const el = storyRef.current
     if (!el) { setStory((s) => s + ' [BLANK] '); return }
@@ -212,7 +188,7 @@ function MYOPage() {
     setBgKey(BG_CHOICES[next].key)
   }
 
-  // Validate before mint
+  // Validation
   const validate = () => {
     if (!NFT_ADDRESS) {
       addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS.' })
@@ -258,23 +234,21 @@ function MYOPage() {
         if (!ok) throw new Error('Please switch to Base.')
       }
 
-      // 🔁 unified TX helper (uses signer + preflight inside provider)
+      // ✅ Tx helper expects valueWei as 5th arg
       await mintTemplateNFT(
         String(title).slice(0, 128),
         String(description).slice(0, 2048),
         String(theme).slice(0, 128),
         parts,
-        { value: mintPriceWei }
+        mintPriceWei
       )
 
       addToast({ type: 'success', title: 'Minted!', message: 'Your template NFT is live on Base.' })
       setShowConfetti(true)
       setTimeout(() => setShowConfetti(false), 1800)
 
-      // Reset template (keep background)
-      setTitle('')
-      setTheme('')
-      setDescription('')
+      // Reset (keep background)
+      setTitle(''); setTheme(''); setDescription('')
       setStory(PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)])
       setFills([])
     } catch (e) {
@@ -287,14 +261,12 @@ function MYOPage() {
     }
   }
 
-  // Live preview content for StyledCard:
   const wordsForPreview = useMemo(() => {
     const w = {}
     for (let i = 0; i < Math.max(0, parts.length - 1); i++) w[i] = ''
     return w
   }, [parts])
 
-  // Basic SEO / Farcaster
   const pageUrl = absoluteUrl('/myo')
   const ogImage = buildOgUrl({ screen: 'myo', title: 'Make Your Own' })
 
@@ -404,7 +376,7 @@ function MYOPage() {
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="block text-sm text-slate-300">Story (use <code>[BLANK]</code> for gaps)</label>
+                  <label className="block text-sm text-slate-300">Story (use <code>[BLANK]</code>)</label>
                   <div className="flex gap-2">
                     <Button onClick={insertBlankAtCursor} variant="outline" className="border-slate-600 text-slate-200">+ [BLANK]</Button>
                     <Button onClick={randomizeStarter} className="bg-slate-700 hover:bg-slate-600">🎲 Random</Button>
@@ -423,7 +395,7 @@ function MYOPage() {
 
               {blanksInStory > 0 && (
                 <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
-                  <div className="text-sm font-semibold mb-2">Optional pre-fill (remove blanks you don’t want)</div>
+                  <div className="text-sm font-semibold mb-2">Optional pre-fill</div>
                   <div className="grid sm:grid-cols-2 gap-2">
                     {Array.from({ length: blanksInStory }).map((_, i) => (
                       <input
@@ -440,7 +412,7 @@ function MYOPage() {
                     ))}
                   </div>
                   <div className="text-xs text-slate-400 mt-2">
-                    Any filled blank will become permanent text in the template; unfilled ones remain blanks.
+                    Filled blanks become permanent text; unfilled ones remain blanks.
                   </div>
                 </div>
               )}
@@ -527,7 +499,7 @@ function MYOPage() {
 
               <div className="text-xs text-slate-400">
                 Tip: If you get an “insufficient funds” error, ensure you’re on Base and have enough ETH for the
-                mint fee <i>and</i> gas. The mint fee is read from the contract; gas varies with network conditions.
+                mint fee <i>and</i> gas.
               </div>
             </CardContent>
           </Card>
@@ -537,5 +509,4 @@ function MYOPage() {
   )
 }
 
-// Prevent SSR wallet probing
 export default dynamic(() => Promise.resolve(MYOPage), { ssr: false })
