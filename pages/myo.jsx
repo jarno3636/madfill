@@ -14,10 +14,11 @@ import StyledCard from '@/components/StyledCard'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useToast } from '@/components/Toast'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
-
+import { useWallet } from '@/components/WalletProvider'
 // ✅ unified wallet + contracts + tx helpers
 import { useTx } from '@/components/TxProvider'
 
+const { isConnected, connect } = useWallet()
 // Client-only confetti (optional flourish)
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
