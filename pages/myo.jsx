@@ -51,40 +51,57 @@ const TEMPLATE_ABI = [
   { inputs: [], name: 'paused', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
 ]
 
-/** Build both: partsForContract (with BLANK tokens) + partsForPreview (implicit blanks) */
+/** Normalize parts for contract (explicit BLANK token alternating) and for preview (implicit blanks).
+ *  Enforces: no empty edges, no adjacent BLANKs, at least one BLANK if present in story and not prefilled.
+ */
 function computeParts(story, fills, blankToken) {
   const chunks = String(story || '').split(/\[BLANK\]/g)
   const blanks = Math.max(0, chunks.length - 1)
   const safeFills = Array.from({ length: blanks }, (_, i) => (fills?.[i] || '').trim())
 
-  // Preview parts (implicit blanks: just segments)
-  const previewParts = [chunks[0] || '']
-  // Contract parts (explicit blanks as tokens)
-  const contractParts = [chunks[0] || '']
-  let blanksRemaining = 0
-
+  // PREVIEW: segments, merging any filled blanks into the preceding text
+  const preview = [chunks[0] || '']
   for (let i = 0; i < blanks; i++) {
     const fill = safeFills[i]
     const nextText = chunks[i + 1] || ''
-
-    // Preview: filled merges; unfilled means new segment to imply a blank between
     if (fill) {
-      previewParts[previewParts.length - 1] = previewParts[previewParts.length - 1] + fill + nextText
+      preview[preview.length - 1] = preview[preview.length - 1] + fill + nextText
     } else {
-      previewParts.push(nextText)
-    }
-
-    // Contract: if unfilled, insert BLANK token explicitly
-    if (fill) {
-      contractParts[contractParts.length - 1] = contractParts[contractParts.length - 1] + fill + nextText
-    } else {
-      contractParts.push(blankToken)
-      contractParts.push(nextText)
-      blanksRemaining += 1
+      preview.push(nextText)
     }
   }
 
-  return { partsForContract: contractParts, partsForPreview: previewParts, blanksRemaining }
+  // CONTRACT: alternate text/BLANK/text…, no start/end BLANK, collapse empties
+  const out = []
+  const pushText = (t) => {
+    const s = (t || '').trim()
+    if (!s) return
+    if (out.length === 0) out.push(s)
+    else if (out[out.length - 1] === blankToken) out.push(s)
+    else out[out.length - 1] = out[out.length - 1] + s
+  }
+  const pushBlank = () => {
+    if (out.length === 0) return
+    if (out[out.length - 1] === blankToken) return
+    out.push(blankToken)
+  }
+
+  pushText(chunks[0])
+  for (let i = 0; i < blanks; i++) {
+    const fill = safeFills[i]
+    const nextText = chunks[i + 1] || ''
+    if (fill) {
+      pushText(fill)
+      pushText(nextText)
+    } else {
+      pushBlank()
+      pushText(nextText)
+    }
+  }
+  if (out[out.length - 1] === blankToken) out.pop()
+
+  const blanksRemaining = out.filter((p) => p === blankToken).length
+  return { partsForContract: out, partsForPreview: preview, blanksRemaining }
 }
 
 function MYOPage() {
@@ -92,7 +109,6 @@ function MYOPage() {
   const { addToast } = useToast()
   const { width, height } = useWindowSize()
 
-  // ✅ unified provider bits
   const {
     isConnected, connect, isOnBase, switchToBase,
     BASE_RPC, NFT_ADDRESS,
@@ -105,28 +121,27 @@ function MYOPage() {
   const [maxTotalBytes, setMaxTotalBytes] = useState(4096)
   const [paused, setPaused] = useState(false)
 
-  // Contract BLANK token (default to "[BLANK]" until read)
+  // Contract BLANK token (default to literal until read)
   const [blankToken, setBlankToken] = useState('[BLANK]')
 
-  // Pricing (on-chain if available; otherwise fixed fee)
+  // Pricing (on-chain if available; otherwise fixed fallback for UI only)
   const [mintPriceWeiOnchain, setMintPriceWeiOnchain] = useState(0n)
   const [mintPriceUsdE6, setMintPriceUsdE6] = useState(0n)
   const [priceLoading, setPriceLoading] = useState(true)
 
-  // Fixed fallback fee (override via env)
+  // Fallback fee (display/send if on-chain price is 0)
   const FIXED_FEE_WEI =
     (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_MYO_FIXED_FEE_WEI)
       ? BigInt(process.env.NEXT_PUBLIC_MYO_FIXED_FEE_WEI)
-      : ethers.parseEther('0.0005') // 0.0005 ETH
+      : ethers.parseEther('0.0005')
 
-  // Value to send with tx (prefer on-chain when present)
   const valueWei = useMemo(
     () => (mintPriceWeiOnchain > 0n ? mintPriceWeiOnchain : FIXED_FEE_WEI),
     [mintPriceWeiOnchain, FIXED_FEE_WEI]
   )
   const valueEth = useMemo(() => Number(ethers.formatEther(valueWei)), [valueWei])
 
-  const [usdSpot, setUsdSpot] = useState(null) // display only
+  const [usdSpot, setUsdSpot] = useState(null)
   const [loading, setLoading] = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
 
@@ -153,7 +168,7 @@ function MYOPage() {
     })
   }, [blanksInStory])
 
-  // Load limits + paused + BLANK token + *optional* price (non-blocking)
+  // Load limits + paused + BLANK + price (non-blocking)
   useEffect(() => {
     if (!NFT_ADDRESS) return
     const provider = new ethers.JsonRpcProvider(BASE_RPC)
@@ -189,7 +204,6 @@ function MYOPage() {
     const id = setInterval(pull, 60_000)
     const onVis = () => { if (document.visibilityState === 'visible') pull() }
     document.addEventListener('visibilitychange', onVis)
-
     return () => {
       mounted = false
       clearInterval(id)
@@ -217,8 +231,6 @@ function MYOPage() {
     () => computeParts(story, fills, blankToken),
     [story, fills, blankToken]
   )
-
-  // Bytes: measure preview text only (contract will accept BLANK tokens)
   const partsBytes = useMemo(
     () => partsForPreview.reduce((sum, p) => sum + bytes(p), 0),
     [partsForPreview]
@@ -247,13 +259,11 @@ function MYOPage() {
       el.setSelectionRange(pos, pos)
     })
   }
-
   const randomizeStarter = () => {
     const pick = PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)]
     setStory(pick)
     setFills([]) // will resize automatically
   }
-
   const randomizeBackground = () => {
     const idx = BG_CHOICES.findIndex((b) => b.key === bgKey)
     const next = (idx + 1) % BG_CHOICES.length
@@ -294,6 +304,16 @@ function MYOPage() {
       addToast({ type: 'error', title: 'Add a Blank', message: 'Include at least one [BLANK] that is not pre-filled.' })
       return false
     }
+    if (partsForContract[0] === blankToken || partsForContract[partsForContract.length - 1] === blankToken) {
+      addToast({ type: 'error', title: 'Invalid Layout', message: 'Blanks must be between text (no leading/trailing blank).' })
+      return false
+    }
+    for (let i = 1; i < partsForContract.length; i++) {
+      if (partsForContract[i] === blankToken && partsForContract[i - 1] === blankToken) {
+        addToast({ type: 'error', title: 'Invalid Layout', message: 'Blanks must be separated by text.' })
+        return false
+      }
+    }
     return true
   }
 
@@ -306,7 +326,10 @@ function MYOPage() {
         if (!ok) throw new Error('Please switch to Base.')
       }
 
-      // IMPORTANT: send parts WITH BLANK tokens
+      // Send normalized parts WITH explicit BLANK tokens
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('partsForContract →', partsForContract)
+      }
       const tx = await mintTemplateNFT(
         String(title).slice(0, 128),
         String(description).slice(0, 2048),
@@ -325,8 +348,6 @@ function MYOPage() {
 
       setShowConfetti(true)
       setTimeout(() => setShowConfetti(false), 1800)
-
-      // Reset (keep background)
       setTitle(''); setTheme(''); setDescription('')
       setStory(PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)])
       setFills([])
@@ -407,7 +428,7 @@ function MYOPage() {
 
           {/* Fee / limits */}
           <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-            {/* Single-line fee bar, no wrap, will shrink on small screens */}
+            {/* Single-line fee bar, no wrap; shrinks on small screens */}
             <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
               <div className="flex items-center gap-2 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
                 <span className="shrink-0">Mint fee:</span>
