@@ -1,132 +1,134 @@
 'use client'
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { ethers } from 'ethers'
 import fillinAbi from '@/abi/FillInStoryV3_ABI.json'
 import nftAbi from '@/abi/MadFillTemplateNFT_ABI.json'
 
-/**
- * ENV expected:
- * - NEXT_PUBLIC_FILLIN_ADDRESS
- * - NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS
- * - (optional) NEXT_PUBLIC_BASE_RPC
- */
-const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID = 8453n
 const BASE_CHAIN_ID_HEX = '0x2105'
-const EXPLORER = 'https://basescan.org'
+const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+
+const FILLIN_ADDRESS =
+  process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
+
+const NFT_ADDRESS =
+  process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS ||
+  process.env.NEXT_PUBLIC_MADFILL_NFT_ADDRESS ||
+  '0x0F22124A86F8893990fA4763393E46d97F4AF8E0c'
 
 const TxContext = createContext(null)
 
-export function TxProvider({ children }) {
-  const miniProvRef = useRef(null)
+function isWarpcastUA() {
+  if (typeof navigator === 'undefined') return false
+  return /Warpcast/i.test(navigator.userAgent || '')
+}
 
-  const [address, setAddress] = useState(null)
-  const [provider, setProvider] = useState(null)          // ethers.BrowserProvider | null
-  const [signer, setSigner] = useState(null)              // ethers.Signer | null
-  const [isOnBase, setIsOnBase] = useState(true)
-  const [fillinContract, setFillinContract] = useState(null)
-  const [nftContract, setNftContract] = useState(null)
-
-  // ---------- provider detection (Mini first, then injected) ----------
-  const getMiniProvider = useCallback(async () => {
-    if (miniProvRef.current) return miniProvRef.current
-    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent || '')
-    if (!inWarpcast) return null
-    try {
-      const mod = await import('@farcaster/miniapp-sdk')
-      const prov = await mod.sdk.wallet.getEthereumProvider()
-      miniProvRef.current = prov || null
-      return miniProvRef.current
-    } catch { return null }
-  }, [])
-
-  const getEip1193 = useCallback(async () => {
-    const mini = await getMiniProvider()
-    if (mini) return mini
-    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
+async function getMiniProviderIfAny() {
+  if (!isWarpcastUA()) return null
+  try {
+    const mod = await import('@farcaster/miniapp-sdk')
+    const prov = await mod.sdk.wallet.getEthereumProvider()
+    return prov || null
+  } catch {
     return null
-  }, [getMiniProvider])
+  }
+}
 
-  // ---------- base JSON-RPC (read-only) ----------
-  const readProvider = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [])
+export function TxProvider({ children }) {
+  const mounted = useRef(false)
+  const [provider, setProvider] = useState(null) // ethers.BrowserProvider | null
+  const [signer, setSigner] = useState(null)     // ethers.Signer | null
+  const [address, setAddress] = useState(null)   // string | null
+  const [isOnBase, setIsOnBase] = useState(true) // Base by default for Mini
+  const [error, setError] = useState(null)
 
-  // ---------- boot/hydrate ----------
-  useEffect(() => {
-    let eip
-    let stop = () => {}
-
-    ;(async () => {
-      eip = await getEip1193()
-      if (!eip) return
+  // Init best EIP-1193 (Mini first, then injected)
+  const bootstrap = useCallback(async (requestAccounts = false) => {
+    setError(null)
+    try {
+      let eip = await getMiniProviderIfAny()
+      if (!eip && typeof window !== 'undefined' && window.ethereum) {
+        eip = window.ethereum
+      }
+      if (!eip) {
+        setProvider(null); setSigner(null); setAddress(null)
+        setIsOnBase(true) // neutral
+        return null
+      }
 
       const bp = new ethers.BrowserProvider(eip)
+      if (requestAccounts) {
+        try { await eip.request?.({ method: 'eth_requestAccounts' }) } catch {}
+      }
+      const sg = await bp.getSigner().catch(() => null)
+      const addr = await sg?.getAddress().catch(() => null)
+      const net = await bp.getNetwork().catch(() => null)
+
+      if (!mounted.current) return null
       setProvider(bp)
+      setSigner(sg)
+      setAddress(addr || null)
+      setIsOnBase(net?.chainId === BASE_CHAIN_ID)
+      return bp
+    } catch (e) {
+      if (mounted.current) setError(e)
+      return null
+    }
+  }, [])
 
-      // address (silent on Mini; injected returns empty until request)
-      try {
-        const sg = await bp.getSigner().catch(() => null)
-        const a = await sg?.getAddress().catch(() => null)
-        if (sg && a) { setSigner(sg); setAddress(a) }
-      } catch {}
+  useEffect(() => {
+    mounted.current = true
+    bootstrap(false)
+    return () => { mounted.current = false }
+  }, [bootstrap])
 
-      try {
-        const net = await bp.getNetwork()
-        setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-      } catch { setIsOnBase(true) }
-
-      // events
-      const onAccountsChanged = async (accs) => {
+  // Listen for account / chain changes
+  useEffect(() => {
+    let eip
+    ;(async () => {
+      eip = await getMiniProviderIfAny()
+      if (!eip && typeof window !== 'undefined') eip = window.ethereum
+      if (!eip?.on) return
+      const onAcct = async (accs) => {
         const a = Array.isArray(accs) && accs[0] ? accs[0] : null
         setAddress(a)
-        if (a) {
-          try { setSigner(await bp.getSigner()) } catch { setSigner(null) }
-        } else {
-          setSigner(null)
-        }
+        if (a && provider) setSigner(await provider.getSigner().catch(() => null))
       }
-      const onChainChanged = async () => {
+      const onChain = async () => {
         try {
-          const net = await bp.getNetwork()
+          const net = await provider?.getNetwork()
           setIsOnBase(net?.chainId === BASE_CHAIN_ID)
         } catch { setIsOnBase(true) }
       }
-      eip.on?.('accountsChanged', onAccountsChanged)
-      eip.on?.('chainChanged', onChainChanged)
-      stop = () => {
-        eip?.removeListener?.('accountsChanged', onAccountsChanged)
-        eip?.removeListener?.('chainChanged', onChainChanged)
+      eip.on('accountsChanged', onAcct)
+      eip.on('chainChanged', onChain)
+      return () => {
+        eip?.removeListener?.('accountsChanged', onAcct)
+        eip?.removeListener?.('chainChanged', onChain)
       }
     })()
+  }, [provider])
 
-    return () => { try { stop() } catch {} }
-  }, [getEip1193])
-
-  // ---------- connect / switch ----------
   const connect = useCallback(async () => {
-    const eip = await getEip1193()
-    if (!eip) throw new Error('No wallet provider found')
-    const bp = new ethers.BrowserProvider(eip)
-    await bp.send('eth_requestAccounts', [])
-    const sg = await bp.getSigner()
-    const a = await sg.getAddress()
-    setProvider(bp); setSigner(sg); setAddress(a)
-    const net = await bp.getNetwork()
-    setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-    return a
-  }, [getEip1193])
+    await bootstrap(true)
+    return address
+  }, [bootstrap, address])
 
-  const ensureBase = useCallback(async () => {
-    // In Warpcast Mini, chain is already Base
-    const eip = await getEip1193()
-    if (!eip?.request) return false
+  const switchToBase = useCallback(async () => {
+    // Mini apps are already on Base
+    if (isWarpcastUA()) { setIsOnBase(true); return true }
     try {
-      await eip.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] })
-      setIsOnBase(true)
-      return true
-    } catch (err) {
-      if (err?.code === 4902) {
-        try {
+      const eip = provider ? provider.provider : (typeof window !== 'undefined' ? window.ethereum : null)
+      if (!eip) throw new Error('No wallet provider found')
+      try {
+        await eip.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: BASE_CHAIN_ID_HEX }],
+        })
+      } catch (err) {
+        if (err?.code === 4902) {
           await eip.request({
             method: 'wallet_addEthereumChain',
             params: [{
@@ -134,123 +136,124 @@ export function TxProvider({ children }) {
               chainName: 'Base',
               rpcUrls: [BASE_RPC],
               nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-              blockExplorerUrls: [EXPLORER],
+              blockExplorerUrls: ['https://basescan.org'],
             }],
           })
-          setIsOnBase(true)
-          return true
-        } catch { return false }
+        } else {
+          throw err
+        }
       }
-      return false
+      const net = await provider?.getNetwork().catch(() => null)
+      setIsOnBase(net?.chainId === BASE_CHAIN_ID)
+      return true
+    } catch (e) {
+      setError(e); return false
     }
-  }, [getEip1193])
+  }, [provider])
 
-  // ---------- (re)create contracts whenever signer changes ----------
-  useEffect(() => {
-    const FILL = process.env.NEXT_PUBLIC_FILLIN_ADDRESS
-    const NFT  = process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS
-    if (!FILL || !NFT) return
-    if (!signer) {
-      // read-only instances for pages that only read
-      const fillRead = new ethers.Contract(FILL, fillinAbi, readProvider)
-      const nftRead  = new ethers.Contract(NFT,  nftAbi,    readProvider)
-      setFillinContract(fillRead)
-      setNftContract(nftRead)
-      return
-    }
-    setFillinContract(new ethers.Contract(FILL, fillinAbi, signer))
-    setNftContract(new ethers.Contract(NFT,  nftAbi,    signer))
-  }, [signer, readProvider])
+  // -------- Contracts (writer preferred, else read) --------
+  const getContracts = useCallback(async (needsSigner = true) => {
+    // Always have a read provider
+    const read = new ethers.JsonRpcProvider(BASE_RPC)
+    const withSigner = provider && signer && (await provider.getNetwork()).chainId === BASE_CHAIN_ID
 
-  // ---------- helpers ----------
-  const toWei = (ethNum) => ethers.parseEther(String(Number(ethNum || 0)))
+    const fillin = new ethers.Contract(
+      FILLIN_ADDRESS,
+      fillinAbi,
+      (needsSigner && withSigner) ? signer : read
+    )
+    const nft = new ethers.Contract(
+      NFT_ADDRESS,
+      nftAbi,
+      (needsSigner && withSigner) ? signer : read
+    )
+    return { fillin, nft }
+  }, [provider, signer])
 
-  const preflight = useCallback(async (fn, args, overrides) => {
-    try { await fn.staticCall(...args, overrides || {}) } catch { /* ignore; some wallets/mini omit revert data */ }
-  }, [])
+  // -------- Tx helpers with preflight + friendly errors --------
+  const errMsg = (e, fb) =>
+    e?.info?.error?.message || e?.shortMessage || e?.reason || e?.message || fb
 
   const createPool1 = useCallback(async ({
-    name, theme, parts, word, username, entryFeeEth, durationDays, blankIndex
+    title, theme, parts, word, username, feeBaseWei, durationSecs, blankIndex
   }) => {
-    if (!fillinContract || !signer) throw new Error('Wallet not connected')
-    if (!isOnBase) {
-      const ok = await ensureBase()
-      if (!ok) throw new Error('Please switch to Base')
-    }
-    const fee = toWei(entryFeeEth)
-    const duration = BigInt(Math.max(0, Math.floor(Number(durationDays) || 0)) * 86400)
-    const idx = Math.max(0, Number(blankIndex) || 0)
-    const args = [
-      String(name || ''), String(theme || ''), Array.isArray(parts) ? parts.map(String) : [],
-      String(word || ''), String(username || ''), fee, duration, idx
-    ]
-    await preflight(fillinContract.createPool1, args, { value: fee })
-    const tx = await fillinContract.createPool1(...args, { value: fee })
-    return await tx.wait()
-  }, [fillinContract, signer, isOnBase, ensureBase, preflight])
+    if (!provider) await bootstrap(true)
+    const ok = await switchToBase()
+    if (!ok) throw new Error('Please switch to Base.')
 
-  const joinPool1 = useCallback(async ({
-    id, word, username, blankIndex, entryFeeEth
-  }) => {
-    if (!fillinContract || !signer) throw new Error('Wallet not connected')
-    if (!isOnBase) {
-      const ok = await ensureBase()
-      if (!ok) throw new Error('Please switch to Base')
-    }
-    const fee = toWei(entryFeeEth)
-    const idx = Math.max(0, Number(blankIndex) || 0)
-    const args = [BigInt(id), String(word || ''), String(username || ''), idx]
-    await preflight(fillinContract.joinPool1, args, { value: fee })
-    const tx = await fillinContract.joinPool1(...args, { value: fee })
+    const { fillin } = await getContracts(true)
+    // Static call = early revert reason
+    await fillin.createPool1.staticCall(
+      String(title || ''),
+      String(theme || ''),
+      Array.isArray(parts) ? parts.map(String) : [],
+      String(word || ''),
+      String(username || ''),
+      feeBaseWei,
+      BigInt(durationSecs || 0n),
+      Number(blankIndex || 0),
+      { value: feeBaseWei }
+    )
+    const tx = await fillin.createPool1(
+      String(title || ''),
+      String(theme || ''),
+      Array.isArray(parts) ? parts.map(String) : [],
+      String(word || ''),
+      String(username || ''),
+      feeBaseWei,
+      BigInt(durationSecs || 0n),
+      Number(blankIndex || 0),
+      { value: feeBaseWei }
+    )
     return await tx.wait()
-  }, [fillinContract, signer, isOnBase, ensureBase, preflight])
+  }, [provider, switchToBase, getContracts, bootstrap])
+
+  const joinPool1 = useCallback(async ({ id, word, username, blankIndex, feeBaseWei }) => {
+    if (!provider) await bootstrap(true)
+    const ok = await switchToBase()
+    if (!ok) throw new Error('Please switch to Base.')
+
+    const { fillin } = await getContracts(true)
+    const poolId = BigInt(id)
+    await fillin.joinPool1.staticCall(poolId, String(word||''), String(username||''), Number(blankIndex||0), { value: feeBaseWei })
+    const tx = await fillin.joinPool1(poolId, String(word||''), String(username||''), Number(blankIndex||0), { value: feeBaseWei })
+    return await tx.wait()
+  }, [provider, switchToBase, getContracts, bootstrap])
 
   const claimPool1 = useCallback(async (id) => {
-    if (!fillinContract || !signer) throw new Error('Wallet not connected')
-    if (!isOnBase) {
-      const ok = await ensureBase()
-      if (!ok) throw new Error('Please switch to Base')
-    }
-    await preflight(fillinContract.claimPool1, [BigInt(id)])
-    const tx = await fillinContract.claimPool1(BigInt(id))
-    return await tx.wait()
-  }, [fillinContract, signer, isOnBase, ensureBase, preflight])
+    if (!provider) await bootstrap(true)
+    const ok = await switchToBase()
+    if (!ok) throw new Error('Please switch to Base.')
 
-  // Optional reads (handy for pages)
-  const getPool1Info = useCallback(async (id) => {
-    if (!fillinContract) throw new Error('Contract not ready')
-    const info = await fillinContract.getPool1Info(BigInt(id))
-    return {
-      name: info.name_ ?? info[0],
-      theme: info.theme_ ?? info[1],
-      parts: info.parts_ ?? info[2],
-      feeBase: info.feeBase_ ?? info[3],
-      deadline: Number(info.deadline_ ?? info[4]),
-      creator: info.creator_ ?? info[5],
-      participants: info.participants_ ?? info[6],
-      winner: info.winner_ ?? info[7],
-      claimed: info.claimed_ ?? info[8],
-      poolBalance: info.poolBalance_ ?? info[9],
-    }
-  }, [fillinContract])
+    const { fillin } = await getContracts(true)
+    await fillin.claimPool1.staticCall(BigInt(id))
+    const tx = await fillin.claimPool1(BigInt(id))
+    return await tx.wait()
+  }, [provider, switchToBase, getContracts, bootstrap])
+
+  const mintTemplateNFT = useCallback(async (...params) => {
+    if (!provider) await bootstrap(true)
+    const ok = await switchToBase()
+    if (!ok) throw new Error('Please switch to Base.')
+    const { nft } = await getContracts(true)
+    const tx = await nft.mint(...params)
+    return await tx.wait()
+  }, [provider, switchToBase, getContracts, bootstrap])
 
   const value = useMemo(() => ({
-    // state
-    address, isOnBase, provider, signer, readProvider,
+    // connection
+    address, isConnected: !!address, isOnBase, connect, switchToBase, provider, error,
     // contracts
-    fillinContract, nftContract,
-    // wallet/chain
-    connect, ensureBase,
-    // pool helpers
-    createPool1, joinPool1, claimPool1, getPool1Info,
-  }), [
-    address, isOnBase, provider, signer, readProvider,
-    fillinContract, nftContract,
-    connect, ensureBase,
-    createPool1, joinPool1, claimPool1, getPool1Info
-  ])
+    getContracts,
+    // tx helpers
+    createPool1, joinPool1, claimPool1, mintTemplateNFT,
+    // constants (optional)
+    BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS,
+  }), [address, isOnBase, connect, switchToBase, provider, error, getContracts, createPool1, joinPool1, claimPool1, mintTemplateNFT])
 
   return <TxContext.Provider value={value}>{children}</TxContext.Provider>
 }
 
-export const useTx = () => useContext(TxContext)
+export function useTx() {
+  return useContext(TxContext)
+}
