@@ -6,8 +6,7 @@ import { performanceMonitor } from '@/lib/performance'
 import { GA_TRACKING_ID, pageview } from '@/lib/analytics'
 import { useRouter } from 'next/router'
 import { ToastProvider } from '@/components/Toast'
-import { WalletProvider } from '@/components/WalletProvider'
-import { TxProvider } from '@/components/TxProvider'
+import { TxProvider } from '@/components/TxProvider'   // ← single provider
 import '@/styles/globals.css'
 
 export default function App({ Component, pageProps }) {
@@ -20,11 +19,7 @@ export default function App({ Component, pageProps }) {
   // Pageview on route change
   useEffect(() => {
     const handleRouteChange = (url) => {
-      try {
-        if (GA_ID_SAFE && typeof window !== 'undefined' && window.gtag) {
-          pageview(url)
-        }
-      } catch {}
+      try { if (GA_ID_SAFE && typeof window !== 'undefined' && window.gtag) pageview(url) } catch {}
     }
     router.events?.on('routeChangeComplete', handleRouteChange)
     return () => router.events?.off('routeChangeComplete', handleRouteChange)
@@ -58,41 +53,35 @@ export default function App({ Component, pageProps }) {
   }, [])
 
   // Perf cleanup
-  useEffect(() => {
-    return () => {
-      try { performanceMonitor.cleanup?.() } catch {}
-    }
-  }, [])
+  useEffect(() => () => { try { performanceMonitor.cleanup?.() } catch {} }, [])
 
   return (
     <ErrorBoundary>
       <ToastProvider>
-        <WalletProvider>
-          <TxProvider>
-            {GA_ID_SAFE ? (
-              <>
-                <Script
-                  strategy="afterInteractive"
-                  src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID_SAFE}`}
-                />
-                <Script
-                  id="gtag-init"
-                  strategy="afterInteractive"
-                  dangerouslySetInnerHTML={{
-                    __html: `
-                      window.dataLayer = window.dataLayer || [];
-                      function gtag(){ dataLayer.push(arguments); }
-                      gtag('js', new Date());
-                      gtag('config', '${GA_ID_SAFE}', { page_path: window.location.pathname });
-                    `,
-                  }}
-                />
-              </>
-            ) : null}
-            <Script strategy="afterInteractive" src="/_vercel/insights/script.js" />
-            <Component {...pageProps} />
-          </TxProvider>
-        </WalletProvider>
+        <TxProvider>
+          {GA_ID_SAFE ? (
+            <>
+              <Script
+                strategy="afterInteractive"
+                src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID_SAFE}`}
+              />
+              <Script
+                id="gtag-init"
+                strategy="afterInteractive"
+                dangerouslySetInnerHTML={{
+                  __html: `
+                    window.dataLayer = window.dataLayer || [];
+                    function gtag(){ dataLayer.push(arguments); }
+                    gtag('js', new Date());
+                    gtag('config', '${GA_ID_SAFE}', { page_path: window.location.pathname });
+                  `,
+                }}
+              />
+            </>
+          ) : null}
+          <Script strategy="afterInteractive" src="/_vercel/insights/script.js" />
+          <Component {...pageProps} />
+        </TxProvider>
       </ToastProvider>
     </ErrorBoundary>
   )
