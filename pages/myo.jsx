@@ -1,7 +1,7 @@
 // pages/myo.jsx
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Head from 'next/head'
 import { ethers } from 'ethers'
@@ -21,7 +21,7 @@ const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 /* ---------- helpers ---------- */
 const bytes = (s) => new TextEncoder().encode(String(s || '')).length
-const fmtUsd = (n) => (isFinite(n) ? `$${n.toFixed(2)}` : '—')
+const fmtUsd = (n) => (Number.isFinite(n) ? `$${n.toFixed(2)}` : '—')
 
 const PROMPT_STARTERS = [
   'My day started with [BLANK], then I found a [BLANK] under the couch.',
@@ -81,25 +81,31 @@ function MYOPage() {
     mintTemplateNFT,
   } = useTx()
 
-  // On-chain constraints & price
-  const [maxParts, setMaxParts] = useState(16)
-  const [maxPartBytes, setMaxPartBytes] = useState(256)
-  const [maxTotalBytes, setMaxTotalBytes] = useState(2048)
-  const [mintPriceWei, setMintPriceWei] = useState(0n)
-  const [mintPriceUsdE6, setMintPriceUsdE6] = useState(0n)
+  // Limits/state
+  const [maxParts, setMaxParts] = useState(24)
+  const [maxPartBytes, setMaxPartBytes] = useState(96)
+  const [maxTotalBytes, setMaxTotalBytes] = useState(4096)
   const [paused, setPaused] = useState(false)
 
-  const mintPriceEth = useMemo(
-    () => Number(ethers.formatEther(mintPriceWei || 0n)),
-    [mintPriceWei]
-  )
-  const mintPriceUsdFromOnchain = useMemo(
-    () => Number(mintPriceUsdE6) / 1e6,
-    [mintPriceUsdE6]
-  )
-
-  const [usdSpot, setUsdSpot] = useState(null) // Coingecko for extra display only
+  // Pricing (on-chain if available; otherwise fixed fallback)
+  const [mintPriceWeiOnchain, setMintPriceWeiOnchain] = useState(0n)
+  const [mintPriceUsdE6, setMintPriceUsdE6] = useState(0n)
   const [priceLoading, setPriceLoading] = useState(true)
+
+  // Fallback fee: overrideable via env
+  const FIXED_FEE_WEI =
+    (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_MYO_FIXED_FEE_WEI)
+      ? BigInt(process.env.NEXT_PUBLIC_MYO_FIXED_FEE_WEI)
+      : ethers.parseEther('0.0005') // 0.0005 ETH
+
+  // Value to send with tx (prefer on-chain when present)
+  const valueWei = useMemo(
+    () => (mintPriceWeiOnchain > 0n ? mintPriceWeiOnchain : FIXED_FEE_WEI),
+    [mintPriceWeiOnchain, FIXED_FEE_WEI]
+  )
+  const valueEth = useMemo(() => Number(ethers.formatEther(valueWei)), [valueWei])
+
+  const [usdSpot, setUsdSpot] = useState(null) // display only
   const [loading, setLoading] = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
 
@@ -126,7 +132,7 @@ function MYOPage() {
     })
   }, [blanksInStory])
 
-  // Load limits + mint price (read-only), with auto-refresh
+  // Load limits + paused + *optional* price (we won’t block on failures)
   useEffect(() => {
     if (!NFT_ADDRESS) return
     const provider = new ethers.JsonRpcProvider(BASE_RPC)
@@ -137,32 +143,27 @@ function MYOPage() {
       try {
         setPriceLoading(true)
         const [mp, mpb, mtb, priceWei, priceUsd, isPaused] = await Promise.all([
-          ct.MAX_PARTS().catch(() => 16n),
-          ct.MAX_PART_BYTES().catch(() => 256n),
-          ct.MAX_TOTAL_BYTES().catch(() => 2048n),
+          ct.MAX_PARTS().catch(() => null),
+          ct.MAX_PART_BYTES().catch(() => null),
+          ct.MAX_TOTAL_BYTES().catch(() => null),
           ct.getMintPriceWei().catch(() => 0n),
           ct.mintPriceUsdE6().catch(() => 0n),
           ct.paused().catch(() => false),
         ])
         if (!mounted) return
-        setMaxParts(Number(mp))
-        setMaxPartBytes(Number(mpb))
-        setMaxTotalBytes(Number(mtb))
-        setMintPriceWei(BigInt(priceWei || 0n))
+        if (mp) setMaxParts(Number(mp))
+        if (mpb) setMaxPartBytes(Number(mpb))
+        if (mtb) setMaxTotalBytes(Number(mtb))
+        setMintPriceWeiOnchain(BigInt(priceWei || 0n))
         setMintPriceUsdE6(BigInt(priceUsd || 0n))
         setPaused(Boolean(isPaused))
-      } catch {
-        if (mounted) {
-          setMintPriceWei(0n)
-          setMintPriceUsdE6(0n)
-        }
       } finally {
         if (mounted) setPriceLoading(false)
       }
     }
 
     pull()
-    const id = setInterval(pull, 60_000) // poll fallback every min
+    const id = setInterval(pull, 60_000)
     const onVis = () => { if (document.visibilityState === 'visible') pull() }
     document.addEventListener('visibilitychange', onVis)
 
@@ -255,14 +256,6 @@ function MYOPage() {
       addToast({ type: 'error', title: 'Too Large', message: `Total bytes must be ≤ ${maxTotalBytes}.` })
       return false
     }
-    if (blanksRemaining < 1) {
-      addToast({ type: 'error', title: 'Add a Blank', message: 'Include at least one [BLANK] in your story.' })
-      return false
-    }
-    if (mintPriceWei === 0n) {
-      addToast({ type: 'error', title: 'Mint Price Unavailable', message: 'Unable to read on-chain price. Try again.' })
-      return false
-    }
     return true
   }
 
@@ -275,20 +268,19 @@ function MYOPage() {
         if (!ok) throw new Error('Please switch to Base.')
       }
 
-      // ✅ FIX: TxProvider expects { value } as the 5th arg
+      const usingFallback = mintPriceWeiOnchain === 0n
       const tx = await mintTemplateNFT(
         String(title).slice(0, 128),
         String(description).slice(0, 2048),
         String(theme).slice(0, 128),
         parts,
-        { value: mintPriceWei }
+        { value: valueWei }
       )
 
-      // If your TxProvider returns a receipt, show a quick link
       const hash = tx?.hash || tx?.transactionHash
       addToast({
         type: 'success',
-        title: 'Mint submitted',
+        title: usingFallback ? 'Mint submitted (fallback fee)' : 'Mint submitted',
         message: hash ? `Tx: ${hash.slice(0, 10)}…` : 'Waiting for confirmations…',
         link: hash ? `https://basescan.org/tx/${hash}` : undefined,
       })
@@ -326,8 +318,9 @@ function MYOPage() {
     title.trim() &&
     theme.trim() &&
     description.trim() &&
-    Math.max(0, parts.length - 1) >= 1 &&
-    mintPriceWei !== 0n
+    Math.max(0, parts.length - 1) >= 1
+
+  const usingFallback = mintPriceWeiOnchain === 0n
 
   return (
     <Layout>
@@ -377,28 +370,57 @@ function MYOPage() {
           </div>
 
           {/* Fee / limits */}
-          <div className="mt-4 flex flex-wrap gap-3 text-sm">
-            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
-              {priceLoading ? (
-                <span className="inline-block animate-pulse">Mint fee: …</span>
-              ) : (
-                <>
-                  Mint fee: <b>{mintPriceWei === 0n ? '—' : `${mintPriceEth.toFixed(6)} ETH`}</b>
-                  {usdSpot ? <span className="opacity-80"> ({fmtUsd(mintPriceEth * usdSpot)})</span> : null}
-                  {mintPriceUsdE6 > 0 && (
-                    <span className="opacity-80"> · on‑chain target ≈ {fmtUsd(mintPriceUsdFromOnchain)}</span>
-                  )}
-                  <span className="opacity-70"> + gas</span>
-                </>
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+            <div className={`rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 flex items-center gap-2`}>
+              <span>Mint fee:</span>
+              <b>{valueEth.toFixed(6)} ETH</b>
+              {usdSpot ? <span className="opacity-80">({fmtUsd(valueEth * usdSpot)})</span> : null}
+              <span className="opacity-70">+ gas</span>
+              {usingFallback && (
+                <span className="ml-auto text-[10px] uppercase tracking-wide rounded bg-amber-500/20 text-amber-200 px-2 py-0.5 border border-amber-500/40">
+                  fallback fee
+                </span>
               )}
             </div>
+
             <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
-              Limits: parts ≤ {maxParts}, part bytes ≤ {maxPartBytes}, total bytes ≤ {maxTotalBytes}
+              <div className="flex items-center justify-between">
+                <span>Parts</span>
+                <span className="font-semibold">{Math.max(1, parts.length)} / {maxParts}</span>
+              </div>
+              <div className="mt-1 h-1.5 rounded bg-slate-700">
+                <div
+                  className="h-1.5 rounded bg-indigo-400"
+                  style={{ width: `${Math.min(100, (Math.max(1, parts.length) / maxParts) * 100)}%` }}
+                />
+              </div>
             </div>
-            <div className={`rounded-lg px-3 py-2 border ${paused ? 'bg-rose-900/40 border-rose-700 text-rose-200' : 'bg-slate-800/70 border-slate-700'}`}>
-              {paused ? '⏸️ Minting is paused' : <>Remaining blanks in this design: <b>{Math.max(0, parts.length - 1)}</b></>}
+
+            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
+              <div className="flex items-center justify-between">
+                <span>Total bytes</span>
+                <span className="font-semibold">{totalBytes} / {maxTotalBytes}</span>
+              </div>
+              <div className="mt-1 h-1.5 rounded bg-slate-700">
+                <div
+                  className="h-1.5 rounded bg-emerald-400"
+                  style={{ width: `${Math.min(100, (totalBytes / maxTotalBytes) * 100)}%` }}
+                />
+              </div>
             </div>
           </div>
+
+          {!priceLoading && mintPriceUsdE6 > 0 && (
+            <div className="mt-2 text-xs text-slate-400">
+              Note: Contract target ≈ {fmtUsd(Number(mintPriceUsdE6) / 1e6)}; app uses fixed fee if price is unavailable.
+            </div>
+          )}
+
+          {paused && (
+            <div className="mt-3 text-sm rounded-lg bg-rose-900/40 border border-rose-700 px-3 py-2 text-rose-100">
+              ⏸️ Minting is currently paused.
+            </div>
+          )}
         </div>
 
         {/* Main grid */}
@@ -462,7 +484,7 @@ function MYOPage() {
                   className="w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-3 outline-none focus:ring-2 focus:ring-indigo-400 min-h-[140px] resize-y"
                 />
                 <div className="text-xs text-slate-400">
-                  Parts now: <b>{parts.length}</b> • Bytes in parts: <b>{partsBytes}</b> • Total bytes: <b>{totalBytes}</b> / {maxTotalBytes}
+                  Parts: <b>{Math.max(1, parts.length)}</b> / {maxParts} • Bytes in parts: <b>{partsBytes}</b> • Total bytes: <b>{totalBytes}</b> / {maxTotalBytes}
                 </div>
               </div>
 
@@ -475,9 +497,7 @@ function MYOPage() {
                         key={i}
                         value={fills[i] || ''}
                         onChange={(e) => setFills((old) => {
-                          const next = [...old]
-                          next[i] = e.target.value
-                          return next
+                          const next = [...old]; next[i] = e.target.value; return next
                         })}
                         placeholder={`Blank #${i + 1} (leave empty to keep a blank)`}
                         className="rounded-md bg-slate-900/70 border border-slate-700 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-400"
@@ -530,16 +550,11 @@ function MYOPage() {
               <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3 text-sm">
                 <div className="flex flex-wrap items-center gap-3">
                   <div>
-                    {priceLoading ? (
-                      <span className="inline-block animate-pulse">Mint fee: …</span>
-                    ) : (
-                      <>
-                        Mint fee: <b>{mintPriceWei === 0n ? '—' : `${mintPriceEth.toFixed(6)} ETH`}</b>
-                        {usdSpot ? <span className="opacity-80"> ({fmtUsd(mintPriceEth * usdSpot)})</span> : null}
-                        <span className="opacity-70"> + gas at confirmation</span>
-                      </>
-                    )}
+                    Mint fee: <b>{valueEth.toFixed(6)} ETH</b>
+                    {usdSpot ? <span className="opacity-80"> ({fmtUsd(valueEth * usdSpot)})</span> : null}
+                    <span className="opacity-70"> + gas at confirmation</span>
                   </div>
+                  {usingFallback && <span className="text-[10px] uppercase tracking-wide rounded bg-amber-500/20 text-amber-200 px-2 py-0.5 border border-amber-500/40">fallback</span>}
                   <div className="opacity-80">•</div>
                   <div>Blanks to fill by players: <b>{Math.max(0, parts.length - 1)}</b></div>
                 </div>
@@ -570,7 +585,8 @@ function MYOPage() {
               </div>
 
               <div className="text-xs text-slate-400">
-                Tip: If you get an “insufficient funds” error, ensure you’re on Base and have enough ETH for the mint fee <i>and</i> gas.
+                If a tx fails with “insufficient value”, the contract may require a higher price.
+                Try again after the on-chain price loads, or contact support.
               </div>
             </CardContent>
           </Card>
