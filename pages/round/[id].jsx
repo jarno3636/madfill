@@ -18,17 +18,8 @@ import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
-// 🔗 Unified wallet helpers (Mini App aware, request-shimmed)
-import {
-  initWallet,
-  getReadonlyProvider,
-  getBrowserProvider,
-  getAddress,
-  ensureBaseChain,
-  onAccountsChanged,
-  onChainChanged,
-  BASE_CHAIN_ID_DEC as BASE_CHAIN_ID,
-} from '@/lib/wallet'
+// ✅ Unified Tx provider (single source of truth)
+import { useTx } from '@/components/TxProvider'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -101,11 +92,18 @@ export default function RoundDetailPage() {
   const idParam = isReady ? router.query?.id : undefined
   const id = useMemo(() => (Array.isArray(idParam) ? idParam[0] : idParam), [idParam])
 
+  // ✅ Tx context: address, chain status, helpers, and BASE RPC
+  const {
+    address,
+    isOnBase,
+    switchToBase,
+    joinPool1,
+    claimPool1,
+    BASE_RPC,
+  } = useTx()
+
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-
-  const [address, setAddress] = useState(null)
-  const [isOnBase, setIsOnBase] = useState(true)
 
   const [round, setRound] = useState(null)
   const [submissions, setSubmissions] = useState([])
@@ -125,9 +123,6 @@ export default function RoundDetailPage() {
 
   const { width, height } = useWindowSize()
   const [tick, setTick] = useState(0)
-
-  // 🧊 init Mini App provider early so users appear connected inside Warpcast
-  useEffect(() => { initWallet().catch(() => {}) }, [])
 
   const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
   const toEth = (wei) => {
@@ -173,48 +168,10 @@ export default function RoundDetailPage() {
 
   useEffect(() => {
     if (!blanksCount) return
-    const taken = [...takenSet]
     const firstOpen = [...Array(blanksCount).keys()].find((i) => !takenSet.has(i))
     if (firstOpen !== undefined) setSelectedBlank(firstOpen)
-    else setSelectedBlank(Math.min(selectedBlank, Math.max(0, blanksCount - 1)))
-  }, [blanksCount, takenSet]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  /* ---------- Observe wallet + chain (shared helpers) ---------- */
-  useEffect(() => {
-    let off1 = () => {}
-    let off2 = () => {}
-
-    ;(async () => {
-      try {
-        const addr = await getAddress()
-        if (addr) setAddress(addr)
-      } catch {}
-      try {
-        const bp = await getBrowserProvider()
-        if (bp) {
-          const net = await bp.getNetwork()
-          setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-        }
-      } catch { setIsOnBase(true) }
-
-      off1 = await onAccountsChanged((a) => setAddress(a))
-      off2 = await onChainChanged(async () => {
-        try {
-          const bp = await getBrowserProvider()
-          const net = await bp?.getNetwork()
-          setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-        } catch { setIsOnBase(false) }
-      })
-    })()
-
-    return () => { try { off1() } catch {}; try { off2() } catch {} }
-  }, [])
-
-  const switchToBase = useCallback(async () => {
-    const ok = await ensureBaseChain()
-    setIsOnBase(ok)
-    return ok
-  }, [])
+    else setSelectedBlank((i) => Math.min(i, Math.max(0, blanksCount - 1)))
+  }, [blanksCount, takenSet])
 
   /* ---------- price + share + tick ---------- */
   useEffect(() => {
@@ -239,7 +196,7 @@ export default function RoundDetailPage() {
 
     ;(async () => {
       try {
-        const provider = getReadonlyProvider()
+        const provider = new ethers.JsonRpcProvider(BASE_RPC)
         const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
 
         const info = await ct.getPool1Info(BigInt(id))
@@ -318,7 +275,7 @@ export default function RoundDetailPage() {
     })()
 
     return () => { cancelled = true }
-  }, [id, isReady])
+  }, [id, isReady, BASE_RPC])
 
   /* ---------- inputs ---------- */
   function sanitizeWord(raw) {
@@ -335,8 +292,8 @@ export default function RoundDetailPage() {
     setInputError(clean ? '' : 'Please enter one word (max 16 chars).')
   }
 
-  /* ---------- actions ---------- */
-  async function handleJoin() {
+  /* ---------- actions (use Tx helpers) ---------- */
+  const handleJoin = useCallback(async () => {
     try {
       if (!round) throw new Error('Round not ready')
       if (ended) throw new Error('Round ended')
@@ -350,21 +307,16 @@ export default function RoundDetailPage() {
       const ok = await switchToBase()
       if (!ok) throw new Error('Please switch to Base')
 
-      const bp = await getBrowserProvider()
-      if (!bp) throw new Error('Wallet not found')
-      const signer = await bp.getSigner()
-      const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
+      const feeBaseWei = round.feeBase ?? 0n
+      if (feeBaseWei <= 0n) throw new Error('Entry fee not available yet, try again.')
 
-      const fee = round.feeBase ?? 0n
-      if (fee <= 0n) throw new Error('Entry fee not available yet, try again.')
-      const value = typeof fee === 'bigint' ? fee : BigInt(fee.toString())
-
-      const cleanWord = sanitizeWord(wordInput)
-      const username = (usernameInput || '').trim().slice(0, 32)
-
-      await ct.joinPool1.staticCall(BigInt(id), cleanWord, username, Number(selectedBlank), { value })
-      const tx = await ct.joinPool1(BigInt(id), cleanWord, username, Number(selectedBlank), { value })
-      await tx.wait()
+      await joinPool1({
+        id,
+        word: sanitizeWord(wordInput),
+        username: (usernameInput || '').trim().slice(0, 32),
+        blankIndex: Number(selectedBlank),
+        feeBaseWei: BigInt(feeBaseWei),
+      })
 
       setStatus('Entry submitted!'); setShowConfetti(true)
       router.replace(router.asPath)
@@ -373,9 +325,9 @@ export default function RoundDetailPage() {
       setStatus(extractDeepError(e).split('\n')[0])
       setShowConfetti(false)
     } finally { setBusy(false) }
-  }
+  }, [round, ended, wordInput, inputError, alreadyEntered, takenSet, selectedBlank, switchToBase, joinPool1, usernameInput, id, router])
 
-  async function handleFinalizePayout() {
+  const handleFinalizePayout = useCallback(async () => {
     try {
       if (!round) throw new Error('Round not ready')
       setBusy(true); setStatus('Finalizing and paying out…')
@@ -383,14 +335,7 @@ export default function RoundDetailPage() {
       const ok = await switchToBase()
       if (!ok) throw new Error('Please switch to Base')
 
-      const bp = await getBrowserProvider()
-      if (!bp) throw new Error('Wallet not found')
-      const signer = await bp.getSigner()
-      const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
-
-      await ct.claimPool1.staticCall(BigInt(id))
-      const tx = await ct.claimPool1(BigInt(id))
-      await tx.wait()
+      await claimPool1(id)
 
       setStatus('Payout executed'); setClaimedNow(true); setShowConfetti(true)
       setTimeout(() => router.replace(router.asPath), 1500)
@@ -399,7 +344,7 @@ export default function RoundDetailPage() {
       setStatus(extractDeepError(e).split('\n')[0])
       setShowConfetti(false)
     } finally { setBusy(false) }
-  }
+  }, [round, switchToBase, claimPool1, id, router])
 
   /* ---------- derived for ShareBar ---------- */
   const feeEthNum = useMemo(() => toEth(round?.feeBase), [round?.feeBase])
