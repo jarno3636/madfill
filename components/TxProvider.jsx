@@ -7,11 +7,9 @@ import { useWallet } from './WalletProvider'
 import fillinAbi from '@/abi/FillInStoryV3_ABI.json'
 import nftAbi from '@/abi/MadFillTemplateNFT_ABI.json'
 
-/** -------- Chain / RPC -------- */
 const BASE_CHAIN_ID = 8453n
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 
-/** -------- Contracts -------- */
 const FILLIN_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
@@ -20,45 +18,16 @@ const NFT_ADDRESS =
   process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS ||
   '0x0F22124A86F8893990fA4763393E46d97F429442'
 
-/** -------- Context -------- */
 const TxContext = createContext(null)
-
-/** -------- Helpers -------- */
-const toBigInt = (v, def = 0n) => {
-  try {
-    if (typeof v === 'bigint') return v
-    if (typeof v === 'number') return BigInt(Math.floor(v))
-    if (typeof v === 'string') {
-      // handle hex or decimal
-      return v.trim().startsWith('0x') ? BigInt(v) : BigInt(v.trim())
-    }
-    if (v && typeof v.toString === 'function') return BigInt(v.toString())
-  } catch {}
-  return def
-}
-
-const toUInt8 = (v, def = 0) => {
-  const n = Number(v ?? def)
-  return Number.isFinite(n) ? Math.max(0, Math.min(255, Math.floor(n))) : def
-}
-
-const errMsg = (e, fb = 'Transaction failed') =>
-  e?.info?.error?.message ||
-  e?.shortMessage ||
-  e?.reason ||
-  e?.data?.message ||
-  e?.message ||
-  fb
 
 export function TxProvider({ children }) {
   const {
     provider, signer, isOnBase, connect, switchToBase, address,
   } = useWallet()
 
-  // Always-on read provider (for public reads + preflight)
+  // Read-only provider used for all static calls & estimations (never the Mini provider)
   const read = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [])
 
-  /** Contracts bound to a runner (signer for write, read provider for read) */
   const getContracts = useCallback(
     (needsSigner = true) => {
       const canWrite = needsSigner && signer && provider
@@ -71,15 +40,6 @@ export function TxProvider({ children }) {
     [provider, signer, read]
   )
 
-  /** Read-only contracts (force RPC runner) */
-  const getReadOnlyContracts = useCallback(() => {
-    return {
-      fillin: new ethers.Contract(FILLIN_ADDRESS, fillinAbi, read),
-      nft:    new ethers.Contract(NFT_ADDRESS,    nftAbi,    read),
-    }
-  }, [read])
-
-  /** Ensure wallet is connected + on Base */
   const ensureReady = useCallback(async () => {
     if (!address) await connect()
     if (!isOnBase) {
@@ -88,258 +48,163 @@ export function TxProvider({ children }) {
     }
   }, [address, isOnBase, connect, switchToBase])
 
-  /* ===========================================================
-   * Pool 1
-   * ===========================================================
+  /**
+   * Use the public read RPC to:
+   *  - do the same call as the tx (staticCall) with from/value to catch reverts
+   *  - estimate gas safely (Mini provider sometimes lacks eth_estimateGas/feeHistory)
+   *  - get fee data and return overrides for the real send (with signer)
    */
+  const estimateWithRead = useCallback(
+    async (contractAddress, abi, fnName, args, { from, value } = {}) => {
+      const ctRead = new ethers.Contract(contractAddress, abi, read)
+
+      // 1) Preflight revert with proper msg.sender context
+      try {
+        await ctRead[fnName].staticCall(...args, { from, value })
+      } catch (e) {
+        // Re-throw with the most useful reason available
+        const msg =
+          e?.info?.error?.message ||
+          e?.shortMessage ||
+          e?.reason ||
+          e?.message ||
+          'Transaction would revert'
+        throw new Error(msg)
+      }
+
+      // 2) Gas estimate (buffered). If it fails, we still proceed without gasLimit.
+      let gasLimit
+      try {
+        const est = await ctRead[fnName].estimateGas(...args, { from, value })
+        // add generous 20% buffer + small constant
+        gasLimit = (est * 12n) / 10n + 50_000n
+      } catch {}
+
+      // 3) Fee data from read RPC (some Mini providers don’t support dynamic fee endpoints)
+      let feeOverrides = {}
+      try {
+        const fd = await read.getFeeData()
+        // Only include values that exist
+        if (fd.maxFeePerGas) feeOverrides.maxFeePerGas = fd.maxFeePerGas
+        if (fd.maxPriorityFeePerGas) feeOverrides.maxPriorityFeePerGas = fd.maxPriorityFeePerGas
+        // If chain doesn’t have EIP-1559, ethers will ignore these and use gasPrice.
+        if (!fd.maxFeePerGas && fd.gasPrice) feeOverrides.gasPrice = fd.gasPrice
+      } catch {}
+
+      const overrides = { value }
+      if (from) overrides.from = from
+      if (gasLimit) overrides.gasLimit = gasLimit
+      Object.assign(overrides, feeOverrides)
+      return overrides
+    },
+    [read]
+  )
 
   const createPool1 = useCallback(async ({
     title, theme, parts, word, username, feeBaseWei, durationSecs, blankIndex,
   }) => {
     await ensureReady()
+    const { fillin } = getContracts(true)
+    const args = [
+      String(title || ''),
+      String(theme || ''),
+      Array.isArray(parts) ? parts.map(String) : [],
+      String(word || ''),
+      String(username || ''),
+      feeBaseWei,
+      BigInt(durationSecs || 0n),
+      Number(blankIndex || 0),
+    ]
 
-    const fee = toBigInt(feeBaseWei, 0n)
-    const duration = toBigInt(durationSecs, 0n)
-    const idx = toUInt8(blankIndex, 0)
+    // Preflight + fee/gas from read-only RPC
+    const overrides = await estimateWithRead(
+      FILLIN_ADDRESS,
+      fillinAbi,
+      'createPool1',
+      args,
+      { from: address, value: feeBaseWei }
+    )
 
-    // 1) Preflight ALWAYS via read RPC to avoid EIP-1193 quirks
-    try {
-      const { fillin: fillRead } = getReadOnlyContracts()
-      await fillRead.createPool1.staticCall(
-        String(title || ''),
-        String(theme || ''),
-        Array.isArray(parts) ? parts.map(String) : [],
-        String(word || ''),
-        String(username || ''),
-        fee,
-        duration,
-        idx,
-        { value: fee, from: address || undefined }
-      )
-    } catch (e) {
-      // If preflight reverts, surface the reason early
-      throw new Error(errMsg(e, 'Preflight failed (createPool1)'))
-    }
-
-    // 2) Send real tx with signer
-    try {
-      const { fillin } = getContracts(true)
-      const tx = await fillin.createPool1(
-        String(title || ''),
-        String(theme || ''),
-        Array.isArray(parts) ? parts.map(String) : [],
-        String(word || ''),
-        String(username || ''),
-        fee,
-        duration,
-        idx,
-        { value: fee }
-      )
-      return await tx.wait()
-    } catch (e) {
-      throw new Error(errMsg(e, 'Create failed'))
-    }
-  }, [ensureReady, getContracts, getReadOnlyContracts, address])
+    const tx = await fillin.createPool1(...args, overrides)
+    return await tx.wait()
+  }, [ensureReady, getContracts, estimateWithRead, address])
 
   const joinPool1 = useCallback(async ({ id, word, username, blankIndex, feeBaseWei }) => {
     await ensureReady()
+    const { fillin } = getContracts(true)
+    const poolId = BigInt(id)
 
-    const poolId = toBigInt(id)
-    const fee = toBigInt(feeBaseWei, 0n)
-    const idx = toUInt8(blankIndex, 0)
+    const args = [
+      poolId,
+      String(word || ''),
+      String(username || ''),
+      Number(blankIndex || 0),
+    ]
 
-    // Preflight via read RPC
-    try {
-      const { fillin: fillRead } = getReadOnlyContracts()
-      await fillRead.joinPool1.staticCall(
-        poolId, String(word||''), String(username||''), idx,
-        { value: fee, from: address || undefined }
-      )
-    } catch (e) {
-      throw new Error(errMsg(e, 'Preflight failed (joinPool1)'))
-    }
+    const overrides = await estimateWithRead(
+      FILLIN_ADDRESS,
+      fillinAbi,
+      'joinPool1',
+      args,
+      { from: address, value: feeBaseWei }
+    )
 
-    // Send tx
-    try {
-      const { fillin } = getContracts(true)
-      const tx = await fillin.joinPool1(
-        poolId, String(word||''), String(username||''), idx, { value: fee }
-      )
-      return await tx.wait()
-    } catch (e) {
-      throw new Error(errMsg(e, 'Join failed'))
-    }
-  }, [ensureReady, getContracts, getReadOnlyContracts, address])
+    const tx = await fillin.joinPool1(...args, overrides)
+    return await tx.wait()
+  }, [ensureReady, getContracts, estimateWithRead, address])
 
   const claimPool1 = useCallback(async (id) => {
     await ensureReady()
-    const poolId = toBigInt(id)
+    const { fillin } = getContracts(true)
+    const poolId = BigInt(id)
 
-    // Preflight (read)
-    try {
-      const { fillin: fillRead } = getReadOnlyContracts()
-      await fillRead.claimPool1.staticCall(poolId, { from: address || undefined })
-    } catch (e) {
-      throw new Error(errMsg(e, 'Preflight failed (claimPool1)'))
-    }
+    const args = [poolId]
 
-    // Send tx
-    try {
-      const { fillin } = getContracts(true)
-      const tx = await fillin.claimPool1(poolId)
-      return await tx.wait()
-    } catch (e) {
-      throw new Error(errMsg(e, 'Claim failed'))
-    }
-  }, [ensureReady, getContracts, getReadOnlyContracts, address])
+    const overrides = await estimateWithRead(
+      FILLIN_ADDRESS,
+      fillinAbi,
+      'claimPool1',
+      args,
+      { from: address }
+    )
 
-  /* ===========================================================
-   * Pool 2 (optional helpers for Challenge/Vote pages)
-   * ===========================================================
-   */
-
-  const createPool2 = useCallback(async ({
-    pool1Id, challengerWord, challengerUsername, feeBaseWei, durationSecs,
-  }) => {
-    await ensureReady()
-
-    const p1 = toBigInt(pool1Id)
-    const fee = toBigInt(feeBaseWei, 0n)
-    const duration = toBigInt(durationSecs, 0n)
-
-    try {
-      const { fillin: fillRead } = getReadOnlyContracts()
-      await fillRead.createPool2.staticCall(
-        p1,
-        String(challengerWord || ''),
-        String(challengerUsername || ''),
-        fee,
-        duration,
-        { value: fee, from: address || undefined }
-      )
-    } catch (e) {
-      throw new Error(errMsg(e, 'Preflight failed (createPool2)'))
-    }
-
-    try {
-      const { fillin } = getContracts(true)
-      const tx = await fillin.createPool2(
-        p1,
-        String(challengerWord || ''),
-        String(challengerUsername || ''),
-        fee,
-        duration,
-        { value: fee }
-      )
-      return await tx.wait()
-    } catch (e) {
-      throw new Error(errMsg(e, 'Challenge failed'))
-    }
-  }, [ensureReady, getContracts, getReadOnlyContracts, address])
-
-  const votePool2 = useCallback(async ({ id, voteChallenger, valueWei }) => {
-    await ensureReady()
-
-    const p2 = toBigInt(id)
-    const v = Boolean(voteChallenger)
-    const value = toBigInt(valueWei, 0n)
-
-    try {
-      const { fillin: fillRead } = getReadOnlyContracts()
-      await fillRead.votePool2.staticCall(p2, v, { value, from: address || undefined })
-    } catch (e) {
-      throw new Error(errMsg(e, 'Preflight failed (votePool2)'))
-    }
-
-    try {
-      const { fillin } = getContracts(true)
-      const tx = await fillin.votePool2(p2, v, { value })
-      return await tx.wait()
-    } catch (e) {
-      throw new Error(errMsg(e, 'Vote failed'))
-    }
-  }, [ensureReady, getContracts, getReadOnlyContracts, address])
-
-  const claimPool2 = useCallback(async (id) => {
-    await ensureReady()
-    const p2 = toBigInt(id)
-
-    try {
-      const { fillin: fillRead } = getReadOnlyContracts()
-      await fillRead.claimPool2.staticCall(p2, { from: address || undefined })
-    } catch (e) {
-      throw new Error(errMsg(e, 'Preflight failed (claimPool2)'))
-    }
-
-    try {
-      const { fillin } = getContracts(true)
-      const tx = await fillin.claimPool2(p2)
-      return await tx.wait()
-    } catch (e) {
-      throw new Error(errMsg(e, 'Claim failed'))
-    }
-  }, [ensureReady, getContracts, getReadOnlyContracts, address])
-
-  /* ===========================================================
-   * NFT
-   * ===========================================================
-   */
+    const tx = await fillin.claimPool1(...args, overrides)
+    return await tx.wait()
+  }, [ensureReady, getContracts, estimateWithRead, address])
 
   const mintTemplateNFT = useCallback(async (title, description, theme, parts, { value } = {}) => {
     await ensureReady()
-    const valueWei = toBigInt(value, 0n)
+    const { nft } = getContracts(true)
 
-    // No preflight here (usually fine), but we can do a read-call for safety:
-    try {
-      const { nft: nftRead } = getReadOnlyContracts()
-      await nftRead.mintTemplate.staticCall(
-        String(title || ''),
-        String(description || ''),
-        String(theme || ''),
-        Array.isArray(parts) ? parts.map(String) : [],
-        { value: valueWei, from: address || undefined }
-      )
-    } catch (e) {
-      throw new Error(errMsg(e, 'Preflight failed (mintTemplate)'))
-    }
+    const args = [
+      String(title || ''),
+      String(description || ''),
+      String(theme || ''),
+      Array.isArray(parts) ? parts.map(String) : [],
+    ]
 
-    try {
-      const { nft } = getContracts(true)
-      const tx = await nft.mintTemplate(
-        String(title || ''),
-        String(description || ''),
-        String(theme || ''),
-        Array.isArray(parts) ? parts.map(String) : [],
-        { value: valueWei }
-      )
-      return await tx.wait()
-    } catch (e) {
-      throw new Error(errMsg(e, 'Mint failed'))
-    }
-  }, [ensureReady, getContracts, getReadOnlyContracts, address])
+    const overrides = await estimateWithRead(
+      NFT_ADDRESS,
+      nftAbi,
+      'mintTemplate',
+      args,
+      { from: address, value: BigInt(value || 0n) }
+    )
 
-  /** -------- Value exposed to app -------- */
+    const tx = await nft.mintTemplate(...args, overrides)
+    return await tx.wait()
+  }, [ensureReady, getContracts, estimateWithRead, address])
+
   const value = useMemo(() => ({
     // connection (from WalletProvider)
     address, isConnected: !!address, isOnBase, connect, switchToBase, provider,
-
-    // contracts read helper (optional)
+    // contracts read helper (optional for pages)
     getContracts,
-
-    // tx helpers (Pool1 / Pool2 / NFT)
-    createPool1, joinPool1, claimPool1,
-    createPool2, votePool2, claimPool2,
-    mintTemplateNFT,
-
+    // tx helpers
+    createPool1, joinPool1, claimPool1, mintTemplateNFT,
     // constants
-    BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS, BASE_CHAIN_ID,
-  }), [
-    address, isOnBase, connect, switchToBase, provider,
-    getContracts,
-    createPool1, joinPool1, claimPool1,
-    createPool2, votePool2, claimPool2,
-    mintTemplateNFT,
-  ])
+    BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS,
+  }), [address, isOnBase, connect, switchToBase, provider, getContracts, createPool1, joinPool1, claimPool1, mintTemplateNFT])
 
   return <TxContext.Provider value={value}>{children}</TxContext.Provider>
 }
