@@ -7,10 +7,11 @@ import { useWallet } from './WalletProvider'
 import fillinAbi from '@/abi/FillInStoryV3_ABI.json'
 import nftAbi from '@/abi/MadFillTemplateNFT_ABI.json'
 
-/** ---------- Chain / RPC ---------- */
+/** -------- Chain / RPC -------- */
+const BASE_CHAIN_ID = 8453n
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 
-/** ---------- Contract addresses ---------- */
+/** -------- Contracts -------- */
 const FILLIN_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
@@ -19,26 +20,45 @@ const NFT_ADDRESS =
   process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS ||
   '0x0F22124A86F8893990fA4763393E46d97F429442'
 
-/** ---------- Context ---------- */
+/** -------- Context -------- */
 const TxContext = createContext(null)
 
-/**
- * TxProvider
- * Uses WalletProvider for connection state; exposes read + tx helpers.
- * All write funcs do:
- *   - ensure connected
- *   - ensure Base
- *   - staticCall first for friendly reverts
- */
+/** -------- Helpers -------- */
+const toBigInt = (v, def = 0n) => {
+  try {
+    if (typeof v === 'bigint') return v
+    if (typeof v === 'number') return BigInt(Math.floor(v))
+    if (typeof v === 'string') {
+      // handle hex or decimal
+      return v.trim().startsWith('0x') ? BigInt(v) : BigInt(v.trim())
+    }
+    if (v && typeof v.toString === 'function') return BigInt(v.toString())
+  } catch {}
+  return def
+}
+
+const toUInt8 = (v, def = 0) => {
+  const n = Number(v ?? def)
+  return Number.isFinite(n) ? Math.max(0, Math.min(255, Math.floor(n))) : def
+}
+
+const errMsg = (e, fb = 'Transaction failed') =>
+  e?.info?.error?.message ||
+  e?.shortMessage ||
+  e?.reason ||
+  e?.data?.message ||
+  e?.message ||
+  fb
+
 export function TxProvider({ children }) {
   const {
     provider, signer, isOnBase, connect, switchToBase, address,
   } = useWallet()
 
-  // Public read provider (never signs)
+  // Always-on read provider (for public reads + preflight)
   const read = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [])
 
-  /** Build contracts with signer if available (or read-only). */
+  /** Contracts bound to a runner (signer for write, read provider for read) */
   const getContracts = useCallback(
     (needsSigner = true) => {
       const canWrite = needsSigner && signer && provider
@@ -51,7 +71,15 @@ export function TxProvider({ children }) {
     [provider, signer, read]
   )
 
-  /** Ensure connected & on Base before any write. */
+  /** Read-only contracts (force RPC runner) */
+  const getReadOnlyContracts = useCallback(() => {
+    return {
+      fillin: new ethers.Contract(FILLIN_ADDRESS, fillinAbi, read),
+      nft:    new ethers.Contract(NFT_ADDRESS,    nftAbi,    read),
+    }
+  }, [read])
+
+  /** Ensure wallet is connected + on Base */
   const ensureReady = useCallback(async () => {
     if (!address) await connect()
     if (!isOnBase) {
@@ -60,218 +88,257 @@ export function TxProvider({ children }) {
     }
   }, [address, isOnBase, connect, switchToBase])
 
-  // --------------------------- READ HELPERS ---------------------------
+  /* ===========================================================
+   * Pool 1
+   * ===========================================================
+   */
 
-  /** Pool 1: protocol fees */
-  const getFeeInfo = useCallback(async () => {
-    const { fillin } = getContracts(false)
-    const [feeBps, den] = await Promise.all([
-      fillin.FEE_BPS().catch(() => null),
-      fillin.BPS_DENOMINATOR().catch(() => 10000n),
-    ])
-    return { feeBps, denominator: den }
-  }, [getContracts])
-
-  /** Pool 1: info for a round */
-  const getPool1Info = useCallback(async (id) => {
-    const { fillin } = getContracts(false)
-    return await fillin.getPool1Info(BigInt(id))
-  }, [getContracts])
-
-  /** Pool 1: taken blanks (bool[]), or packed submissions if needed */
-  const getPool1Taken = useCallback(async (id) => {
-    const { fillin } = getContracts(false)
-    return await fillin.getPool1Taken(BigInt(id))
-  }, [getContracts])
-
-  const getPool1SubmissionsPacked = useCallback(async (id) => {
-    const { fillin } = getContracts(false)
-    // returns { addrs, usernames, words, blankIndexes }
-    return await fillin.getPool1SubmissionsPacked(BigInt(id))
-  }, [getContracts])
-
-  /** Pool 2: info / tallies */
-  const getPool2Info = useCallback(async (id) => {
-    const { fillin } = getContracts(false)
-    return await fillin.getPool2Info(BigInt(id))
-  }, [getContracts])
-
-  const getPool2InfoFull = useCallback(async (id) => {
-    const { fillin } = getContracts(false)
-    return await fillin.getPool2InfoFull(BigInt(id))
-  }, [getContracts])
-
-  const getPool2Tallies = useCallback(async (id) => {
-    const { fillin } = getContracts(false)
-    return await fillin.getPool2Tallies(BigInt(id))
-  }, [getContracts])
-
-  // --------------------------- WRITE HELPERS ---------------------------
-
-  // ---- Pool 1 ----
   const createPool1 = useCallback(async ({
     title, theme, parts, word, username, feeBaseWei, durationSecs, blankIndex,
   }) => {
     await ensureReady()
-    const { fillin } = getContracts(true)
 
-    // Preflight for revert reason
-    await fillin.createPool1.staticCall(
-      String(title || ''),
-      String(theme || ''),
-      Array.isArray(parts) ? parts.map(String) : [],
-      String(word || ''),
-      String(username || ''),
-      BigInt(feeBaseWei || 0n),
-      BigInt(durationSecs || 0n),
-      Number(blankIndex || 0),
-      { value: BigInt(feeBaseWei || 0n) }
-    )
+    const fee = toBigInt(feeBaseWei, 0n)
+    const duration = toBigInt(durationSecs, 0n)
+    const idx = toUInt8(blankIndex, 0)
 
-    const tx = await fillin.createPool1(
-      String(title || ''),
-      String(theme || ''),
-      Array.isArray(parts) ? parts.map(String) : [],
-      String(word || ''),
-      String(username || ''),
-      BigInt(feeBaseWei || 0n),
-      BigInt(durationSecs || 0n),
-      Number(blankIndex || 0),
-      { value: BigInt(feeBaseWei || 0n) }
-    )
-    return await tx.wait()
-  }, [ensureReady, getContracts])
+    // 1) Preflight ALWAYS via read RPC to avoid EIP-1193 quirks
+    try {
+      const { fillin: fillRead } = getReadOnlyContracts()
+      await fillRead.createPool1.staticCall(
+        String(title || ''),
+        String(theme || ''),
+        Array.isArray(parts) ? parts.map(String) : [],
+        String(word || ''),
+        String(username || ''),
+        fee,
+        duration,
+        idx,
+        { value: fee, from: address || undefined }
+      )
+    } catch (e) {
+      // If preflight reverts, surface the reason early
+      throw new Error(errMsg(e, 'Preflight failed (createPool1)'))
+    }
+
+    // 2) Send real tx with signer
+    try {
+      const { fillin } = getContracts(true)
+      const tx = await fillin.createPool1(
+        String(title || ''),
+        String(theme || ''),
+        Array.isArray(parts) ? parts.map(String) : [],
+        String(word || ''),
+        String(username || ''),
+        fee,
+        duration,
+        idx,
+        { value: fee }
+      )
+      return await tx.wait()
+    } catch (e) {
+      throw new Error(errMsg(e, 'Create failed'))
+    }
+  }, [ensureReady, getContracts, getReadOnlyContracts, address])
 
   const joinPool1 = useCallback(async ({ id, word, username, blankIndex, feeBaseWei }) => {
     await ensureReady()
-    const { fillin } = getContracts(true)
-    const poolId = BigInt(id)
 
-    await fillin.joinPool1.staticCall(
-      poolId,
-      String(word || ''),
-      String(username || ''),
-      Number(blankIndex || 0),
-      { value: BigInt(feeBaseWei || 0n) }
-    )
+    const poolId = toBigInt(id)
+    const fee = toBigInt(feeBaseWei, 0n)
+    const idx = toUInt8(blankIndex, 0)
 
-    const tx = await fillin.joinPool1(
-      poolId,
-      String(word || ''),
-      String(username || ''),
-      Number(blankIndex || 0),
-      { value: BigInt(feeBaseWei || 0n) }
-    )
-    return await tx.wait()
-  }, [ensureReady, getContracts])
+    // Preflight via read RPC
+    try {
+      const { fillin: fillRead } = getReadOnlyContracts()
+      await fillRead.joinPool1.staticCall(
+        poolId, String(word||''), String(username||''), idx,
+        { value: fee, from: address || undefined }
+      )
+    } catch (e) {
+      throw new Error(errMsg(e, 'Preflight failed (joinPool1)'))
+    }
+
+    // Send tx
+    try {
+      const { fillin } = getContracts(true)
+      const tx = await fillin.joinPool1(
+        poolId, String(word||''), String(username||''), idx, { value: fee }
+      )
+      return await tx.wait()
+    } catch (e) {
+      throw new Error(errMsg(e, 'Join failed'))
+    }
+  }, [ensureReady, getContracts, getReadOnlyContracts, address])
 
   const claimPool1 = useCallback(async (id) => {
     await ensureReady()
-    const { fillin } = getContracts(true)
-    const poolId = BigInt(id)
-    await fillin.claimPool1.staticCall(poolId)
-    const tx = await fillin.claimPool1(poolId)
-    return await tx.wait()
-  }, [ensureReady, getContracts])
+    const poolId = toBigInt(id)
 
-  // ---- Pool 2 ----
+    // Preflight (read)
+    try {
+      const { fillin: fillRead } = getReadOnlyContracts()
+      await fillRead.claimPool1.staticCall(poolId, { from: address || undefined })
+    } catch (e) {
+      throw new Error(errMsg(e, 'Preflight failed (claimPool1)'))
+    }
+
+    // Send tx
+    try {
+      const { fillin } = getContracts(true)
+      const tx = await fillin.claimPool1(poolId)
+      return await tx.wait()
+    } catch (e) {
+      throw new Error(errMsg(e, 'Claim failed'))
+    }
+  }, [ensureReady, getContracts, getReadOnlyContracts, address])
+
+  /* ===========================================================
+   * Pool 2 (optional helpers for Challenge/Vote pages)
+   * ===========================================================
+   */
+
   const createPool2 = useCallback(async ({
-    pool1Id, word, username, feeBaseWei, durationSecs,
+    pool1Id, challengerWord, challengerUsername, feeBaseWei, durationSecs,
   }) => {
     await ensureReady()
-    const { fillin } = getContracts(true)
-    const id = BigInt(pool1Id)
 
-    await fillin.createPool2.staticCall(
-      id,
-      String(word || ''),
-      String(username || ''),
-      BigInt(feeBaseWei || 0n),
-      BigInt(durationSecs || 0n),
-      { value: BigInt(feeBaseWei || 0n) }
-    )
+    const p1 = toBigInt(pool1Id)
+    const fee = toBigInt(feeBaseWei, 0n)
+    const duration = toBigInt(durationSecs, 0n)
 
-    const tx = await fillin.createPool2(
-      id,
-      String(word || ''),
-      String(username || ''),
-      BigInt(feeBaseWei || 0n),
-      BigInt(durationSecs || 0n),
-      { value: BigInt(feeBaseWei || 0n) }
-    )
-    return await tx.wait()
-  }, [ensureReady, getContracts])
+    try {
+      const { fillin: fillRead } = getReadOnlyContracts()
+      await fillRead.createPool2.staticCall(
+        p1,
+        String(challengerWord || ''),
+        String(challengerUsername || ''),
+        fee,
+        duration,
+        { value: fee, from: address || undefined }
+      )
+    } catch (e) {
+      throw new Error(errMsg(e, 'Preflight failed (createPool2)'))
+    }
+
+    try {
+      const { fillin } = getContracts(true)
+      const tx = await fillin.createPool2(
+        p1,
+        String(challengerWord || ''),
+        String(challengerUsername || ''),
+        fee,
+        duration,
+        { value: fee }
+      )
+      return await tx.wait()
+    } catch (e) {
+      throw new Error(errMsg(e, 'Challenge failed'))
+    }
+  }, [ensureReady, getContracts, getReadOnlyContracts, address])
 
   const votePool2 = useCallback(async ({ id, voteChallenger, valueWei }) => {
     await ensureReady()
-    const { fillin } = getContracts(true)
-    const poolId = BigInt(id)
 
-    await fillin.votePool2.staticCall(poolId, !!voteChallenger, {
-      value: BigInt(valueWei || 0n)
-    })
-    const tx = await fillin.votePool2(poolId, !!voteChallenger, {
-      value: BigInt(valueWei || 0n)
-    })
-    return await tx.wait()
-  }, [ensureReady, getContracts])
+    const p2 = toBigInt(id)
+    const v = Boolean(voteChallenger)
+    const value = toBigInt(valueWei, 0n)
+
+    try {
+      const { fillin: fillRead } = getReadOnlyContracts()
+      await fillRead.votePool2.staticCall(p2, v, { value, from: address || undefined })
+    } catch (e) {
+      throw new Error(errMsg(e, 'Preflight failed (votePool2)'))
+    }
+
+    try {
+      const { fillin } = getContracts(true)
+      const tx = await fillin.votePool2(p2, v, { value })
+      return await tx.wait()
+    } catch (e) {
+      throw new Error(errMsg(e, 'Vote failed'))
+    }
+  }, [ensureReady, getContracts, getReadOnlyContracts, address])
 
   const claimPool2 = useCallback(async (id) => {
     await ensureReady()
-    const { fillin } = getContracts(true)
-    const poolId = BigInt(id)
-    await fillin.claimPool2.staticCall(poolId)
-    const tx = await fillin.claimPool2(poolId)
-    return await tx.wait()
-  }, [ensureReady, getContracts])
+    const p2 = toBigInt(id)
 
-  // ---- NFT Template ----
-  const mintTemplateNFT = useCallback(async (title, description, theme, parts, valueWei) => {
+    try {
+      const { fillin: fillRead } = getReadOnlyContracts()
+      await fillRead.claimPool2.staticCall(p2, { from: address || undefined })
+    } catch (e) {
+      throw new Error(errMsg(e, 'Preflight failed (claimPool2)'))
+    }
+
+    try {
+      const { fillin } = getContracts(true)
+      const tx = await fillin.claimPool2(p2)
+      return await tx.wait()
+    } catch (e) {
+      throw new Error(errMsg(e, 'Claim failed'))
+    }
+  }, [ensureReady, getContracts, getReadOnlyContracts, address])
+
+  /* ===========================================================
+   * NFT
+   * ===========================================================
+   */
+
+  const mintTemplateNFT = useCallback(async (title, description, theme, parts, { value } = {}) => {
     await ensureReady()
-    const { nft } = getContracts(true)
-    const tx = await nft.mintTemplate(
-      String(title || ''),
-      String(description || ''),
-      String(theme || ''),
-      Array.isArray(parts) ? parts.map(String) : [],
-      { value: BigInt(valueWei || 0n) }
-    )
-    return await tx.wait()
-  }, [ensureReady, getContracts])
+    const valueWei = toBigInt(value, 0n)
 
-  /** Context value */
+    // No preflight here (usually fine), but we can do a read-call for safety:
+    try {
+      const { nft: nftRead } = getReadOnlyContracts()
+      await nftRead.mintTemplate.staticCall(
+        String(title || ''),
+        String(description || ''),
+        String(theme || ''),
+        Array.isArray(parts) ? parts.map(String) : [],
+        { value: valueWei, from: address || undefined }
+      )
+    } catch (e) {
+      throw new Error(errMsg(e, 'Preflight failed (mintTemplate)'))
+    }
+
+    try {
+      const { nft } = getContracts(true)
+      const tx = await nft.mintTemplate(
+        String(title || ''),
+        String(description || ''),
+        String(theme || ''),
+        Array.isArray(parts) ? parts.map(String) : [],
+        { value: valueWei }
+      )
+      return await tx.wait()
+    } catch (e) {
+      throw new Error(errMsg(e, 'Mint failed'))
+    }
+  }, [ensureReady, getContracts, getReadOnlyContracts, address])
+
+  /** -------- Value exposed to app -------- */
   const value = useMemo(() => ({
     // connection (from WalletProvider)
     address, isConnected: !!address, isOnBase, connect, switchToBase, provider,
 
-    // read helpers
+    // contracts read helper (optional)
     getContracts,
-    getFeeInfo,
-    getPool1Info,
-    getPool1Taken,
-    getPool1SubmissionsPacked,
-    getPool2Info,
-    getPool2InfoFull,
-    getPool2Tallies,
 
-    // Pool1
+    // tx helpers (Pool1 / Pool2 / NFT)
     createPool1, joinPool1, claimPool1,
-
-    // Pool2
     createPool2, votePool2, claimPool2,
-
-    // NFT
     mintTemplateNFT,
 
     // constants
-    BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS,
+    BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS, BASE_CHAIN_ID,
   }), [
     address, isOnBase, connect, switchToBase, provider,
-    getContracts, getFeeInfo, getPool1Info, getPool1Taken, getPool1SubmissionsPacked,
-    getPool2Info, getPool2InfoFull, getPool2Tallies,
+    getContracts,
     createPool1, joinPool1, claimPool1,
     createPool2, votePool2, claimPool2,
-    mintTemplateNFT
+    mintTemplateNFT,
   ])
 
   return <TxContext.Provider value={value}>{children}</TxContext.Provider>
