@@ -31,7 +31,9 @@ function buildBufferedOverrides({ from, value, gasLimitBase = 250_000, gasJitter
   if (value !== undefined && value !== null) overrides.value = ethers.toBigInt(value)
 
   // Add a small deterministic buffer + jitter to avoid edge underestimates
-  const buffer = BigInt(Math.max(0, gasLimitBase + Math.floor(Math.random() * Math.max(1, gasJitter)))))
+  const buffer = BigInt(
+    Math.max(0, gasLimitBase + Math.floor(Math.random() * Math.max(1, gasJitter)))
+  )
   overrides.gasLimit = buffer
   // IMPORTANT: Do NOT set gasPrice / maxFeePerGas here; let the wallet do it.
   return overrides
