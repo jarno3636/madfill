@@ -42,7 +42,7 @@ export default function Layout({ children }) {
       { href: '/myo', label: '🎨 Make Your Own' },
       { href: '/free', label: '🎁 Free Play' },
       { href: '/challenge', label: '⚔️ Challenge' },
-      { href: '/myrounds', label: '📜 My Rounds' }
+      { href: '/myrounds', label: '📜 My Rounds' },
     ],
     []
   )
@@ -87,7 +87,7 @@ export default function Layout({ children }) {
           </div>
 
           <button
-            onClick={() => setOpen(v => !v)}
+            onClick={() => setOpen((v) => !v)}
             className="md:hidden inline-flex items-center gap-2 px-3.5 py-2.5 text-sm border border-slate-700 rounded-xl bg-slate-900/70 hover:bg-slate-900/60 text-slate-200"
             aria-label="Toggle menu"
           >
