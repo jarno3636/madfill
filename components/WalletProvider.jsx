@@ -1,4 +1,3 @@
-// components/WalletProvider.jsx
 'use client'
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from 'react'
@@ -7,27 +6,60 @@ import {
   initWallet,
   getReadonlyProvider,
   getBrowserProvider,
-  getAddress,
-  getChainId,
+  // getAddress, // not needed here
+  // getChainId, // we'll read from provider to ensure bigint
+  ensureBaseChain,
   onAccountsChanged,
   onChainChanged,
   isWarpcast,
   BASE_CHAIN_ID_DEC,
 } from '@/lib/wallet'
 
-const WalletCtx = createContext({})
+// Normalize chain id types to bigint
+const BASE_CHAIN_ID_BI = typeof BASE_CHAIN_ID_DEC === 'bigint'
+  ? BASE_CHAIN_ID_DEC
+  : BigInt(BASE_CHAIN_ID_DEC || 8453)
+
+const WalletCtx = createContext({
+  provider: /** @type {ethers.BrowserProvider|null} */(null),
+  signer:   /** @type {ethers.Signer|null} */(null),
+  address:  /** @type {string|null} */(null),
+  chainId:  /** @type {bigint|null} */(null),
+  isConnected: false,
+  isOnBase: true,
+  isWarpcast: false,
+  connect: async () => {},
+  switchToBase: async () => {},
+  refresh: async () => {},
+})
 
 export function WalletProvider({ children }) {
   const [provider, setProvider] = useState(null)
   const [signer, setSigner] = useState(null)
   const [address, setAddress] = useState(null)
-  const [chainId, setChainId] = useState(null)
+  const [chainId, setChainId] = useState/** @type {bigint|null} */(null)
 
   const isConnected = !!address
-  const isOnBase = chainId === BASE_CHAIN_ID_DEC
-  const warpcast = isWarpcast()
+  const isOnBase = chainId != null && chainId === BASE_CHAIN_ID_BI
+
   const booted = useRef(false)
 
+  // Small helper to read chainId as bigint from a provider
+  const readChainIdBI = useCallback(async (bp) => {
+    try {
+      // ethers v6 returns bigint here
+      const net = await bp.getNetwork()
+      if (net?.chainId != null) return /** @type {bigint} */(net.chainId)
+    } catch {}
+    try {
+      // fallback to hex RPC
+      const hex = await bp.send?.('eth_chainId', [])
+      if (typeof hex === 'string' && hex.startsWith('0x')) return BigInt(hex)
+    } catch {}
+    return null
+  }, [])
+
+  // One-time init: prewarm Mini provider; hydrate provider/signer/address silently when possible
   useEffect(() => {
     if (booted.current) return
     booted.current = true
@@ -43,11 +75,14 @@ export function WalletProvider({ children }) {
           const addr = await sg?.getAddress().catch(() => null)
           if (sg && addr) { setSigner(sg); setAddress(addr) }
         } catch {}
-        try { setChainId(await getChainId()) } catch {}
+
+        const cid = await readChainIdBI(bp)
+        if (cid != null) setChainId(cid)
       }
     })()
-  }, [])
+  }, [readChainIdBI])
 
+  // Listen for account/chain changes globally
   useEffect(() => {
     let off1 = () => {}
     let off2 = () => {}
@@ -61,45 +96,50 @@ export function WalletProvider({ children }) {
         }
       })
       off2 = await onChainChanged(async () => {
-        try { setChainId(await getChainId()) } catch { setChainId(null) }
+        if (provider) {
+          const cid = await readChainIdBI(provider)
+          setChainId(cid)
+        } else {
+          setChainId(null)
+        }
       })
     })()
     return () => { try { off1() } catch {}; try { off2() } catch {} }
-  }, [provider])
+  }, [provider, readChainIdBI])
 
   const connect = useCallback(async () => {
     const bp = await getBrowserProvider()
     if (!bp) throw new Error('No wallet provider found')
-
-    if (!warpcast) {
-      // only prompt outside Warpcast
-      await bp.send('eth_requestAccounts', [])
-    }
-
+    // Only prompts outside Warpcast; inside Mini it resolves silently
+    await bp.send('eth_requestAccounts', [])
     setProvider(bp)
     const sg = await bp.getSigner()
     setSigner(sg)
     setAddress(await sg.getAddress())
-    setChainId((await bp.getNetwork())?.chainId ?? null)
-  }, [warpcast])
+    const cid = await (async () => {
+      try { const net = await bp.getNetwork(); return /** @type {bigint} */(net.chainId) } catch {}
+      try { const hex = await bp.send('eth_chainId', []); return BigInt(hex) } catch {}
+      return null
+    })()
+    setChainId(cid)
+  }, [])
 
   const switchToBase = useCallback(async () => {
-    if (warpcast) {
-      // Warpcast Mini is always Base; nothing to do
-      setChainId(BASE_CHAIN_ID_DEC)
+    // In Warpcast, the mini-wallet is already on Base and cannot switch
+    if (isWarpcast()) {
       return true
     }
-    try {
-      const bp = await getBrowserProvider()
-      await bp.send('wallet_switchEthereumChain', [{ chainId: '0x2105' }]) // 8453
-      setProvider(bp)
-      setChainId((await bp.getNetwork())?.chainId ?? null)
-      return true
-    } catch (err) {
-      console.error('switchToBase failed:', err)
-      return false
+    const ok = await ensureBaseChain()
+    if (ok) {
+      try {
+        const bp = await getBrowserProvider()
+        setProvider(bp)
+        const cid = await readChainIdBI(bp)
+        setChainId(cid)
+      } catch {}
     }
-  }, [warpcast])
+    return ok
+  }, [readChainIdBI])
 
   const refresh = useCallback(async () => {
     const bp = await getBrowserProvider().catch(() => null)
@@ -110,17 +150,19 @@ export function WalletProvider({ children }) {
         setSigner(sg)
         setAddress(await sg.getAddress())
       } catch { setSigner(null) }
-      try { setChainId((await bp.getNetwork())?.chainId ?? null) } catch {}
+      const cid = await readChainIdBI(bp)
+      setChainId(cid)
     }
-  }, [])
+  }, [readChainIdBI])
 
   const value = useMemo(() => ({
     provider, signer, address, chainId,
     isConnected, isOnBase,
-    isWarpcast: warpcast,
+    isWarpcast: isWarpcast(),
     connect, switchToBase, refresh,
+    // read-only public provider for app reads
     readProvider: getReadonlyProvider(),
-  }), [provider, signer, address, chainId, isConnected, isOnBase, warpcast])
+  }), [provider, signer, address, chainId, isConnected, isOnBase])
 
   return <WalletCtx.Provider value={value}>{children}</WalletCtx.Provider>
 }
