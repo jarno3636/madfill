@@ -36,13 +36,43 @@ function buildBufferedOverrides({ from, value, gasLimitBase = 250_000, gasJitter
   return overrides
 }
 
-/** Verify signer/provider is actually on Base (some wallets lie until a call) */
+/** ---------- Robust chain detection (works in frames/miniwallets) ---------- */
+// Normalize chainId -> bigint
+function toChainBigint(val) {
+  if (typeof val === 'bigint') return val
+  if (typeof val === 'number') return BigInt(val)
+  if (typeof val === 'string') return val.startsWith('0x') ? BigInt(val) : BigInt(parseInt(val, 10))
+  return 0n
+}
+
+// Try several ways to read chainId
+async function detectChainId(signerOrProvider) {
+  // 1) ethers v6 getNetwork()
+  try {
+    const net = await signerOrProvider?.getNetwork?.()
+    if (net?.chainId != null) return toChainBigint(net.chainId)
+  } catch {}
+
+  // 2) raw RPC
+  try {
+    const prov = signerOrProvider?.provider ?? signerOrProvider
+    const hex = await prov?.send?.('eth_chainId', [])
+    if (hex != null) return toChainBigint(hex)
+  } catch {}
+
+  // 3) window.ethereum (browser wallets)
+  if (typeof window !== 'undefined' && window.ethereum?.chainId) {
+    return toChainBigint(window.ethereum.chainId)
+  }
+
+  return 0n
+}
+
 async function assertOnBase(signerOrProvider) {
-  // ethers v6: getNetwork() is on both providers and signers
-  const net = await (signerOrProvider?.getNetwork?.())
-  const cid = net?.chainId ? BigInt(net.chainId) : 0n
+  const cid = await detectChainId(signerOrProvider)
   if (cid !== BASE_CHAIN_ID) {
-    throw new Error('Wrong network: please switch to Base (chainId 8453).')
+    const seen = cid ? cid.toString() : 'unknown'
+    throw new Error(`Wrong network: detected chainId ${seen}. Please switch to Base (8453).`)
   }
 }
 
@@ -72,16 +102,17 @@ export function TxProvider({ children }) {
   /** Ensure wallet + Base before any write, and verify via signer network */
   const ensureReady = useCallback(async () => {
     if (!address) await connect()
-    // Always request a switch; some wallets silently ignore earlier ones
+    // Always try switching when not flagged on Base (some wallets lie until a call)
     const ok = isOnBase ? true : await switchToBase()
     if (!ok) throw new Error('Please switch to Base.')
-    // Hard check using signer (or provider as fallback)
+    // Hard verify using signer (or provider fallback)
     await assertOnBase(signer ?? provider)
   }, [address, isOnBase, connect, switchToBase, signer, provider])
 
   /**
    * Preflight on the Base read RPC + best-effort gasLimit.
    * IMPORTANT: We do NOT set any fee fields; wallet will set them for Base.
+   * Kept for Pool 1 to preserve fee semantics and revert messages.
    */
   const estimateWithRead = useCallback(
     async (contractAddress, abi, fnName, args, { from, value } = {}) => {
@@ -141,13 +172,14 @@ export function TxProvider({ children }) {
     }
   }
 
-  /** ---------------- Pool 1: create (wallet-driven fees; feeBaseWei unchanged) ---------------- */
+  /** ---------------- Pool 1: create ---------------- */
   const createPool1 = useCallback(async ({
     title, theme, parts, word, username, feeBaseWei, durationSecs, blankIndex,
   }) => {
     await ensureReady()
     const { fillin } = getContracts(true)
 
+    // Coerce types to avoid "could not coalesce" issues
     const fee = BigInt(feeBaseWei ?? 0n)
     const args = [
       String(title ?? ''),
@@ -216,7 +248,7 @@ export function TxProvider({ children }) {
 
   /**
    * ---------------- NFT: mint template ----------------
-   * No preflight or fee fields; we pass only value + small gasLimit buffer.
+   * Wallet-driven fees: pass only value + a small gasLimit buffer.
    * Wallet computes fees on Base at confirmation time.
    */
   const mintTemplateNFT = useCallback(async (title, description, theme, parts, { value } = {}) => {
