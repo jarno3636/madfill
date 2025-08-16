@@ -1,7 +1,7 @@
 // components/TxProvider.jsx
 'use client'
 
-import { createContext, useContext, useMemo, useCallback } from 'react'
+import { createContext, useContext, useMemo, useCallback, useState } from 'react'
 import { ethers } from 'ethers'
 import { useWallet } from './WalletProvider'
 import fillinAbi from '@/abi/FillInStoryV3_ABI.json'
@@ -9,8 +9,7 @@ import nftAbi from '@/abi/MadFillTemplateNFT_ABI.json'
 
 /** ---------- Chain & RPC ---------- */
 const BASE_CHAIN_ID = 8453n
-const BASE_RPC =
-  process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 
 /** ---------- Contracts ---------- */
 const FILLIN_ADDRESS =
@@ -25,11 +24,14 @@ const NFT_ADDRESS =
 const TxContext = createContext(null)
 
 export function TxProvider({ children }) {
-  const {
-    provider, signer, isOnBase, connect, switchToBase, address,
-  } = useWallet()
+  const { provider, signer, isOnBase, connect, switchToBase, address } = useWallet()
 
-  // Always-available read provider for preflights, gas estimates & fee data
+  // tx lifecycle state (for global confirmation UI)
+  const [txStatus, setTxStatus] = useState(null)      // "pending" | "success" | "error" | null
+  const [pendingTx, setPendingTx] = useState(null)    // tx hash while pending
+  const [lastTx, setLastTx] = useState(null)          // last confirmed receipt (or null)
+
+  // read-only provider for preflights, estimates & fee data
   const read = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [])
 
   const getContracts = useCallback(
@@ -54,14 +56,14 @@ export function TxProvider({ children }) {
   }, [address, isOnBase, connect, switchToBase])
 
   /**
-   * Preflight + fee building on the read RPC so we don't rely on wallet RPCs
-   * that may not support eth_estimateGas / feeHistory in some environments.
+   * Preflight + fees on the public read RPC. Avoids relying on wallet RPCs
+   * that may not support estimateGas / feeHistory (esp. mini-wallets).
    */
   const estimateWithRead = useCallback(
     async (contractAddress, abi, fnName, args, { from, value } = {}) => {
       const ctRead = new ethers.Contract(contractAddress, abi, read)
 
-      // 1) Preflight revert with proper msg.sender context
+      // 1) Preflight revert with msg.sender/value context
       try {
         await ctRead[fnName].staticCall(...args, { from, value })
       } catch (e) {
@@ -74,14 +76,13 @@ export function TxProvider({ children }) {
         throw new Error(msg)
       }
 
-      // 2) Gas estimate (best-effort)
+      // 2) Gas estimate (best-effort + buffer)
       let gasLimit
       try {
         const est = await ctRead[fnName].estimateGas(...args, { from, value })
-        // Add buffer
         gasLimit = (est * 12n) / 10n + 50_000n
       } catch {
-        // If node disallows estimateGas, we’ll send without an explicit limit
+        // proceed without explicit gasLimit
       }
 
       // 3) Fee data (EIP-1559 if available)
@@ -95,13 +96,36 @@ export function TxProvider({ children }) {
         if (fd?.maxPriorityFeePerGas) overrides.maxPriorityFeePerGas = fd.maxPriorityFeePerGas
         if (!fd?.maxFeePerGas && fd?.gasPrice) overrides.gasPrice = fd.gasPrice
       } catch {
-        // Ignore fee data failure; wallet/provider will fallback
+        // ignore
       }
 
       return overrides
     },
     [read]
   )
+
+  /** Standardize tx lifecycle for global UI */
+  async function runTx(sendFn) {
+    try {
+      setTxStatus('pending')
+      setPendingTx(null)
+      setLastTx(null)
+
+      const tx = await sendFn()
+      setPendingTx(tx.hash)
+
+      const receipt = await tx.wait()
+      setTxStatus('success')
+      setLastTx(receipt)
+      setPendingTx(null)
+      return receipt
+    } catch (err) {
+      console.error('TX error:', err)
+      setTxStatus('error')
+      setPendingTx(null)
+      throw err
+    }
+  }
 
   /** ---------------- Pool 1: create ---------------- */
   const createPool1 = useCallback(async ({
@@ -110,7 +134,8 @@ export function TxProvider({ children }) {
     await ensureReady()
     const { fillin } = getContracts(true)
 
-    // Hard type coercions to avoid "could not coalesce" errors
+    // Coerce types to avoid "could not coalesce" issues
+    const fee = BigInt(feeBaseWei ?? 0n)
     const args = [
       String(title ?? ''),
       String(theme ?? ''),
@@ -127,11 +152,10 @@ export function TxProvider({ children }) {
       fillinAbi,
       'createPool1',
       args,
-      { from: address, value: BigInt(feeBaseWei ?? 0n) }
+      { from: address, value: fee }
     )
 
-    const tx = await fillin.createPool1(...args, overrides)
-    return await tx.wait()
+    return await runTx(() => fillin.createPool1(...args, overrides))
   }, [ensureReady, getContracts, estimateWithRead, address])
 
   /** ---------------- Pool 1: join ---------------- */
@@ -141,7 +165,6 @@ export function TxProvider({ children }) {
 
     const poolId = BigInt(id ?? 0)
     const value  = BigInt(feeBaseWei ?? 0n)
-
     const args = [
       poolId,
       String(word ?? ''),
@@ -157,8 +180,7 @@ export function TxProvider({ children }) {
       { from: address, value }
     )
 
-    const tx = await fillin.joinPool1(...args, overrides)
-    return await tx.wait()
+    return await runTx(() => fillin.joinPool1(...args, overrides))
   }, [ensureReady, getContracts, estimateWithRead, address])
 
   /** ---------------- Pool 1: claim ---------------- */
@@ -176,8 +198,7 @@ export function TxProvider({ children }) {
       { from: address }
     )
 
-    const tx = await fillin.claimPool1(...args, overrides)
-    return await tx.wait()
+    return await runTx(() => fillin.claimPool1(...args, overrides))
   }, [ensureReady, getContracts, estimateWithRead, address])
 
   /** ---------------- NFT: mint template ---------------- */
@@ -200,13 +221,12 @@ export function TxProvider({ children }) {
       { from: address, value: BigInt(value ?? 0n) }
     )
 
-    const tx = await nft.mintTemplate(...args, overrides)
-    return await tx.wait()
+    return await runTx(() => nft.mintTemplate(...args, overrides))
   }, [ensureReady, getContracts, estimateWithRead, address])
 
   /** ---------------- Context Value ---------------- */
   const value = useMemo(() => ({
-    // connection (from WalletProvider)
+    // connection
     address,
     isConnected: !!address,
     isOnBase,
@@ -223,6 +243,11 @@ export function TxProvider({ children }) {
     claimPool1,
     mintTemplateNFT,
 
+    // tx state for UI confirmations
+    txStatus,
+    pendingTx,
+    lastTx,
+
     // constants
     BASE_RPC,
     FILLIN_ADDRESS,
@@ -230,7 +255,8 @@ export function TxProvider({ children }) {
     BASE_CHAIN_ID,
   }), [
     address, isOnBase, connect, switchToBase, provider,
-    getContracts, createPool1, joinPool1, claimPool1, mintTemplateNFT
+    getContracts, createPool1, joinPool1, claimPool1, mintTemplateNFT,
+    txStatus, pendingTx, lastTx
   ])
 
   return <TxContext.Provider value={value}>{children}</TxContext.Provider>
