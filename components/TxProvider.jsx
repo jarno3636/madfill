@@ -1,11 +1,10 @@
-// components/TxProvider.jsx
 'use client'
 
 import { createContext, useContext, useMemo, useCallback, useState } from 'react'
 import { ethers } from 'ethers'
 import { useWallet } from './WalletProvider'
 import fillinAbi from '@/abi/FillInStoryV3_ABI.json'
-import nftAbi from '@/abi/MadFillTemplateNFT_ABI.json' // <-- Ensure this is EXACTLY the BaseScan ABI you pasted
+import nftAbi from '@/abi/MadFillTemplateNFT_ABI.json'
 
 /** ---------- Chain & RPC ---------- */
 const BASE_CHAIN_ID = 8453n
@@ -28,24 +27,17 @@ function buildBufferedOverrides({ from, value, gasLimitBase = 250_000, gasJitter
   const overrides = {}
   if (from) overrides.from = from
   if (value !== undefined && value !== null) overrides.value = ethers.toBigInt(value)
-  overrides.gasLimit =
-    BigInt(gasLimitBase) +
-    BigInt(Math.floor(Math.random() * Math.max(1, gasJitter)))
-  // Do NOT set gasPrice / maxFeePerGas / maxPriorityFeePerGas here; wallet will.
+  overrides.gasLimit = BigInt(gasLimitBase) + BigInt(Math.floor(Math.random() * Math.max(1, gasJitter)))
+  // Let the wallet set EIP-1559 fee fields.
   return overrides
 }
 
-/** Verify signer/provider is actually on Base (wallets can be tricky) */
-async function assertOnBase(signerOrProvider) {
-  const net = await (signerOrProvider?.getNetwork?.())
-  const cid = net?.chainId ? BigInt(net.chainId) : 0n
-  if (cid !== BASE_CHAIN_ID) {
-    throw new Error('Wrong network: please switch to Base (chainId 8453).')
-  }
-}
-
 export function TxProvider({ children }) {
-  const { provider, signer, isOnBase, connect, switchToBase, address } = useWallet()
+  const {
+    provider, signer, isOnBase, connect, switchToBase, address,
+    // also expose isWarpcast via WalletProvider value (computed there)
+    isWarpcast,
+  } = useWallet()
 
   // tx lifecycle state (for global confirmation UI)
   const [txStatus, setTxStatus] = useState(null)   // "pending" | "success" | "error" | null
@@ -67,26 +59,41 @@ export function TxProvider({ children }) {
     [provider, signer, read]
   )
 
-  /** Ensure wallet + Base before any write, and verify via signer network */
+  /** Ensure wallet + Base before any write.
+   * In Warpcast: never try to switch; treat as Base.
+   * Outside Warpcast: switch if needed.
+   */
   const ensureReady = useCallback(async () => {
     if (!address) await connect()
-    // Always try to switch; some wallets ignore earlier attempts
-    const ok = isOnBase ? true : await switchToBase()
-    if (!ok) throw new Error('Please switch to Base.')
-    // Hard check using signer (or provider as fallback)
-    await assertOnBase(signer ?? provider)
-  }, [address, isOnBase, connect, switchToBase, signer, provider])
+
+    if (isWarpcast) {
+      // Mini wallet runs on Base; do not attempt wallet_switchEthereumChain
+      // Optionally, soft-check network but don't block:
+      try {
+        const net = await (signer ?? provider)?.getNetwork?.()
+        if (net?.chainId && net.chainId !== BASE_CHAIN_ID) {
+          console.warn('Warpcast provider reported non-Base chainId:', net.chainId)
+        }
+      } catch {}
+      return
+    }
+
+    // Normal wallets (MetaMask, CB Wallet, etc.)
+    if (!isOnBase) {
+      const ok = await switchToBase()
+      if (!ok) throw new Error('Please switch to Base.')
+    }
+  }, [address, isOnBase, isWarpcast, connect, switchToBase, signer, provider])
 
   /**
    * Preflight on the Base read RPC + best-effort gasLimit.
-   * IMPORTANT: We do NOT set any fee fields; wallet will set them for Base.
+   * NOTE: We do NOT set any fee fields; wallet will set them.
    */
   const estimateWithRead = useCallback(
     async (contractAddress, abi, fnName, args, { from, value } = {}) => {
       const ctRead = new ethers.Contract(contractAddress, abi, read)
 
-      // 1) Would this revert given msg.sender/value?
-      //    (Also confirms the function exists in the ABI and contract.)
+      // Would this revert given msg.sender/value?
       try {
         await ctRead[fnName].staticCall(...args, { from, value })
       } catch (e) {
@@ -99,7 +106,6 @@ export function TxProvider({ children }) {
         throw new Error(msg)
       }
 
-      // 2) Best-effort gasLimit with small buffer; wallet will still estimate.
       const overrides = {}
       if (value !== undefined && value !== null) overrides.value = ethers.toBigInt(value)
       if (from) overrides.from = from
@@ -108,7 +114,7 @@ export function TxProvider({ children }) {
         const est = await ctRead[fnName].estimateGas(...args, { from, value })
         overrides.gasLimit = (est * 12n) / 10n + 50_000n
       } catch {
-        // proceed without explicit gasLimit; wallet can handle
+        // proceed without explicit gasLimit; wallet will estimate
       }
 
       return overrides
@@ -139,7 +145,7 @@ export function TxProvider({ children }) {
     }
   }
 
-  /** ---------------- Pool 1: create (unchanged semantics) ---------------- */
+  /** ---------------- Pool 1: create ---------------- */
   const createPool1 = useCallback(async ({
     title, theme, parts, word, username, feeBaseWei, durationSecs, blankIndex,
   }) => {
@@ -214,8 +220,8 @@ export function TxProvider({ children }) {
 
   /**
    * ---------------- NFT: mint template ----------------
-   * We do a *light* preflight (staticCall) to confirm ABI/function/value,
-   * then send with a tiny gas buffer. Wallet computes fees on Base.
+   * Light preflight (staticCall) then send with small gas buffer.
+   * Wallet computes fees on Base.
    */
   const mintTemplateNFT = useCallback(async (title, description, theme, parts, { value } = {}) => {
     await ensureReady()
@@ -228,7 +234,6 @@ export function TxProvider({ children }) {
       Array.isArray(parts) ? parts.map((p) => String(p ?? '')) : [],
     ]
 
-    // Preflight (confirms function exists & value won’t revert)
     const preflight = await estimateWithRead(
       NFT_ADDRESS,
       nftAbi,
@@ -237,7 +242,6 @@ export function TxProvider({ children }) {
       { from: address, value: BigInt(value ?? 0n) }
     )
 
-    // Send (wallet drives gas/fees)
     const overrides = buildBufferedOverrides({
       from: address,
       value: preflight?.value ?? BigInt(value ?? 0n),
@@ -249,11 +253,12 @@ export function TxProvider({ children }) {
   }, [ensureReady, getContracts, estimateWithRead, address])
 
   /** ---------------- Context Value ---------------- */
-  const valueCtx = useMemo(() => ({
+  const value = useMemo(() => ({
     // connection
     address,
     isConnected: !!address,
     isOnBase,
+    isWarpcast,         // expose to pages if needed
     connect,
     switchToBase,
     provider,
@@ -278,12 +283,12 @@ export function TxProvider({ children }) {
     NFT_ADDRESS,
     BASE_CHAIN_ID,
   }), [
-    address, isOnBase, connect, switchToBase, provider,
+    address, isOnBase, isWarpcast, connect, switchToBase, provider,
     getContracts, createPool1, joinPool1, claimPool1, mintTemplateNFT,
     txStatus, pendingTx, lastTx
   ])
 
-  return <TxContext.Provider value={valueCtx}>{children}</TxContext.Provider>
+  return <TxContext.Provider value={value}>{children}</TxContext.Provider>
 }
 
 export const useTx = () => useContext(TxContext)
