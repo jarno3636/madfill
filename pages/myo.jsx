@@ -16,6 +16,7 @@ import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useToast } from '@/components/Toast'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useTx } from '@/components/TxProvider'
+import AutoSwitchToBase from '@/components/AutoSwitchToBase'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -116,8 +117,7 @@ function MYOPage() {
   const DISPLAY_FEE_WEI = ethers.parseEther('0.0005')
   const DISPLAY_FEE_ETH = Number(ethers.formatEther(DISPLAY_FEE_WEI)).toFixed(6)
 
-  // Optional extra headroom (e.g., price tick between read & execute)
-  // You can tweak with NEXT_PUBLIC_MYO_FEE_BUFFER_BPS, default 2% (200 bps)
+  // Optional extra headroom (price can tick between read & execute)
   const BUFFER_BPS = (() => {
     if (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_MYO_FEE_BUFFER_BPS) {
       const n = Number(process.env.NEXT_PUBLIC_MYO_FEE_BUFFER_BPS)
@@ -283,7 +283,6 @@ function MYOPage() {
       const extra = (basePrice * BigInt(BUFFER_BPS)) / 10000n
       return basePrice + extra
     } catch {
-      // worst case, use display fee (with buffer)
       const extra = (DISPLAY_FEE_WEI * BigInt(BUFFER_BPS)) / 10000n
       return DISPLAY_FEE_WEI + extra
     }
@@ -370,6 +369,9 @@ function MYOPage() {
         type="website"
         twitterCard="summary_large_image"
       />
+
+      {/* Automatically connect + switch to Base (8453) in embedded browsers (Farcaster, etc.) */}
+      <AutoSwitchToBase />
 
       {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
