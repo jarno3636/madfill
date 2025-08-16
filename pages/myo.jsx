@@ -40,23 +40,29 @@ const BG_CHOICES = [
   { key: 'forest',       label: 'Forest',        cls: 'from-emerald-700 via-teal-700 to-slate-900' },
 ]
 
-// Convert story with [BLANK]s → parts (filled blanks get merged into previous part)
+// Convert story with [BLANK]s → parts (filled blanks merge into previous part)
+// Also return blanksRemaining = number of blanks still unfilled
 function deriveParts(story, fills) {
   const chunks = String(story || '').split(/\[BLANK\]/g)
   const blanks = Math.max(0, chunks.length - 1)
   const safeFills = Array.from({ length: blanks }, (_, i) => (fills?.[i] || '').trim())
+
   if (chunks.length === 0) return { parts: [''], blanksRemaining: 0 }
+
   const parts = [chunks[0] || '']
+  let unfilled = 0
+
   for (let i = 0; i < blanks; i++) {
     const fill = safeFills[i]
     const nextText = chunks[i + 1] || ''
     if (fill) {
       parts[parts.length - 1] = parts[parts.length - 1] + fill + nextText
     } else {
-      parts.push(nextText)
+      parts.push(nextText) // keep a real blank
+      unfilled += 1
     }
   }
-  return { parts, blanksRemaining: Math.max(0, parts.length - 1) }
+  return { parts, blanksRemaining: unfilled }
 }
 
 /* ---------- minimal read ABI ---------- */
@@ -87,12 +93,12 @@ function MYOPage() {
   const [maxTotalBytes, setMaxTotalBytes] = useState(4096)
   const [paused, setPaused] = useState(false)
 
-  // Pricing (on-chain if available; otherwise fixed fallback)
+  // Pricing (on-chain if available; otherwise fixed fee)
   const [mintPriceWeiOnchain, setMintPriceWeiOnchain] = useState(0n)
   const [mintPriceUsdE6, setMintPriceUsdE6] = useState(0n)
   const [priceLoading, setPriceLoading] = useState(true)
 
-  // Fallback fee: overrideable via env
+  // Fixed fallback fee (override via env)
   const FIXED_FEE_WEI =
     (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_MYO_FIXED_FEE_WEI)
       ? BigInt(process.env.NEXT_PUBLIC_MYO_FIXED_FEE_WEI)
@@ -132,7 +138,7 @@ function MYOPage() {
     })
   }, [blanksInStory])
 
-  // Load limits + paused + *optional* price (we won’t block on failures)
+  // Load limits + paused + *optional* price (non-blocking)
   useEffect(() => {
     if (!NFT_ADDRESS) return
     const provider = new ethers.JsonRpcProvider(BASE_RPC)
@@ -256,6 +262,10 @@ function MYOPage() {
       addToast({ type: 'error', title: 'Too Large', message: `Total bytes must be ≤ ${maxTotalBytes}.` })
       return false
     }
+    if (blanksRemaining < 1) {
+      addToast({ type: 'error', title: 'Add a Blank', message: 'Include at least one [BLANK] that is not pre-filled.' })
+      return false
+    }
     return true
   }
 
@@ -268,7 +278,6 @@ function MYOPage() {
         if (!ok) throw new Error('Please switch to Base.')
       }
 
-      const usingFallback = mintPriceWeiOnchain === 0n
       const tx = await mintTemplateNFT(
         String(title).slice(0, 128),
         String(description).slice(0, 2048),
@@ -280,7 +289,7 @@ function MYOPage() {
       const hash = tx?.hash || tx?.transactionHash
       addToast({
         type: 'success',
-        title: usingFallback ? 'Mint submitted (fallback fee)' : 'Mint submitted',
+        title: 'Mint submitted',
         message: hash ? `Tx: ${hash.slice(0, 10)}…` : 'Waiting for confirmations…',
         link: hash ? `https://basescan.org/tx/${hash}` : undefined,
       })
@@ -304,9 +313,9 @@ function MYOPage() {
 
   const wordsForPreview = useMemo(() => {
     const w = {}
-    for (let i = 0; i < Math.max(0, parts.length - 1); i++) w[i] = ''
+    for (let i = 0; i < blanksRemaining; i++) w[i] = ''
     return w
-  }, [parts])
+  }, [blanksRemaining])
 
   const pageUrl = absoluteUrl('/myo')
   const ogImage = buildOgUrl({ screen: 'myo', title: 'Make Your Own' })
@@ -318,9 +327,7 @@ function MYOPage() {
     title.trim() &&
     theme.trim() &&
     description.trim() &&
-    Math.max(0, parts.length - 1) >= 1
-
-  const usingFallback = mintPriceWeiOnchain === 0n
+    blanksRemaining >= 1
 
   return (
     <Layout>
@@ -371,16 +378,14 @@ function MYOPage() {
 
           {/* Fee / limits */}
           <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-            <div className={`rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 flex items-center gap-2`}>
-              <span>Mint fee:</span>
-              <b>{valueEth.toFixed(6)} ETH</b>
-              {usdSpot ? <span className="opacity-80">({fmtUsd(valueEth * usdSpot)})</span> : null}
-              <span className="opacity-70">+ gas</span>
-              {usingFallback && (
-                <span className="ml-auto text-[10px] uppercase tracking-wide rounded bg-amber-500/20 text-amber-200 px-2 py-0.5 border border-amber-500/40">
-                  fallback fee
-                </span>
-              )}
+            {/* Single-line fee bar, no wrap */}
+            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
+              <div className="flex items-center gap-2 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
+                <span className="shrink-0">Mint fee:</span>
+                <b className="shrink-0">{valueEth.toFixed(6)} ETH</b>
+                {usdSpot ? <span className="opacity-80 shrink-0">({fmtUsd(valueEth * usdSpot)})</span> : null}
+                <span className="opacity-70 shrink-0">+ gas</span>
+              </div>
             </div>
 
             <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
@@ -412,7 +417,7 @@ function MYOPage() {
 
           {!priceLoading && mintPriceUsdE6 > 0 && (
             <div className="mt-2 text-xs text-slate-400">
-              Note: Contract target ≈ {fmtUsd(Number(mintPriceUsdE6) / 1e6)}; app uses fixed fee if price is unavailable.
+              Note: Contract target ≈ {fmtUsd(Number(mintPriceUsdE6) / 1e6)}; app uses a fixed fee if price is unavailable.
             </div>
           )}
 
@@ -542,21 +547,21 @@ function MYOPage() {
                   <div className="text-xs uppercase tracking-wide opacity-80">{theme || 'Theme'}</div>
                   <div className="text-xl md:text-2xl font-extrabold">{title || 'Your Template Title'}</div>
                   <div className="mt-3 text-base leading-relaxed">
-                    <StyledCard parts={parts} blanks={Math.max(0, parts.length - 1)} words={wordsForPreview} />
+                    <StyledCard parts={parts} blanks={blanksRemaining} words={wordsForPreview} />
                   </div>
                 </div>
               </div>
 
-              <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3 text-sm">
-                <div className="flex flex-wrap items-center gap-3">
-                  <div>
+              {/* Single-line fee bar in preview */}
+              <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
+                <div className="flex items-center gap-3 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
+                  <div className="shrink-0">
                     Mint fee: <b>{valueEth.toFixed(6)} ETH</b>
                     {usdSpot ? <span className="opacity-80"> ({fmtUsd(valueEth * usdSpot)})</span> : null}
                     <span className="opacity-70"> + gas at confirmation</span>
                   </div>
-                  {usingFallback && <span className="text-[10px] uppercase tracking-wide rounded bg-amber-500/20 text-amber-200 px-2 py-0.5 border border-amber-500/40">fallback</span>}
-                  <div className="opacity-80">•</div>
-                  <div>Blanks to fill by players: <b>{Math.max(0, parts.length - 1)}</b></div>
+                  <div className="opacity-80 shrink-0">•</div>
+                  <div className="shrink-0">Blanks to fill by players: <b>{blanksRemaining}</b></div>
                 </div>
               </div>
 
