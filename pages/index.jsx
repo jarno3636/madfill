@@ -1,4 +1,3 @@
-// pages/index.jsx
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -14,19 +13,17 @@ import { Button } from '@/components/ui/button'
 import StyledCard from '@/components/StyledCard'
 import ShareBar from '@/components/ShareBar'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
-import { useMiniWallet } from '@/hooks/useMiniWallet'
 import { useToast } from '@/components/Toast'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { categories as presetCategories } from '@/data/templates'
 
-// ✅ unified wallet + tx helpers (Mini App + injected)
-import { getBrowserProvider, ensureBaseChain, BASE_RPC } from '@/lib/wallet'
-import { createPool1Tx } from '@/lib/tx'
+// ✅ use unified provider
+import { useTx } from '@/components/TxProvider'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 /* ========== Read-only Pools Contract bits ========== */
-const POOLS_ADDR =
+const FILLIN_ADDR =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
 
@@ -51,16 +48,15 @@ const BG_CHOICES = [
   { key: 'forest',       label: 'Forest',        cls: 'from-emerald-700 via-teal-700 to-slate-900' },
 ]
 
-const BASE_CHAIN_ID = 8453n
-
 function IndexPage() {
   useMiniAppReady()
   const { addToast } = useToast()
-  const { isConnected, connect } = useMiniWallet()
   const { width, height } = useWindowSize()
 
+  // ✅ from unified provider
+  const { createPool1, isConnected, connect, isOnBase, switchToBase, BASE_RPC } = useTx()
+
   // chain / fees
-  const [isOnBase, setIsOnBase] = useState(true)
   const [feeBps, setFeeBps] = useState(null)
   const [bpsDen, setBpsDen] = useState(10000)
 
@@ -124,28 +120,13 @@ function IndexPage() {
     return found.cls
   }, [bgKey])
 
-  /* ---------- chain observe via shared provider ---------- */
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        const provider = await getBrowserProvider().catch(() => null)
-        if (provider) {
-          const net = await provider.getNetwork().catch(() => null)
-          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-        } else if (!cancelled) setIsOnBase(true)
-      } catch { if (!cancelled) setIsOnBase(true) }
-    })()
-    return () => { cancelled = true }
-  }, [])
-
   /* ---------- read fee bps (read-only RPC) ---------- */
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
         const p = new ethers.JsonRpcProvider(BASE_RPC)
-        const ct = new ethers.Contract(POOLS_ADDR, POOLS_ABI, p)
+        const ct = new ethers.Contract(FILLIN_ADDR, POOLS_ABI, p)
         const [fee, den] = await Promise.all([
           ct.FEE_BPS().catch(() => null),
           ct.BPS_DENOMINATOR().catch(() => 10000n),
@@ -159,7 +140,7 @@ function IndexPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [])
+  }, [BASE_RPC])
 
   // usd (display)
   useEffect(() => {
@@ -179,17 +160,12 @@ function IndexPage() {
     setBlankIndex((i) => Math.max(0, Math.min(Math.max(0, blanksCount - 1), i)))
   }, [blanksCount])
 
-  const switchToBase = useCallback(async () => {
-    try {
-      const provider = await getBrowserProvider()
-      await ensureBaseChain(provider) // unifies switch/add per Mini App docs
-      setIsOnBase(true)
-    } catch (e) {
-      console.error(e)
-      const msg = e?.shortMessage || e?.reason || e?.message || 'Could not switch to Base.'
-      addToast({ type: 'error', title: 'Switch Failed', message: msg })
+  const doSwitchToBase = useCallback(async () => {
+    const ok = await switchToBase()
+    if (!ok) {
+      addToast({ type: 'error', title: 'Switch Failed', message: 'Could not switch to Base.' })
     }
-  }, [addToast])
+  }, [switchToBase, addToast])
 
   /* ---------- apply template ---------- */
   const applyTemplate = useCallback(() => {
@@ -204,9 +180,9 @@ function IndexPage() {
     }
   }, [currentTemplate, currentCategory])
 
-  /* ---------- validation & tx (shared tx lib) ---------- */
+  /* ---------- validation & tx ---------- */
   const validate = () => {
-    if (!POOLS_ADDR) { addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_POOLS_ADDRESS.' }); return false }
+    if (!FILLIN_ADDR) { addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_FILLIN_ADDRESS.' }); return false }
     if (!isConnected) { addToast({ type: 'error', title: 'Wallet Required', message: 'Connect your wallet to create a round.' }); return false }
     if (!currentTemplate) { addToast({ type: 'error', title: 'Choose a Template', message: 'Pick a category and template.' }); return false }
     if (!title.trim() || !theme.trim()) { addToast({ type: 'error', title: 'Missing Fields', message: 'Title and Theme are required.' }); return false }
@@ -224,8 +200,7 @@ function IndexPage() {
     try {
       setLoading(true)
 
-      // ✅ Use shared tx helper (handles Mini App provider, account request, Base chain, preflight)
-      await createPool1Tx({
+      await createPool1({
         title: String(title).slice(0, 128),
         theme: String(theme).slice(0, 128),
         parts,
@@ -257,13 +232,14 @@ function IndexPage() {
   // context snippet for each blank (left/right words)
   const blankContexts = useMemo(() => {
     const out = []
-    for (let i = 0; i < blanksCount; i++) {
+    const n = Math.max(0, parts.length - 1)
+    for (let i = 0; i < n; i++) {
       const left = (parts[i] || '').split(/\s+/).slice(-3).join(' ')
       const right = (parts[i + 1] || '').split(/\s+/).slice(0, 3).join(' ')
       out.push(`${left} [____] ${right}`.trim())
     }
     return out
-  }, [parts, blanksCount])
+  }, [parts])
 
   return (
     <Layout>
@@ -312,7 +288,7 @@ function IndexPage() {
                     Connect Wallet
                   </Button>
                 ) : !isOnBase ? (
-                  <Button onClick={switchToBase} className="bg-cyan-600 hover:bg-cyan-500 w-full">
+                  <Button onClick={doSwitchToBase} className="bg-cyan-600 hover:bg-cyan-500 w-full">
                     Switch to Base
                   </Button>
                 ) : null}
@@ -478,10 +454,10 @@ function IndexPage() {
                     <span className="text-slate-400 text-sm">
                       {usd && feeEth ? `~$${(parseFloat(feeEth || '0') * usd).toFixed(2)}` : '—'}
                     </span>
-                    {burnPct != null && (
+                    {feeBps != null && (
                       <>
                         <span className="text-slate-500">|</span>
-                        <span className="text-xs text-slate-400">burn {burnPct.toFixed(2)}%</span>
+                        <span className="text-xs text-slate-400">burn {(feeBps / bpsDen * 100).toFixed(2)}%</span>
                       </>
                     )}
                   </div>
@@ -573,10 +549,10 @@ function IndexPage() {
                   <div>Blanks: <b>{blanksCount}</b></div>
                   <div className="opacity-80">•</div>
                   <div>You’re filling: <b>{blanksCount ? `Blank #${blankIndex + 1}` : '—'}</b></div>
-                  {burnPct != null && (
+                  {feeBps != null && (
                     <>
                       <div className="opacity-80">•</div>
-                      <div>Protocol fee (burn): <b>{burnPct.toFixed(2)}%</b></div>
+                      <div>Protocol fee (burn): <b>{(feeBps / bpsDen * 100).toFixed(2)}%</b></div>
                     </>
                   )}
                 </div>
@@ -624,10 +600,10 @@ function IndexPage() {
               {feeUsd != null && <> Estimated: ~${feeUsd.toFixed(2)}.</>}
             </p>
             <p>
-              <b>Protocol Fee (burn):</b> {burnPct != null ? `${burnPct.toFixed(2)}%` : '—'} of the entry fee is burned at the protocol level.
+              <b>Protocol Fee (burn):</b> {feeBps != null ? `${(feeBps / bpsDen * 100).toFixed(2)}%` : '—'} of the entry fee is burned at the protocol level.
             </p>
             <p>
-              <b>Gas:</b> Network fee paid to miners/validators. Varies with network congestion.
+              <b>Gas:</b> Network fee paid to validators. Varies with network congestion.
             </p>
 
             <div className="mt-4">
