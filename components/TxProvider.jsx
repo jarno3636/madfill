@@ -23,20 +23,27 @@ const NFT_ADDRESS =
 /** ---------- Context ---------- */
 const TxContext = createContext(null)
 
-/** ---------- Helper: gasLimit buffer (for wallet-driven paths) ---------- */
-/** Keep small & conservative; wallet will still estimate/adjust internally. */
+/** ---------- Helper: gasLimit buffer (wallet computes fees) ---------- */
 function buildBufferedOverrides({ from, value, gasLimitBase = 250_000, gasJitter = 50_000 }) {
   const overrides = {}
   if (from) overrides.from = from
   if (value !== undefined && value !== null) overrides.value = ethers.toBigInt(value)
-
-  // Add a small deterministic buffer + jitter to avoid edge underestimates
-  const buffer = BigInt(
-    Math.max(0, gasLimitBase + Math.floor(Math.random() * Math.max(1, gasJitter)))
-  )
+  const buffer =
+    BigInt(gasLimitBase) +
+    BigInt(Math.floor(Math.random() * Math.max(1, gasJitter)))
   overrides.gasLimit = buffer
-  // IMPORTANT: Do NOT set gasPrice / maxFeePerGas here; let the wallet do it.
+  // Do NOT set gasPrice / maxFeePerGas / maxPriorityFeePerGas here.
   return overrides
+}
+
+/** Verify signer/provider is actually on Base (some wallets lie until a call) */
+async function assertOnBase(signerOrProvider) {
+  // ethers v6: getNetwork() is on both providers and signers
+  const net = await (signerOrProvider?.getNetwork?.())
+  const cid = net?.chainId ? BigInt(net.chainId) : 0n
+  if (cid !== BASE_CHAIN_ID) {
+    throw new Error('Wrong network: please switch to Base (chainId 8453).')
+  }
 }
 
 export function TxProvider({ children }) {
@@ -47,7 +54,7 @@ export function TxProvider({ children }) {
   const [pendingTx, setPendingTx] = useState(null)    // tx hash while pending
   const [lastTx, setLastTx] = useState(null)          // last confirmed receipt (or null)
 
-  // read-only provider for preflights, estimates & fee data
+  // read-only provider for preflights/estimates
   const read = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [])
 
   const getContracts = useCallback(
@@ -62,24 +69,25 @@ export function TxProvider({ children }) {
     [provider, signer, read]
   )
 
-  /** Ensure wallet + Base before any write */
+  /** Ensure wallet + Base before any write, and verify via signer network */
   const ensureReady = useCallback(async () => {
     if (!address) await connect()
-    if (!isOnBase) {
-      const ok = await switchToBase()
-      if (!ok) throw new Error('Please switch to Base.')
-    }
-  }, [address, isOnBase, connect, switchToBase])
+    // Always request a switch; some wallets silently ignore earlier ones
+    const ok = isOnBase ? true : await switchToBase()
+    if (!ok) throw new Error('Please switch to Base.')
+    // Hard check using signer (or provider as fallback)
+    await assertOnBase(signer ?? provider)
+  }, [address, isOnBase, connect, switchToBase, signer, provider])
 
   /**
-   * Preflight + fees on the public read RPC.
-   * We KEEP using this for Pool 1 so feeBaseWei semantics remain unchanged.
+   * Preflight on the Base read RPC + best-effort gasLimit.
+   * IMPORTANT: We do NOT set any fee fields; wallet will set them for Base.
    */
   const estimateWithRead = useCallback(
     async (contractAddress, abi, fnName, args, { from, value } = {}) => {
       const ctRead = new ethers.Contract(contractAddress, abi, read)
 
-      // 1) Preflight revert with msg.sender/value context
+      // 1) Would this revert given msg.sender/value?
       try {
         await ctRead[fnName].staticCall(...args, { from, value })
       } catch (e) {
@@ -92,29 +100,19 @@ export function TxProvider({ children }) {
         throw new Error(msg)
       }
 
-      // 2) Gas estimate (best-effort + buffer)
-      let gasLimit
+      // 2) Estimate gas (best-effort) and add a small buffer
+      const overrides = {}
+      if (value !== undefined && value !== null) overrides.value = ethers.toBigInt(value)
+      if (from) overrides.from = from
+
       try {
         const est = await ctRead[fnName].estimateGas(...args, { from, value })
-        gasLimit = (est * 12n) / 10n + 50_000n
+        overrides.gasLimit = (est * 12n) / 10n + 50_000n
       } catch {
-        // proceed without explicit gasLimit (wallet will handle)
+        // proceed without explicit gasLimit; wallet will estimate
       }
 
-      // 3) Fee data (EIP-1559 if available)
-      const overrides = { value }
-      if (from) overrides.from = from
-      if (gasLimit) overrides.gasLimit = gasLimit
-
-      try {
-        const fd = await read.getFeeData()
-        if (fd?.maxFeePerGas) overrides.maxFeePerGas = fd.maxFeePerGas
-        if (fd?.maxPriorityFeePerGas) overrides.maxPriorityFeePerGas = fd.maxPriorityFeePerGas
-        if (!fd?.maxFeePerGas && fd?.gasPrice) overrides.gasPrice = fd.gasPrice
-      } catch {
-        // ignore
-      }
-
+      // 3) DO NOT set gasPrice/maxFeePerGas/maxPriorityFeePerGas here.
       return overrides
     },
     [read]
@@ -143,14 +141,13 @@ export function TxProvider({ children }) {
     }
   }
 
-  /** ---------------- Pool 1: create (UNCHANGED strategy) ---------------- */
+  /** ---------------- Pool 1: create (wallet-driven fees; feeBaseWei unchanged) ---------------- */
   const createPool1 = useCallback(async ({
     title, theme, parts, word, username, feeBaseWei, durationSecs, blankIndex,
   }) => {
     await ensureReady()
     const { fillin } = getContracts(true)
 
-    // Coerce types to avoid "could not coalesce" issues
     const fee = BigInt(feeBaseWei ?? 0n)
     const args = [
       String(title ?? ''),
@@ -174,7 +171,7 @@ export function TxProvider({ children }) {
     return await runTx(() => fillin.createPool1(...args, overrides))
   }, [ensureReady, getContracts, estimateWithRead, address])
 
-  /** ---------------- Pool 1: join (UNCHANGED strategy) ---------------- */
+  /** ---------------- Pool 1: join ---------------- */
   const joinPool1 = useCallback(async ({ id, word, username, blankIndex, feeBaseWei }) => {
     await ensureReady()
     const { fillin } = getContracts(true)
@@ -199,7 +196,7 @@ export function TxProvider({ children }) {
     return await runTx(() => fillin.joinPool1(...args, overrides))
   }, [ensureReady, getContracts, estimateWithRead, address])
 
-  /** ---------------- Pool 1: claim (UNCHANGED strategy) ---------------- */
+  /** ---------------- Pool 1: claim ---------------- */
   const claimPool1 = useCallback(async (id) => {
     await ensureReady()
     const { fillin } = getContracts(true)
@@ -218,10 +215,9 @@ export function TxProvider({ children }) {
   }, [ensureReady, getContracts, estimateWithRead, address])
 
   /**
-   * ---------------- NFT: mint template (WALLET-DRIVEN strategy) ----------------
-   * We REMOVE preflight + explicit fee fields to avoid rate-limit/revert flakiness.
-   * - You pass only { value } and a small gasLimit buffer.
-   * - Wallet (MetaMask/Coinbase) computes the exact fees at confirmation time.
+   * ---------------- NFT: mint template ----------------
+   * No preflight or fee fields; we pass only value + small gasLimit buffer.
+   * Wallet computes fees on Base at confirmation time.
    */
   const mintTemplateNFT = useCallback(async (title, description, theme, parts, { value } = {}) => {
     await ensureReady()
@@ -237,8 +233,8 @@ export function TxProvider({ children }) {
     const overrides = buildBufferedOverrides({
       from: address,
       value: BigInt(value ?? 0n),
-      gasLimitBase: 250_000,   // tweak if needed
-      gasJitter: 50_000        // small randomness helps avoid edge cases
+      gasLimitBase: 250_000,
+      gasJitter: 50_000,
     })
 
     return await runTx(() => nft.mintTemplate(...args, overrides))
