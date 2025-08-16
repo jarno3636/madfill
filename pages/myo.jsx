@@ -40,33 +40,9 @@ const BG_CHOICES = [
   { key: 'forest',       label: 'Forest',        cls: 'from-emerald-700 via-teal-700 to-slate-900' },
 ]
 
-// Convert story with [BLANK]s → parts (filled blanks merge into previous part)
-// Also return blanksRemaining = number of blanks still unfilled
-function deriveParts(story, fills) {
-  const chunks = String(story || '').split(/\[BLANK\]/g)
-  const blanks = Math.max(0, chunks.length - 1)
-  const safeFills = Array.from({ length: blanks }, (_, i) => (fills?.[i] || '').trim())
-
-  if (chunks.length === 0) return { parts: [''], blanksRemaining: 0 }
-
-  const parts = [chunks[0] || '']
-  let unfilled = 0
-
-  for (let i = 0; i < blanks; i++) {
-    const fill = safeFills[i]
-    const nextText = chunks[i + 1] || ''
-    if (fill) {
-      parts[parts.length - 1] = parts[parts.length - 1] + fill + nextText
-    } else {
-      parts.push(nextText) // keep a real blank
-      unfilled += 1
-    }
-  }
-  return { parts, blanksRemaining: unfilled }
-}
-
 /* ---------- minimal read ABI ---------- */
 const TEMPLATE_ABI = [
+  { inputs: [], name: 'BLANK', outputs: [{ type: 'string' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_PARTS', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_PART_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_TOTAL_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
@@ -74,6 +50,42 @@ const TEMPLATE_ABI = [
   { inputs: [], name: 'mintPriceUsdE6', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'paused', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
 ]
+
+/** Build both: partsForContract (with BLANK tokens) + partsForPreview (implicit blanks) */
+function computeParts(story, fills, blankToken) {
+  const chunks = String(story || '').split(/\[BLANK\]/g)
+  const blanks = Math.max(0, chunks.length - 1)
+  const safeFills = Array.from({ length: blanks }, (_, i) => (fills?.[i] || '').trim())
+
+  // Preview parts (implicit blanks: just segments)
+  const previewParts = [chunks[0] || '']
+  // Contract parts (explicit blanks as tokens)
+  const contractParts = [chunks[0] || '']
+  let blanksRemaining = 0
+
+  for (let i = 0; i < blanks; i++) {
+    const fill = safeFills[i]
+    const nextText = chunks[i + 1] || ''
+
+    // Preview: filled merges; unfilled means new segment to imply a blank between
+    if (fill) {
+      previewParts[previewParts.length - 1] = previewParts[previewParts.length - 1] + fill + nextText
+    } else {
+      previewParts.push(nextText)
+    }
+
+    // Contract: if unfilled, insert BLANK token explicitly
+    if (fill) {
+      contractParts[contractParts.length - 1] = contractParts[contractParts.length - 1] + fill + nextText
+    } else {
+      contractParts.push(blankToken)
+      contractParts.push(nextText)
+      blanksRemaining += 1
+    }
+  }
+
+  return { partsForContract: contractParts, partsForPreview: previewParts, blanksRemaining }
+}
 
 function MYOPage() {
   useMiniAppReady()
@@ -92,6 +104,9 @@ function MYOPage() {
   const [maxPartBytes, setMaxPartBytes] = useState(96)
   const [maxTotalBytes, setMaxTotalBytes] = useState(4096)
   const [paused, setPaused] = useState(false)
+
+  // Contract BLANK token (default to "[BLANK]" until read)
+  const [blankToken, setBlankToken] = useState('[BLANK]')
 
   // Pricing (on-chain if available; otherwise fixed fee)
   const [mintPriceWeiOnchain, setMintPriceWeiOnchain] = useState(0n)
@@ -120,7 +135,7 @@ function MYOPage() {
   const [theme, setTheme] = useState('')
   const [description, setDescription] = useState('')
 
-  // Story + blanks
+  // Story + fills
   const storyRef = useRef(null)
   const [story, setStory] = useState(PROMPT_STARTERS[0])
   const blanksInStory = Math.max(0, story.split(/\[BLANK\]/g).length - 1)
@@ -138,7 +153,7 @@ function MYOPage() {
     })
   }, [blanksInStory])
 
-  // Load limits + paused + *optional* price (non-blocking)
+  // Load limits + paused + BLANK token + *optional* price (non-blocking)
   useEffect(() => {
     if (!NFT_ADDRESS) return
     const provider = new ethers.JsonRpcProvider(BASE_RPC)
@@ -148,7 +163,8 @@ function MYOPage() {
     const pull = async () => {
       try {
         setPriceLoading(true)
-        const [mp, mpb, mtb, priceWei, priceUsd, isPaused] = await Promise.all([
+        const [blk, mp, mpb, mtb, priceWei, priceUsd, isPaused] = await Promise.all([
+          ct.BLANK().catch(() => '[BLANK]'),
           ct.MAX_PARTS().catch(() => null),
           ct.MAX_PART_BYTES().catch(() => null),
           ct.MAX_TOTAL_BYTES().catch(() => null),
@@ -157,6 +173,7 @@ function MYOPage() {
           ct.paused().catch(() => false),
         ])
         if (!mounted) return
+        setBlankToken(String(blk || '[BLANK]'))
         if (mp) setMaxParts(Number(mp))
         if (mpb) setMaxPartBytes(Number(mpb))
         if (mtb) setMaxTotalBytes(Number(mtb))
@@ -196,12 +213,23 @@ function MYOPage() {
   }, [])
 
   // Derived parts & byte accounting
-  const { parts, blanksRemaining } = useMemo(() => deriveParts(story, fills), [story, fills])
-  const partsBytes = useMemo(() => parts.reduce((sum, p) => sum + bytes(p), 0), [parts])
+  const { partsForContract, partsForPreview, blanksRemaining } = useMemo(
+    () => computeParts(story, fills, blankToken),
+    [story, fills, blankToken]
+  )
+
+  // Bytes: measure preview text only (contract will accept BLANK tokens)
+  const partsBytes = useMemo(
+    () => partsForPreview.reduce((sum, p) => sum + bytes(p), 0),
+    [partsForPreview]
+  )
   const totalBytes = bytes(title) + bytes(description) + bytes(theme) + partsBytes
 
   // Background class
-  const bgCls = useMemo(() => (BG_CHOICES.find((b) => b.key === bgKey) || BG_CHOICES[0]).cls, [bgKey])
+  const bgCls = useMemo(
+    () => (BG_CHOICES.find((b) => b.key === bgKey) || BG_CHOICES[0]).cls,
+    [bgKey]
+  )
 
   // Editor helpers
   const insertBlankAtCursor = () => {
@@ -250,11 +278,11 @@ function MYOPage() {
       addToast({ type: 'error', title: 'Missing Fields', message: 'Title, Theme, and Description are required.' })
       return false
     }
-    if (parts.length > maxParts) {
+    if (partsForContract.length > maxParts) {
       addToast({ type: 'error', title: 'Too Many Parts', message: `Max ${maxParts} parts.` })
       return false
     }
-    if (parts.some((p) => bytes(p) > maxPartBytes)) {
+    if (partsForPreview.some((p) => bytes(p) > maxPartBytes)) {
       addToast({ type: 'error', title: 'Part Too Long', message: `Each part must be ≤ ${maxPartBytes} bytes.` })
       return false
     }
@@ -278,11 +306,12 @@ function MYOPage() {
         if (!ok) throw new Error('Please switch to Base.')
       }
 
+      // IMPORTANT: send parts WITH BLANK tokens
       const tx = await mintTemplateNFT(
         String(title).slice(0, 128),
         String(description).slice(0, 2048),
         String(theme).slice(0, 128),
-        parts,
+        partsForContract,
         { value: valueWei }
       )
 
@@ -378,7 +407,7 @@ function MYOPage() {
 
           {/* Fee / limits */}
           <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-            {/* Single-line fee bar, no wrap */}
+            {/* Single-line fee bar, no wrap, will shrink on small screens */}
             <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
               <div className="flex items-center gap-2 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
                 <span className="shrink-0">Mint fee:</span>
@@ -391,12 +420,12 @@ function MYOPage() {
             <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
               <div className="flex items-center justify-between">
                 <span>Parts</span>
-                <span className="font-semibold">{Math.max(1, parts.length)} / {maxParts}</span>
+                <span className="font-semibold">{Math.max(1, partsForPreview.length)} / {maxParts}</span>
               </div>
               <div className="mt-1 h-1.5 rounded bg-slate-700">
                 <div
                   className="h-1.5 rounded bg-indigo-400"
-                  style={{ width: `${Math.min(100, (Math.max(1, parts.length) / maxParts) * 100)}%` }}
+                  style={{ width: `${Math.min(100, (Math.max(1, partsForPreview.length) / maxParts) * 100)}%` }}
                 />
               </div>
             </div>
@@ -489,7 +518,7 @@ function MYOPage() {
                   className="w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-3 outline-none focus:ring-2 focus:ring-indigo-400 min-h-[140px] resize-y"
                 />
                 <div className="text-xs text-slate-400">
-                  Parts: <b>{Math.max(1, parts.length)}</b> / {maxParts} • Bytes in parts: <b>{partsBytes}</b> • Total bytes: <b>{totalBytes}</b> / {maxTotalBytes}
+                  Parts: <b>{Math.max(1, partsForPreview.length)}</b> / {maxParts} • Bytes in parts: <b>{partsBytes}</b> • Total bytes: <b>{totalBytes}</b> / {maxTotalBytes}
                 </div>
               </div>
 
@@ -547,7 +576,7 @@ function MYOPage() {
                   <div className="text-xs uppercase tracking-wide opacity-80">{theme || 'Theme'}</div>
                   <div className="text-xl md:text-2xl font-extrabold">{title || 'Your Template Title'}</div>
                   <div className="mt-3 text-base leading-relaxed">
-                    <StyledCard parts={parts} blanks={blanksRemaining} words={wordsForPreview} />
+                    <StyledCard parts={partsForPreview} blanks={blanksRemaining} words={wordsForPreview} />
                   </div>
                 </div>
               </div>
