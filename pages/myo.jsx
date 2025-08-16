@@ -21,6 +21,7 @@ const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 /* ---------- helpers ---------- */
 const bytes = (s) => new TextEncoder().encode(String(s || '')).length
+const fmtUsd = (n) => (isFinite(n) ? `$${n.toFixed(2)}` : '—')
 
 const PROMPT_STARTERS = [
   'My day started with [BLANK], then I found a [BLANK] under the couch.',
@@ -28,7 +29,7 @@ const PROMPT_STARTERS = [
   'The secret ingredient is always [BLANK], served with a side of [BLANK].',
   'When I opened the door, a [BLANK] yelled “[BLANK]!” from the hallway.',
   'Future me only travels for [BLANK] and exceptional [BLANK].',
-  'The prophecy spoke of [BLANK] and the legendary [BLANK].'
+  'The prophecy spoke of [BLANK] and the legendary [BLANK].',
 ]
 
 const BG_CHOICES = [
@@ -64,6 +65,8 @@ const TEMPLATE_ABI = [
   { inputs: [], name: 'MAX_PART_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_TOTAL_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'getMintPriceWei', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'mintPriceUsdE6', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'paused', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
 ]
 
 function MYOPage() {
@@ -83,9 +86,20 @@ function MYOPage() {
   const [maxPartBytes, setMaxPartBytes] = useState(256)
   const [maxTotalBytes, setMaxTotalBytes] = useState(2048)
   const [mintPriceWei, setMintPriceWei] = useState(0n)
-  const mintPriceEth = useMemo(() => Number(ethers.formatEther(mintPriceWei || 0n)), [mintPriceWei])
+  const [mintPriceUsdE6, setMintPriceUsdE6] = useState(0n)
+  const [paused, setPaused] = useState(false)
 
-  const [usd, setUsd] = useState(null)
+  const mintPriceEth = useMemo(
+    () => Number(ethers.formatEther(mintPriceWei || 0n)),
+    [mintPriceWei]
+  )
+  const mintPriceUsdFromOnchain = useMemo(
+    () => Number(mintPriceUsdE6) / 1e6,
+    [mintPriceUsdE6]
+  )
+
+  const [usdSpot, setUsdSpot] = useState(null) // Coingecko for extra display only
+  const [priceLoading, setPriceLoading] = useState(true)
   const [loading, setLoading] = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
 
@@ -112,40 +126,63 @@ function MYOPage() {
     })
   }, [blanksInStory])
 
-  // Load limits + mint price (read-only)
+  // Load limits + mint price (read-only), with auto-refresh
   useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      if (!NFT_ADDRESS) return
+    if (!NFT_ADDRESS) return
+    const provider = new ethers.JsonRpcProvider(BASE_RPC)
+    const ct = new ethers.Contract(NFT_ADDRESS, TEMPLATE_ABI, provider)
+
+    let mounted = true
+    const pull = async () => {
       try {
-        const provider = new ethers.JsonRpcProvider(BASE_RPC)
-        const ct = new ethers.Contract(NFT_ADDRESS, TEMPLATE_ABI, provider)
-        const [mp, mpb, mtb, price] = await Promise.all([
+        setPriceLoading(true)
+        const [mp, mpb, mtb, priceWei, priceUsd, isPaused] = await Promise.all([
           ct.MAX_PARTS().catch(() => 16n),
           ct.MAX_PART_BYTES().catch(() => 256n),
           ct.MAX_TOTAL_BYTES().catch(() => 2048n),
           ct.getMintPriceWei().catch(() => 0n),
+          ct.mintPriceUsdE6().catch(() => 0n),
+          ct.paused().catch(() => false),
         ])
-        if (cancelled) return
+        if (!mounted) return
         setMaxParts(Number(mp))
         setMaxPartBytes(Number(mpb))
         setMaxTotalBytes(Number(mtb))
-        setMintPriceWei(BigInt(price || 0n))
-      } catch {}
-    })()
-    return () => { cancelled = true }
+        setMintPriceWei(BigInt(priceWei || 0n))
+        setMintPriceUsdE6(BigInt(priceUsd || 0n))
+        setPaused(Boolean(isPaused))
+      } catch {
+        if (mounted) {
+          setMintPriceWei(0n)
+          setMintPriceUsdE6(0n)
+        }
+      } finally {
+        if (mounted) setPriceLoading(false)
+      }
+    }
+
+    pull()
+    const id = setInterval(pull, 60_000) // poll fallback every min
+    const onVis = () => { if (document.visibilityState === 'visible') pull() }
+    document.addEventListener('visibilitychange', onVis)
+
+    return () => {
+      mounted = false
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVis)
+    }
   }, [BASE_RPC, NFT_ADDRESS])
 
-  // ETH→USD (display only)
+  // ETH→USD spot (display only)
   useEffect(() => {
     let aborted = false
     ;(async () => {
       try {
         const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
         const j = await r.json()
-        if (!aborted) setUsd(Number(j?.ethereum?.usd || 0))
+        if (!aborted) setUsdSpot(Number(j?.ethereum?.usd || 0))
       } catch {
-        if (!aborted) setUsd(null)
+        if (!aborted) setUsdSpot(null)
       }
     })()
     return () => { aborted = true }
@@ -194,6 +231,10 @@ function MYOPage() {
       addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS.' })
       return false
     }
+    if (paused) {
+      addToast({ type: 'error', title: 'Paused', message: 'Minting is currently paused.' })
+      return false
+    }
     if (!isConnected) {
       addToast({ type: 'error', title: 'Wallet Required', message: 'Please connect your wallet.' })
       return false
@@ -234,16 +275,24 @@ function MYOPage() {
         if (!ok) throw new Error('Please switch to Base.')
       }
 
-      // ✅ Tx helper expects valueWei as 5th arg
-      await mintTemplateNFT(
+      // ✅ FIX: TxProvider expects { value } as the 5th arg
+      const tx = await mintTemplateNFT(
         String(title).slice(0, 128),
         String(description).slice(0, 2048),
         String(theme).slice(0, 128),
         parts,
-        mintPriceWei
+        { value: mintPriceWei }
       )
 
-      addToast({ type: 'success', title: 'Minted!', message: 'Your template NFT is live on Base.' })
+      // If your TxProvider returns a receipt, show a quick link
+      const hash = tx?.hash || tx?.transactionHash
+      addToast({
+        type: 'success',
+        title: 'Mint submitted',
+        message: hash ? `Tx: ${hash.slice(0, 10)}…` : 'Waiting for confirmations…',
+        link: hash ? `https://basescan.org/tx/${hash}` : undefined,
+      })
+
       setShowConfetti(true)
       setTimeout(() => setShowConfetti(false), 1800)
 
@@ -270,6 +319,16 @@ function MYOPage() {
   const pageUrl = absoluteUrl('/myo')
   const ogImage = buildOgUrl({ screen: 'myo', title: 'Make Your Own' })
 
+  const canMint =
+    !loading &&
+    isConnected &&
+    !paused &&
+    title.trim() &&
+    theme.trim() &&
+    description.trim() &&
+    Math.max(0, parts.length - 1) >= 1 &&
+    mintPriceWei !== 0n
+
   return (
     <Layout>
       <Head>
@@ -293,15 +352,20 @@ function MYOPage() {
       {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
       <main className="max-w-6xl mx-auto p-4 md:p-6 text-white space-y-6">
-        {/* Header */}
-        <div className="rounded-2xl bg-slate-900/70 border border-slate-700 p-6">
+        {/* Explainer */}
+        <div className="rounded-2xl bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-700 p-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="text-3xl md:text-4xl font-extrabold">🎨 Make Your Own</h1>
               <p className="text-slate-300">
-                Type your story and insert <code className="px-1 py-0.5 bg-slate-800 rounded">[BLANK]</code> wherever players will fill a word.
-                Pre-fill any blank you want (optional). Then mint the template NFT.
+                Drop <code className="px-1 py-0.5 bg-slate-800 rounded">[BLANK]</code> anywhere words should be filled.
+                Pick a vibe, then mint a Template NFT on <span className="font-semibold">Base</span>.
               </p>
+              <ul className="mt-3 grid gap-2 text-slate-300 text-sm md:grid-cols-3">
+                <li className="rounded-xl bg-slate-800/60 border border-slate-700 p-3">✍️ <b>Write</b> a prompt with blanks.</li>
+                <li className="rounded-xl bg-slate-800/60 border border-slate-700 p-3">🧩 <b>Set</b> a theme & background.</li>
+                <li className="rounded-xl bg-slate-800/60 border border-slate-700 p-3">🪄 <b>Mint</b> the template as an NFT.</li>
+              </ul>
             </div>
             <div className="flex items-center gap-2">
               {!isConnected ? (
@@ -312,18 +376,27 @@ function MYOPage() {
             </div>
           </div>
 
-          {/* Fee pill */}
+          {/* Fee / limits */}
           <div className="mt-4 flex flex-wrap gap-3 text-sm">
             <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
-              Mint fee: <b>{mintPriceWei === 0n ? '—' : `${mintPriceEth.toFixed(6)} ETH`}</b>
-              {usd ? <span className="opacity-80"> (~${(mintPriceEth * usd).toFixed(2)} USD)</span> : null}
-              <span className="opacity-70"> + gas</span>
+              {priceLoading ? (
+                <span className="inline-block animate-pulse">Mint fee: …</span>
+              ) : (
+                <>
+                  Mint fee: <b>{mintPriceWei === 0n ? '—' : `${mintPriceEth.toFixed(6)} ETH`}</b>
+                  {usdSpot ? <span className="opacity-80"> ({fmtUsd(mintPriceEth * usdSpot)})</span> : null}
+                  {mintPriceUsdE6 > 0 && (
+                    <span className="opacity-80"> · on‑chain target ≈ {fmtUsd(mintPriceUsdFromOnchain)}</span>
+                  )}
+                  <span className="opacity-70"> + gas</span>
+                </>
+              )}
             </div>
             <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
               Limits: parts ≤ {maxParts}, part bytes ≤ {maxPartBytes}, total bytes ≤ {maxTotalBytes}
             </div>
-            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
-              Remaining blanks in this design: <b>{Math.max(0, parts.length - 1)}</b>
+            <div className={`rounded-lg px-3 py-2 border ${paused ? 'bg-rose-900/40 border-rose-700 text-rose-200' : 'bg-slate-800/70 border-slate-700'}`}>
+              {paused ? '⏸️ Minting is paused' : <>Remaining blanks in this design: <b>{Math.max(0, parts.length - 1)}</b></>}
             </div>
           </div>
         </div>
@@ -457,9 +530,15 @@ function MYOPage() {
               <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3 text-sm">
                 <div className="flex flex-wrap items-center gap-3">
                   <div>
-                    Mint fee: <b>{mintPriceWei === 0n ? '—' : `${mintPriceEth.toFixed(6)} ETH`}</b>
-                    {usd ? <span className="opacity-80"> (~${(mintPriceEth * usd).toFixed(2)} USD)</span> : null}
-                    <span className="opacity-70"> + gas at confirmation</span>
+                    {priceLoading ? (
+                      <span className="inline-block animate-pulse">Mint fee: …</span>
+                    ) : (
+                      <>
+                        Mint fee: <b>{mintPriceWei === 0n ? '—' : `${mintPriceEth.toFixed(6)} ETH`}</b>
+                        {usdSpot ? <span className="opacity-80"> ({fmtUsd(mintPriceEth * usdSpot)})</span> : null}
+                        <span className="opacity-70"> + gas at confirmation</span>
+                      </>
+                    )}
                   </div>
                   <div className="opacity-80">•</div>
                   <div>Blanks to fill by players: <b>{Math.max(0, parts.length - 1)}</b></div>
@@ -469,18 +548,11 @@ function MYOPage() {
               <div className="flex flex-col sm:flex-row gap-3">
                 <Button
                   onClick={handleMint}
-                  disabled={
-                    loading ||
-                    !isConnected ||
-                    !title.trim() ||
-                    !theme.trim() ||
-                    !description.trim() ||
-                    Math.max(0, parts.length - 1) < 1 ||
-                    mintPriceWei === 0n
-                  }
-                  className="bg-purple-600 hover:bg-purple-500 w-full"
+                  disabled={!canMint}
+                  className={`w-full ${paused ? 'bg-slate-700' : 'bg-purple-600 hover:bg-purple-500'}`}
+                  title={!isConnected ? 'Connect wallet' : paused ? 'Minting paused' : ''}
                 >
-                  {loading ? 'Minting…' : 'Mint Template NFT'}
+                  {loading ? 'Minting…' : paused ? 'Paused' : 'Mint Template NFT'}
                 </Button>
                 <Button
                   variant="outline"
@@ -498,8 +570,7 @@ function MYOPage() {
               </div>
 
               <div className="text-xs text-slate-400">
-                Tip: If you get an “insufficient funds” error, ensure you’re on Base and have enough ETH for the
-                mint fee <i>and</i> gas.
+                Tip: If you get an “insufficient funds” error, ensure you’re on Base and have enough ETH for the mint fee <i>and</i> gas.
               </div>
             </CardContent>
           </Card>
