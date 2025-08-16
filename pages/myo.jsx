@@ -21,7 +21,6 @@ const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 /* ---------- helpers ---------- */
 const bytes = (s) => new TextEncoder().encode(String(s || '')).length
-const fmtUsd = (n) => (Number.isFinite(n) ? `$${n.toFixed(2)}` : '—')
 
 const PROMPT_STARTERS = [
   'My day started with [BLANK], then I found a [BLANK] under the couch.',
@@ -47,61 +46,49 @@ const TEMPLATE_ABI = [
   { inputs: [], name: 'MAX_PART_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_TOTAL_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'getMintPriceWei', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'mintPriceUsdE6', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'paused', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
 ]
 
-/** Normalize parts for contract (explicit BLANK token alternating) and for preview (implicit blanks).
- *  Enforces: no empty edges, no adjacent BLANKs, at least one BLANK if present in story and not prefilled.
- */
+/** Build preview parts (implicit blanks) + contract parts (explicit BLANK tokens). */
 function computeParts(story, fills, blankToken) {
   const chunks = String(story || '').split(/\[BLANK\]/g)
   const blanks = Math.max(0, chunks.length - 1)
   const safeFills = Array.from({ length: blanks }, (_, i) => (fills?.[i] || '').trim())
 
-  // PREVIEW: segments, merging any filled blanks into the preceding text
+  // PREVIEW: merge filled, split on unfilled
   const preview = [chunks[0] || '']
   for (let i = 0; i < blanks; i++) {
     const fill = safeFills[i]
     const nextText = chunks[i + 1] || ''
-    if (fill) {
-      preview[preview.length - 1] = preview[preview.length - 1] + fill + nextText
-    } else {
-      preview.push(nextText)
-    }
+    if (fill) preview[preview.length - 1] = preview[preview.length - 1] + fill + nextText
+    else preview.push(nextText)
   }
 
-  // CONTRACT: alternate text/BLANK/text…, no start/end BLANK, collapse empties
-  const out = []
+  // CONTRACT: alternate text / BLANK / text; no leading/trailing BLANK; collapse empties
+  const parts = []
   const pushText = (t) => {
-    const s = (t || '').trim()
+    const s = String(t || '')
     if (!s) return
-    if (out.length === 0) out.push(s)
-    else if (out[out.length - 1] === blankToken) out.push(s)
-    else out[out.length - 1] = out[out.length - 1] + s
+    if (parts.length === 0) parts.push(s)
+    else if (parts[parts.length - 1] === blankToken) parts.push(s)
+    else parts[parts.length - 1] = parts[parts.length - 1] + s
   }
   const pushBlank = () => {
-    if (out.length === 0) return
-    if (out[out.length - 1] === blankToken) return
-    out.push(blankToken)
+    if (parts.length === 0) return
+    if (parts[parts.length - 1] !== blankToken) parts.push(blankToken)
   }
 
   pushText(chunks[0])
   for (let i = 0; i < blanks; i++) {
     const fill = safeFills[i]
     const nextText = chunks[i + 1] || ''
-    if (fill) {
-      pushText(fill)
-      pushText(nextText)
-    } else {
-      pushBlank()
-      pushText(nextText)
-    }
+    if (fill) { pushText(fill); pushText(nextText) }
+    else { pushBlank(); pushText(nextText) }
   }
-  if (out[out.length - 1] === blankToken) out.pop()
+  if (parts[parts.length - 1] === blankToken) parts.pop()
 
-  const blanksRemaining = out.filter((p) => p === blankToken).length
-  return { partsForContract: out, partsForPreview: preview, blanksRemaining }
+  const blanksRemaining = parts.filter((p) => p === blankToken).length
+  return { partsForContract: parts, partsForPreview: preview, blanksRemaining }
 }
 
 function MYOPage() {
@@ -109,6 +96,7 @@ function MYOPage() {
   const { addToast } = useToast()
   const { width, height } = useWindowSize()
 
+  // unified provider bits
   const {
     isConnected, connect, isOnBase, switchToBase,
     BASE_RPC, NFT_ADDRESS,
@@ -124,24 +112,20 @@ function MYOPage() {
   // Contract BLANK token (default to literal until read)
   const [blankToken, setBlankToken] = useState('[BLANK]')
 
-  // Pricing (on-chain if available; otherwise fixed fallback for UI only)
-  const [mintPriceWeiOnchain, setMintPriceWeiOnchain] = useState(0n)
-  const [mintPriceUsdE6, setMintPriceUsdE6] = useState(0n)
-  const [priceLoading, setPriceLoading] = useState(true)
+  // Display-only simple fee text
+  const DISPLAY_FEE_WEI = ethers.parseEther('0.0005')
+  const DISPLAY_FEE_ETH = Number(ethers.formatEther(DISPLAY_FEE_WEI)).toFixed(6)
 
-  // Fallback fee (display/send if on-chain price is 0)
-  const FIXED_FEE_WEI =
-    (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_MYO_FIXED_FEE_WEI)
-      ? BigInt(process.env.NEXT_PUBLIC_MYO_FIXED_FEE_WEI)
-      : ethers.parseEther('0.0005')
+  // Optional extra headroom (e.g., price tick between read & execute)
+  // You can tweak with NEXT_PUBLIC_MYO_FEE_BUFFER_BPS, default 2% (200 bps)
+  const BUFFER_BPS = (() => {
+    if (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_MYO_FEE_BUFFER_BPS) {
+      const n = Number(process.env.NEXT_PUBLIC_MYO_FEE_BUFFER_BPS)
+      return Number.isFinite(n) && n >= 0 && n <= 5000 ? Math.floor(n) : 200
+    }
+    return 200
+  })()
 
-  const valueWei = useMemo(
-    () => (mintPriceWeiOnchain > 0n ? mintPriceWeiOnchain : FIXED_FEE_WEI),
-    [mintPriceWeiOnchain, FIXED_FEE_WEI]
-  )
-  const valueEth = useMemo(() => Number(ethers.formatEther(valueWei)), [valueWei])
-
-  const [usdSpot, setUsdSpot] = useState(null)
   const [loading, setLoading] = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
 
@@ -168,7 +152,7 @@ function MYOPage() {
     })
   }, [blanksInStory])
 
-  // Load limits + paused + BLANK + price (non-blocking)
+  // Load limits + paused + BLANK (non-blocking)
   useEffect(() => {
     if (!NFT_ADDRESS) return
     const provider = new ethers.JsonRpcProvider(BASE_RPC)
@@ -177,14 +161,11 @@ function MYOPage() {
     let mounted = true
     const pull = async () => {
       try {
-        setPriceLoading(true)
-        const [blk, mp, mpb, mtb, priceWei, priceUsd, isPaused] = await Promise.all([
+        const [blk, mp, mpb, mtb, isPaused] = await Promise.all([
           ct.BLANK().catch(() => '[BLANK]'),
           ct.MAX_PARTS().catch(() => null),
           ct.MAX_PART_BYTES().catch(() => null),
           ct.MAX_TOTAL_BYTES().catch(() => null),
-          ct.getMintPriceWei().catch(() => 0n),
-          ct.mintPriceUsdE6().catch(() => 0n),
           ct.paused().catch(() => false),
         ])
         if (!mounted) return
@@ -192,39 +173,21 @@ function MYOPage() {
         if (mp) setMaxParts(Number(mp))
         if (mpb) setMaxPartBytes(Number(mpb))
         if (mtb) setMaxTotalBytes(Number(mtb))
-        setMintPriceWeiOnchain(BigInt(priceWei || 0n))
-        setMintPriceUsdE6(BigInt(priceUsd || 0n))
         setPaused(Boolean(isPaused))
-      } finally {
-        if (mounted) setPriceLoading(false)
-      }
+      } catch { /* ignore */ }
     }
 
     pull()
     const id = setInterval(pull, 60_000)
     const onVis = () => { if (document.visibilityState === 'visible') pull() }
     document.addEventListener('visibilitychange', onVis)
+
     return () => {
       mounted = false
       clearInterval(id)
       document.removeEventListener('visibilitychange', onVis)
     }
   }, [BASE_RPC, NFT_ADDRESS])
-
-  // ETH→USD spot (display only)
-  useEffect(() => {
-    let aborted = false
-    ;(async () => {
-      try {
-        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
-        const j = await r.json()
-        if (!aborted) setUsdSpot(Number(j?.ethereum?.usd || 0))
-      } catch {
-        if (!aborted) setUsdSpot(null)
-      }
-    })()
-    return () => { aborted = true }
-  }, [])
 
   // Derived parts & byte accounting
   const { partsForContract, partsForPreview, blanksRemaining } = useMemo(
@@ -259,11 +222,13 @@ function MYOPage() {
       el.setSelectionRange(pos, pos)
     })
   }
+
   const randomizeStarter = () => {
     const pick = PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)]
     setStory(pick)
     setFills([]) // will resize automatically
   }
+
   const randomizeBackground = () => {
     const idx = BG_CHOICES.findIndex((b) => b.key === bgKey)
     const next = (idx + 1) % BG_CHOICES.length
@@ -304,17 +269,24 @@ function MYOPage() {
       addToast({ type: 'error', title: 'Add a Blank', message: 'Include at least one [BLANK] that is not pre-filled.' })
       return false
     }
-    if (partsForContract[0] === blankToken || partsForContract[partsForContract.length - 1] === blankToken) {
-      addToast({ type: 'error', title: 'Invalid Layout', message: 'Blanks must be between text (no leading/trailing blank).' })
-      return false
-    }
-    for (let i = 1; i < partsForContract.length; i++) {
-      if (partsForContract[i] === blankToken && partsForContract[i - 1] === blankToken) {
-        addToast({ type: 'error', title: 'Invalid Layout', message: 'Blanks must be separated by text.' })
-        return false
-      }
-    }
     return true
+  }
+
+  // Calculate msg.value with buffer, using the freshest on-chain price
+  const readFeeWithBuffer = async () => {
+    try {
+      const provider = new ethers.JsonRpcProvider(BASE_RPC)
+      const ct = new ethers.Contract(NFT_ADDRESS, TEMPLATE_ABI, provider)
+      const onchain = await ct.getMintPriceWei().catch(() => 0n)
+      const basePrice = (onchain && onchain > 0n) ? onchain : DISPLAY_FEE_WEI
+      if (BUFFER_BPS <= 0) return basePrice
+      const extra = (basePrice * BigInt(BUFFER_BPS)) / 10000n
+      return basePrice + extra
+    } catch {
+      // worst case, use display fee (with buffer)
+      const extra = (DISPLAY_FEE_WEI * BigInt(BUFFER_BPS)) / 10000n
+      return DISPLAY_FEE_WEI + extra
+    }
   }
 
   const handleMint = async () => {
@@ -326,10 +298,8 @@ function MYOPage() {
         if (!ok) throw new Error('Please switch to Base.')
       }
 
-      // Send normalized parts WITH explicit BLANK tokens
-      if (process.env.NODE_ENV !== 'production') {
-        console.log('partsForContract →', partsForContract)
-      }
+      const valueWei = await readFeeWithBuffer()
+
       const tx = await mintTemplateNFT(
         String(title).slice(0, 128),
         String(description).slice(0, 2048),
@@ -348,6 +318,8 @@ function MYOPage() {
 
       setShowConfetti(true)
       setTimeout(() => setShowConfetti(false), 1800)
+
+      // Reset (keep background)
       setTitle(''); setTheme(''); setDescription('')
       setStory(PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)])
       setFills([])
@@ -428,12 +400,11 @@ function MYOPage() {
 
           {/* Fee / limits */}
           <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-            {/* Single-line fee bar, no wrap; shrinks on small screens */}
+            {/* Single-line fee bar, no wrap, small text on tight screens */}
             <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
               <div className="flex items-center gap-2 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
                 <span className="shrink-0">Mint fee:</span>
-                <b className="shrink-0">{valueEth.toFixed(6)} ETH</b>
-                {usdSpot ? <span className="opacity-80 shrink-0">({fmtUsd(valueEth * usdSpot)})</span> : null}
+                <b className="shrink-0">{DISPLAY_FEE_ETH} ETH</b>
                 <span className="opacity-70 shrink-0">+ gas</span>
               </div>
             </div>
@@ -464,12 +435,6 @@ function MYOPage() {
               </div>
             </div>
           </div>
-
-          {!priceLoading && mintPriceUsdE6 > 0 && (
-            <div className="mt-2 text-xs text-slate-400">
-              Note: Contract target ≈ {fmtUsd(Number(mintPriceUsdE6) / 1e6)}; app uses a fixed fee if price is unavailable.
-            </div>
-          )}
 
           {paused && (
             <div className="mt-3 text-sm rounded-lg bg-rose-900/40 border border-rose-700 px-3 py-2 text-rose-100">
@@ -606,8 +571,7 @@ function MYOPage() {
               <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
                 <div className="flex items-center gap-3 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
                   <div className="shrink-0">
-                    Mint fee: <b>{valueEth.toFixed(6)} ETH</b>
-                    {usdSpot ? <span className="opacity-80"> ({fmtUsd(valueEth * usdSpot)})</span> : null}
+                    Mint fee: <b>{DISPLAY_FEE_ETH} ETH</b>
                     <span className="opacity-70"> + gas at confirmation</span>
                   </div>
                   <div className="opacity-80 shrink-0">•</div>
@@ -640,8 +604,7 @@ function MYOPage() {
               </div>
 
               <div className="text-xs text-slate-400">
-                If a tx fails with “insufficient value”, the contract may require a higher price.
-                Try again after the on-chain price loads, or contact support.
+                If a tx fails with “insufficient value”, try again (price may have updated), or increase the buffer via <code>NEXT_PUBLIC_MYO_FEE_BUFFER_BPS</code>.
               </div>
             </CardContent>
           </Card>
