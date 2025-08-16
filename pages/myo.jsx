@@ -1,4 +1,3 @@
-// pages/myo.jsx
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -12,50 +11,20 @@ import SEO from '@/components/SEO'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import StyledCard from '@/components/StyledCard'
-
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
-import { useMiniWallet } from '@/hooks/useMiniWallet'
 import { useToast } from '@/components/Toast'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
+
+// ✅ unified wallet + contracts + tx helpers
+import { useTx } from '@/components/TxProvider'
 
 // Client-only confetti (optional flourish)
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 /* ===============================
-   Chain / Contract (Base Mainnet)
-=================================*/
-const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
-const BASE_CHAIN_ID = 8453n
-const BASE_CHAIN_ID_HEX = '0x2105'
-const TEMPLATE_ADDR =
-  process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS ||
-  '0x0F22124A86F8893990fA4763393E46d97F429442' // fallback
-
-// Minimal ABI for limits, price, and mint
-const ABI = [
-  { inputs: [], name: 'MAX_PARTS', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'MAX_PART_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'MAX_TOTAL_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'getMintPriceWei', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
-  {
-    inputs: [
-      { type: 'string', name: 'title' },
-      { type: 'string', name: 'description' },
-      { type: 'string', name: 'theme' },
-      { type: 'string[]', name: 'parts' }
-    ],
-    name: 'mintTemplate',
-    outputs: [],
-    stateMutability: 'payable',
-    type: 'function'
-  }
-]
-
-/* ===============================
    Small helpers
 =================================*/
 const bytes = (s) => new TextEncoder().encode(String(s || '')).length
-const clamp = (n, min, max) => Math.max(min, Math.min(max, n))
 
 // Friendly random starters (users can modify freely)
 const PROMPT_STARTERS = [
@@ -77,24 +46,20 @@ const BG_CHOICES = [
 ]
 
 // Convert the author’s story (with [BLANK] markers) to parts.
-// `fills` is an array where the user can pre-fill some blanks.
 // If a blank has a fill, we merge it into the previous part (so that blank disappears).
 function deriveParts(story, fills) {
   const chunks = String(story || '').split(/\[BLANK\]/g)
   const blanks = Math.max(0, chunks.length - 1)
   const safeFills = Array.from({ length: blanks }, (_, i) => (fills?.[i] || '').trim())
-
   if (chunks.length === 0) return { parts: [''], blanksRemaining: 0 }
-  // Start with the first text segment
+
   const parts = [chunks[0] || '']
   for (let i = 0; i < blanks; i++) {
     const fill = safeFills[i]
     const nextText = chunks[i + 1] || ''
     if (fill) {
-      // "Consume" the blank by appending the filled word into the previous part
       parts[parts.length - 1] = parts[parts.length - 1] + fill + nextText
     } else {
-      // Keep the blank: push nextText as the next part
       parts.push(nextText)
     }
   }
@@ -102,16 +67,29 @@ function deriveParts(story, fills) {
 }
 
 /* ===============================
+   Minimal ABI for limits, price
+=================================*/
+const TEMPLATE_ABI = [
+  { inputs: [], name: 'MAX_PARTS', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'MAX_PART_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'MAX_TOTAL_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'getMintPriceWei', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
+]
+
+/* ===============================
    Page Component
 =================================*/
 function MYOPage() {
   useMiniAppReady()
   const { addToast } = useToast()
-  const { address, isConnected, connect } = useMiniWallet()
   const { width, height } = useWindowSize()
 
-  // Wallet / chain
-  const [isOnBase, setIsOnBase] = useState(true)
+  // ✅ unified provider bits
+  const {
+    isConnected, connect, isOnBase, switchToBase,
+    BASE_RPC, NFT_ADDRESS,
+    mintTemplateNFT,
+  } = useTx()
 
   // On-chain constraints & price
   const [maxParts, setMaxParts] = useState(16)
@@ -150,72 +128,14 @@ function MYOPage() {
     })
   }, [blanksInStory])
 
-  // Observe chain
+  // Load on-chain limits + mint price (read-only)
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      try {
-        const prov = (typeof window !== 'undefined' && window.ethereum) || null
-        if (prov) {
-          const provider = new ethers.BrowserProvider(prov)
-          try {
-            const net = await provider.getNetwork()
-            if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-          } catch {
-            if (!cancelled) setIsOnBase(true)
-          }
-          const onChain = () => location.reload()
-          prov.on?.('chainChanged', onChain)
-          return () => prov.removeListener?.('chainChanged', onChain)
-        } else if (!cancelled) {
-          setIsOnBase(true)
-        }
-      } catch {
-        if (!cancelled) setIsOnBase(true)
-      }
-    })()
-    return () => { cancelled = true }
-  }, [])
-
-  const switchToBase = useCallback(async () => {
-    const prov = (typeof window !== 'undefined' && window.ethereum) || null
-    if (!prov) {
-      addToast({ type: 'error', title: 'No Wallet', message: 'No wallet provider found.' })
-      return
-    }
-    try {
-      await prov.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_ID_HEX }] })
-      setIsOnBase(true)
-    } catch (e) {
-      if (e?.code === 4902) {
-        try {
-          await prov.request({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: BASE_CHAIN_ID_HEX,
-              chainName: 'Base',
-              rpcUrls: [BASE_RPC],
-              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-              blockExplorerUrls: ['https://basescan.org']
-            }]
-          })
-          setIsOnBase(true)
-        } catch {
-          addToast({ type: 'error', title: 'Switch Failed', message: 'Could not add/switch to Base.' })
-        }
-      } else {
-        addToast({ type: 'error', title: 'Switch Failed', message: e?.message || 'Could not switch to Base.' })
-      }
-    }
-  }, [addToast])
-
-  // Load on-chain limits + mint price
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
+      if (!NFT_ADDRESS) return
       try {
         const provider = new ethers.JsonRpcProvider(BASE_RPC)
-        const ct = new ethers.Contract(TEMPLATE_ADDR, ABI, provider)
+        const ct = new ethers.Contract(NFT_ADDRESS, TEMPLATE_ABI, provider)
         const [mp, mpb, mtb, price] = await Promise.all([
           ct.MAX_PARTS().catch(() => 16n),
           ct.MAX_PART_BYTES().catch(() => 256n),
@@ -232,7 +152,7 @@ function MYOPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [])
+  }, [BASE_RPC, NFT_ADDRESS])
 
   // ETH/USD for display (does not affect tx)
   useEffect(() => {
@@ -272,7 +192,6 @@ function MYOPage() {
     const after = story.slice(end)
     const next = `${before}[BLANK]${after}`
     setStory(next)
-    // restore cursor
     requestAnimationFrame(() => {
       el.focus()
       const pos = start + '[BLANK]'.length
@@ -294,7 +213,7 @@ function MYOPage() {
 
   // Validate before mint
   const validate = () => {
-    if (!TEMPLATE_ADDR) {
+    if (!NFT_ADDRESS) {
       addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS.' })
       return false
     }
@@ -319,7 +238,6 @@ function MYOPage() {
       return false
     }
     if (blanksRemaining < 1) {
-      // Contract likely expects at least one blank; keep author-friendly hint
       addToast({ type: 'error', title: 'Add a Blank', message: 'Include at least one [BLANK] in your story.' })
       return false
     }
@@ -334,29 +252,19 @@ function MYOPage() {
     if (!validate()) return
     try {
       setLoading(true)
-      const prov = (typeof window !== 'undefined' && window.ethereum) || null
-      if (!prov) throw new Error('No wallet provider found')
-      await prov.request?.({ method: 'eth_requestAccounts' })
-
-      // Ensure Base
-      const browserProvider = new ethers.BrowserProvider(prov)
-      const net = await browserProvider.getNetwork()
-      if (net?.chainId !== BASE_CHAIN_ID) {
-        await switchToBase()
+      if (!isOnBase) {
+        const ok = await switchToBase()
+        if (!ok) throw new Error('Please switch to Base.')
       }
 
-      // Use exact on-chain mint fee (gas is separate)
-      const signer = await browserProvider.getSigner()
-      const ct = new ethers.Contract(TEMPLATE_ADDR, ABI, signer)
-
-      const tx = await ct.mintTemplate(
+      // 🔁 unified TX helper (uses signer + preflight inside provider)
+      await mintTemplateNFT(
         String(title).slice(0, 128),
         String(description).slice(0, 2048),
         String(theme).slice(0, 128),
         parts,
         { value: mintPriceWei }
       )
-      await tx.wait()
 
       addToast({ type: 'success', title: 'Minted!', message: 'Your template NFT is live on Base.' })
       setShowConfetti(true)
@@ -379,14 +287,11 @@ function MYOPage() {
   }
 
   // Live preview content for StyledCard:
-  // We want the remaining blanks to appear as "____".
   const wordsForPreview = useMemo(() => {
-    // StyledCard expects words map for current blanks (0..blanksRemaining-1)
-    // Leave empty to render ____ for each.
     const w = {}
-    for (let i = 0; i < blanksRemaining; i++) w[i] = ''
+    for (let i = 0; i < Math.max(0, parts.length - 1); i++) w[i] = ''
     return w
-  }, [blanksRemaining])
+  }, [parts])
 
   // Basic SEO / Farcaster
   const pageUrl = absoluteUrl('/myo')
@@ -445,7 +350,7 @@ function MYOPage() {
               Limits: parts ≤ {maxParts}, part bytes ≤ {maxPartBytes}, total bytes ≤ {maxTotalBytes}
             </div>
             <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
-              Remaining blanks in this design: <b>{blanksRemaining}</b>
+              Remaining blanks in this design: <b>{Math.max(0, parts.length - 1)}</b>
             </div>
           </div>
         </div>
@@ -571,7 +476,6 @@ function MYOPage() {
                   <div className="text-xs uppercase tracking-wide opacity-80">{theme || 'Theme'}</div>
                   <div className="text-xl md:text-2xl font-extrabold">{title || 'Your Template Title'}</div>
                   <div className="mt-3 text-base leading-relaxed">
-                    {/* Use StyledCard to render blanks as ____ */}
                     <StyledCard parts={parts} blanks={Math.max(0, parts.length - 1)} words={wordsForPreview} />
                   </div>
                 </div>
@@ -585,7 +489,7 @@ function MYOPage() {
                     <span className="opacity-70"> + gas at confirmation</span>
                   </div>
                   <div className="opacity-80">•</div>
-                  <div>Blanks to fill by players: <b>{blanksRemaining}</b></div>
+                  <div>Blanks to fill by players: <b>{Math.max(0, parts.length - 1)}</b></div>
                 </div>
               </div>
 
@@ -598,7 +502,7 @@ function MYOPage() {
                     !title.trim() ||
                     !theme.trim() ||
                     !description.trim() ||
-                    blanksRemaining < 1 ||
+                    Math.max(0, parts.length - 1) < 1 ||
                     mintPriceWei === 0n
                   }
                   className="bg-purple-600 hover:bg-purple-500 w-full"
@@ -632,5 +536,5 @@ function MYOPage() {
   )
 }
 
-// Prevent server-rendered context issues (e.g., Toast) and wallet probing during SSR
+// Prevent SSR wallet probing
 export default dynamic(() => Promise.resolve(MYOPage), { ssr: false })
