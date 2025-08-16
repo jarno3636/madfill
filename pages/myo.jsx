@@ -16,7 +16,6 @@ import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useToast } from '@/components/Toast'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useTx } from '@/components/TxProvider'
-import AutoSwitchToBase from '@/components/AutoSwitchToBase'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -97,9 +96,9 @@ function MYOPage() {
   const { addToast } = useToast()
   const { width, height } = useWindowSize()
 
-  // unified provider bits
+  // unified provider bits (NO switchToBase here)
   const {
-    isConnected, connect, isOnBase, switchToBase,
+    isConnected, connect, isOnBase,
     BASE_RPC, NFT_ADDRESS,
     mintTemplateNFT,
   } = useTx()
@@ -235,7 +234,7 @@ function MYOPage() {
     setBgKey(BG_CHOICES[next].key)
   }
 
-  // Validation
+  // Validation (now also checks network without switching)
   const validate = () => {
     if (!NFT_ADDRESS) {
       addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS.' })
@@ -247,6 +246,10 @@ function MYOPage() {
     }
     if (!isConnected) {
       addToast({ type: 'error', title: 'Wallet Required', message: 'Please connect your wallet.' })
+      return false
+    }
+    if (!isOnBase) {
+      addToast({ type: 'error', title: 'Wrong Network', message: 'Please switch your wallet to Base and try again.' })
       return false
     }
     if (!title.trim() || !theme.trim() || !description.trim()) {
@@ -279,7 +282,6 @@ function MYOPage() {
       const ct = new ethers.Contract(NFT_ADDRESS, TEMPLATE_ABI, provider)
       const onchain = await ct.getMintPriceWei().catch(() => 0n)
       const basePrice = (onchain && onchain > 0n) ? onchain : DISPLAY_FEE_WEI
-      if (BUFFER_BPS <= 0) return basePrice
       const extra = (basePrice * BigInt(BUFFER_BPS)) / 10000n
       return basePrice + extra
     } catch {
@@ -292,10 +294,6 @@ function MYOPage() {
     if (!validate()) return
     try {
       setLoading(true)
-      if (!isOnBase) {
-        const ok = await switchToBase()
-        if (!ok) throw new Error('Please switch to Base.')
-      }
 
       const valueWei = await readFeeWithBuffer()
 
@@ -344,6 +342,7 @@ function MYOPage() {
   const canMint =
     !loading &&
     isConnected &&
+    isOnBase &&          // <- only allow mint button when on Base
     !paused &&
     title.trim() &&
     theme.trim() &&
@@ -370,9 +369,6 @@ function MYOPage() {
         twitterCard="summary_large_image"
       />
 
-      {/* Automatically connect + switch to Base (8453) in embedded browsers (Farcaster, etc.) */}
-      <AutoSwitchToBase />
-
       {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
       <main className="max-w-6xl mx-auto p-4 md:p-6 text-white space-y-6">
@@ -393,16 +389,20 @@ function MYOPage() {
             </div>
             <div className="flex items-center gap-2">
               {!isConnected ? (
-                <Button onClick={connect} className="bg-amber-500 hover:bg-amber-400 text-black">Connect Wallet</Button>
+                <Button onClick={connect} className="bg-amber-500 hover:bg-amber-400 text-black">
+                  Connect Wallet
+                </Button>
               ) : !isOnBase ? (
-                <Button onClick={switchToBase} className="bg-cyan-600 hover:bg-cyan-500">Switch to Base</Button>
+                <div className="text-amber-300 bg-amber-900/30 border border-amber-700 rounded-md px-3 py-2 text-sm">
+                  ⚠️ Wrong network. Please switch your wallet to <b>Base (8453)</b>.
+                </div>
               ) : null}
             </div>
           </div>
 
           {/* Fee / limits */}
           <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-            {/* Single-line fee bar, no wrap, small text on tight screens */}
+            {/* Single-line fee bar */}
             <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
               <div className="flex items-center gap-2 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
                 <span className="shrink-0">Mint fee:</span>
@@ -586,7 +586,7 @@ function MYOPage() {
                   onClick={handleMint}
                   disabled={!canMint}
                   className={`w-full ${paused ? 'bg-slate-700' : 'bg-purple-600 hover:bg-purple-500'}`}
-                  title={!isConnected ? 'Connect wallet' : paused ? 'Minting paused' : ''}
+                  title={!isConnected ? 'Connect wallet' : (!isOnBase ? 'Switch to Base' : (paused ? 'Minting paused' : ''))}
                 >
                   {loading ? 'Minting…' : paused ? 'Paused' : 'Mint Template NFT'}
                 </Button>
