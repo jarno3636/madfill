@@ -16,12 +16,12 @@ import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useToast } from '@/components/Toast'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { categories as presetCategories } from '@/data/templates'
-
+import { useWallet } from '@/components/WalletProvider'
 // ✅ use unified provider
 import { useTx } from '@/components/TxProvider'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
-
+const { isConnected, connect } = useWallet()
 /* ========== Read-only Pools Contract bits ========== */
 const FILLIN_ADDR =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
