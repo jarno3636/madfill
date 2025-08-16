@@ -7,9 +7,12 @@ import { useWallet } from './WalletProvider'
 import fillinAbi from '@/abi/FillInStoryV3_ABI.json'
 import nftAbi from '@/abi/MadFillTemplateNFT_ABI.json'
 
+/** ---------- Chain & RPC ---------- */
 const BASE_CHAIN_ID = 8453n
-const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+const BASE_RPC =
+  process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 
+/** ---------- Contracts ---------- */
 const FILLIN_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
@@ -18,6 +21,7 @@ const NFT_ADDRESS =
   process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS ||
   '0x0F22124A86F8893990fA4763393E46d97F429442'
 
+/** ---------- Context ---------- */
 const TxContext = createContext(null)
 
 export function TxProvider({ children }) {
@@ -25,12 +29,12 @@ export function TxProvider({ children }) {
     provider, signer, isOnBase, connect, switchToBase, address,
   } = useWallet()
 
-  // Read-only provider used for all static calls & estimations (never the Mini provider)
+  // Always-available read provider for preflights, gas estimates & fee data
   const read = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [])
 
   const getContracts = useCallback(
     (needsSigner = true) => {
-      const canWrite = needsSigner && signer && provider
+      const canWrite = Boolean(needsSigner && signer && provider)
       const runner = canWrite ? signer : read
       return {
         fillin: new ethers.Contract(FILLIN_ADDRESS, fillinAbi, runner),
@@ -40,6 +44,7 @@ export function TxProvider({ children }) {
     [provider, signer, read]
   )
 
+  /** Ensure wallet + Base before any write */
   const ensureReady = useCallback(async () => {
     if (!address) await connect()
     if (!isOnBase) {
@@ -49,10 +54,8 @@ export function TxProvider({ children }) {
   }, [address, isOnBase, connect, switchToBase])
 
   /**
-   * Use the public read RPC to:
-   *  - do the same call as the tx (staticCall) with from/value to catch reverts
-   *  - estimate gas safely (Mini provider sometimes lacks eth_estimateGas/feeHistory)
-   *  - get fee data and return overrides for the real send (with signer)
+   * Preflight + fee building on the read RPC so we don't rely on wallet RPCs
+   * that may not support eth_estimateGas / feeHistory in some environments.
    */
   const estimateWithRead = useCallback(
     async (contractAddress, abi, fnName, args, { from, value } = {}) => {
@@ -62,7 +65,6 @@ export function TxProvider({ children }) {
       try {
         await ctRead[fnName].staticCall(...args, { from, value })
       } catch (e) {
-        // Re-throw with the most useful reason available
         const msg =
           e?.info?.error?.message ||
           e?.shortMessage ||
@@ -72,73 +74,79 @@ export function TxProvider({ children }) {
         throw new Error(msg)
       }
 
-      // 2) Gas estimate (buffered). If it fails, we still proceed without gasLimit.
+      // 2) Gas estimate (best-effort)
       let gasLimit
       try {
         const est = await ctRead[fnName].estimateGas(...args, { from, value })
-        // add generous 20% buffer + small constant
+        // Add buffer
         gasLimit = (est * 12n) / 10n + 50_000n
-      } catch {}
+      } catch {
+        // If node disallows estimateGas, we’ll send without an explicit limit
+      }
 
-      // 3) Fee data from read RPC (some Mini providers don’t support dynamic fee endpoints)
-      let feeOverrides = {}
-      try {
-        const fd = await read.getFeeData()
-        // Only include values that exist
-        if (fd.maxFeePerGas) feeOverrides.maxFeePerGas = fd.maxFeePerGas
-        if (fd.maxPriorityFeePerGas) feeOverrides.maxPriorityFeePerGas = fd.maxPriorityFeePerGas
-        // If chain doesn’t have EIP-1559, ethers will ignore these and use gasPrice.
-        if (!fd.maxFeePerGas && fd.gasPrice) feeOverrides.gasPrice = fd.gasPrice
-      } catch {}
-
+      // 3) Fee data (EIP-1559 if available)
       const overrides = { value }
       if (from) overrides.from = from
       if (gasLimit) overrides.gasLimit = gasLimit
-      Object.assign(overrides, feeOverrides)
+
+      try {
+        const fd = await read.getFeeData()
+        if (fd?.maxFeePerGas) overrides.maxFeePerGas = fd.maxFeePerGas
+        if (fd?.maxPriorityFeePerGas) overrides.maxPriorityFeePerGas = fd.maxPriorityFeePerGas
+        if (!fd?.maxFeePerGas && fd?.gasPrice) overrides.gasPrice = fd.gasPrice
+      } catch {
+        // Ignore fee data failure; wallet/provider will fallback
+      }
+
       return overrides
     },
     [read]
   )
 
+  /** ---------------- Pool 1: create ---------------- */
   const createPool1 = useCallback(async ({
     title, theme, parts, word, username, feeBaseWei, durationSecs, blankIndex,
   }) => {
     await ensureReady()
     const { fillin } = getContracts(true)
+
+    // Hard type coercions to avoid "could not coalesce" errors
     const args = [
-      String(title || ''),
-      String(theme || ''),
-      Array.isArray(parts) ? parts.map(String) : [],
-      String(word || ''),
-      String(username || ''),
-      feeBaseWei,
-      BigInt(durationSecs || 0n),
-      Number(blankIndex || 0),
+      String(title ?? ''),
+      String(theme ?? ''),
+      Array.isArray(parts) ? parts.map((p) => String(p ?? '')) : [],
+      String(word ?? ''),
+      String(username ?? ''),
+      BigInt(feeBaseWei ?? 0n),
+      BigInt(durationSecs ?? 0n),
+      Number(blankIndex ?? 0) | 0,
     ]
 
-    // Preflight + fee/gas from read-only RPC
     const overrides = await estimateWithRead(
       FILLIN_ADDRESS,
       fillinAbi,
       'createPool1',
       args,
-      { from: address, value: feeBaseWei }
+      { from: address, value: BigInt(feeBaseWei ?? 0n) }
     )
 
     const tx = await fillin.createPool1(...args, overrides)
     return await tx.wait()
   }, [ensureReady, getContracts, estimateWithRead, address])
 
+  /** ---------------- Pool 1: join ---------------- */
   const joinPool1 = useCallback(async ({ id, word, username, blankIndex, feeBaseWei }) => {
     await ensureReady()
     const { fillin } = getContracts(true)
-    const poolId = BigInt(id)
+
+    const poolId = BigInt(id ?? 0)
+    const value  = BigInt(feeBaseWei ?? 0n)
 
     const args = [
       poolId,
-      String(word || ''),
-      String(username || ''),
-      Number(blankIndex || 0),
+      String(word ?? ''),
+      String(username ?? ''),
+      Number(blankIndex ?? 0) | 0,
     ]
 
     const overrides = await estimateWithRead(
@@ -146,19 +154,19 @@ export function TxProvider({ children }) {
       fillinAbi,
       'joinPool1',
       args,
-      { from: address, value: feeBaseWei }
+      { from: address, value }
     )
 
     const tx = await fillin.joinPool1(...args, overrides)
     return await tx.wait()
   }, [ensureReady, getContracts, estimateWithRead, address])
 
+  /** ---------------- Pool 1: claim ---------------- */
   const claimPool1 = useCallback(async (id) => {
     await ensureReady()
     const { fillin } = getContracts(true)
-    const poolId = BigInt(id)
 
-    const args = [poolId]
+    const args = [BigInt(id ?? 0)]
 
     const overrides = await estimateWithRead(
       FILLIN_ADDRESS,
@@ -172,15 +180,16 @@ export function TxProvider({ children }) {
     return await tx.wait()
   }, [ensureReady, getContracts, estimateWithRead, address])
 
+  /** ---------------- NFT: mint template ---------------- */
   const mintTemplateNFT = useCallback(async (title, description, theme, parts, { value } = {}) => {
     await ensureReady()
     const { nft } = getContracts(true)
 
     const args = [
-      String(title || ''),
-      String(description || ''),
-      String(theme || ''),
-      Array.isArray(parts) ? parts.map(String) : [],
+      String(title ?? ''),
+      String(description ?? ''),
+      String(theme ?? ''),
+      Array.isArray(parts) ? parts.map((p) => String(p ?? '')) : [],
     ]
 
     const overrides = await estimateWithRead(
@@ -188,23 +197,41 @@ export function TxProvider({ children }) {
       nftAbi,
       'mintTemplate',
       args,
-      { from: address, value: BigInt(value || 0n) }
+      { from: address, value: BigInt(value ?? 0n) }
     )
 
     const tx = await nft.mintTemplate(...args, overrides)
     return await tx.wait()
   }, [ensureReady, getContracts, estimateWithRead, address])
 
+  /** ---------------- Context Value ---------------- */
   const value = useMemo(() => ({
     // connection (from WalletProvider)
-    address, isConnected: !!address, isOnBase, connect, switchToBase, provider,
-    // contracts read helper (optional for pages)
+    address,
+    isConnected: !!address,
+    isOnBase,
+    connect,
+    switchToBase,
+    provider,
+
+    // contracts (optional reads)
     getContracts,
+
     // tx helpers
-    createPool1, joinPool1, claimPool1, mintTemplateNFT,
+    createPool1,
+    joinPool1,
+    claimPool1,
+    mintTemplateNFT,
+
     // constants
-    BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS,
-  }), [address, isOnBase, connect, switchToBase, provider, getContracts, createPool1, joinPool1, claimPool1, mintTemplateNFT])
+    BASE_RPC,
+    FILLIN_ADDRESS,
+    NFT_ADDRESS,
+    BASE_CHAIN_ID,
+  }), [
+    address, isOnBase, connect, switchToBase, provider,
+    getContracts, createPool1, joinPool1, claimPool1, mintTemplateNFT
+  ])
 
   return <TxContext.Provider value={value}>{children}</TxContext.Provider>
 }
