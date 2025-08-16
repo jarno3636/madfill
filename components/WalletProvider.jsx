@@ -9,25 +9,13 @@ import {
   getBrowserProvider,
   getAddress,
   getChainId,
-  ensureBaseChain,
   onAccountsChanged,
   onChainChanged,
   isWarpcast,
   BASE_CHAIN_ID_DEC,
 } from '@/lib/wallet'
 
-const WalletCtx = createContext({
-  provider: /** @type {ethers.BrowserProvider|null} */(null),
-  signer:   /** @type {ethers.Signer|null} */(null),
-  address:  /** @type {string|null} */(null),
-  chainId:  /** @type {bigint|null} */(null),
-  isConnected: false,
-  isOnBase: true,
-  isWarpcast: false,
-  connect: async () => {},
-  switchToBase: async () => {},
-  refresh: async () => {},
-})
+const WalletCtx = createContext({})
 
 export function WalletProvider({ children }) {
   const [provider, setProvider] = useState(null)
@@ -37,10 +25,9 @@ export function WalletProvider({ children }) {
 
   const isConnected = !!address
   const isOnBase = chainId === BASE_CHAIN_ID_DEC
-
+  const warpcast = isWarpcast()
   const booted = useRef(false)
 
-  // One-time init: prewarm Mini provider; hydrate provider/signer/address silently when possible
   useEffect(() => {
     if (booted.current) return
     booted.current = true
@@ -56,14 +43,11 @@ export function WalletProvider({ children }) {
           const addr = await sg?.getAddress().catch(() => null)
           if (sg && addr) { setSigner(sg); setAddress(addr) }
         } catch {}
-        try {
-          setChainId(await getChainId())
-        } catch {}
+        try { setChainId(await getChainId()) } catch {}
       }
     })()
   }, [])
 
-  // Listen for account/chain changes globally
   useEffect(() => {
     let off1 = () => {}
     let off2 = () => {}
@@ -86,26 +70,36 @@ export function WalletProvider({ children }) {
   const connect = useCallback(async () => {
     const bp = await getBrowserProvider()
     if (!bp) throw new Error('No wallet provider found')
-    // Only prompts outside Warpcast; inside Mini it resolves silently
-    await bp.send('eth_requestAccounts', [])
+
+    if (!warpcast) {
+      // only prompt outside Warpcast
+      await bp.send('eth_requestAccounts', [])
+    }
+
     setProvider(bp)
     const sg = await bp.getSigner()
     setSigner(sg)
     setAddress(await sg.getAddress())
     setChainId((await bp.getNetwork())?.chainId ?? null)
-  }, [])
+  }, [warpcast])
 
   const switchToBase = useCallback(async () => {
-    const ok = await ensureBaseChain()
-    if (ok) {
-      try {
-        const bp = await getBrowserProvider()
-        setProvider(bp)
-        setChainId((await bp?.getNetwork())?.chainId ?? null)
-      } catch {}
+    if (warpcast) {
+      // Warpcast Mini is always Base; nothing to do
+      setChainId(BASE_CHAIN_ID_DEC)
+      return true
     }
-    return ok
-  }, [])
+    try {
+      const bp = await getBrowserProvider()
+      await bp.send('wallet_switchEthereumChain', [{ chainId: '0x2105' }]) // 8453
+      setProvider(bp)
+      setChainId((await bp.getNetwork())?.chainId ?? null)
+      return true
+    } catch (err) {
+      console.error('switchToBase failed:', err)
+      return false
+    }
+  }, [warpcast])
 
   const refresh = useCallback(async () => {
     const bp = await getBrowserProvider().catch(() => null)
@@ -123,11 +117,10 @@ export function WalletProvider({ children }) {
   const value = useMemo(() => ({
     provider, signer, address, chainId,
     isConnected, isOnBase,
-    isWarpcast: isWarpcast(),
+    isWarpcast: warpcast,
     connect, switchToBase, refresh,
-    // exposing a readonly provider can help pages do public reads consistently
     readProvider: getReadonlyProvider(),
-  }), [provider, signer, address, chainId, isConnected, isOnBase])
+  }), [provider, signer, address, chainId, isConnected, isOnBase, warpcast])
 
   return <WalletCtx.Provider value={value}>{children}</WalletCtx.Provider>
 }
