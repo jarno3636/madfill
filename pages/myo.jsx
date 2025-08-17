@@ -19,7 +19,7 @@ import { useTx } from '@/components/TxProvider'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
-/* ---------- tiny utils ---------- */
+/* ---------- utils ---------- */
 const stripWeird = (s) => String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '') // zero-width etc
 const bytes = (s) => new TextEncoder().encode(stripWeird(s)).length
 
@@ -40,9 +40,8 @@ const BG_CHOICES = [
   { key: 'forest',       label: 'Forest',        cls: 'from-emerald-700 via-teal-700 to-slate-900' },
 ]
 
-/* ---------- minimal, *optional* read ABI ---------- */
+/* ---------- minimal read ABI (defensive; all optional) ---------- */
 const TEMPLATE_READ_ABI = [
-  // All of these are optional; we hard-fallback if a method is missing
   { inputs: [], name: 'BLANK', outputs: [{ type: 'string' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_PARTS', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_PART_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
@@ -92,20 +91,17 @@ function computeParts(rawStory, rawFills, blankToken) {
   }
   if (parts[parts.length - 1] === blankToken) parts.pop()
 
-  // Extra guard: if there are no blanks at all after building, we keep one BLANK between two tiny texts
+  // If user prefilled everything, ensure at least one BLANK stays
   if (!parts.includes(blankToken)) {
     if (parts.length === 1) parts.push(blankToken, ' ')
-    else if (parts.length >= 2) {
-      // insert a BLANK between first and second segments
-      parts.splice(1, 0, blankToken)
-    }
+    else parts.splice(1, 0, blankToken)
   }
 
   const blanksRemaining = parts.filter((p) => p === blankToken).length
   return { partsForContract: parts, partsForPreview: preview, blanksRemaining }
 }
 
-function MYOPage() {
+export default function MYOPage() {
   useMiniAppReady()
   const { addToast } = useToast()
   const { width, height } = useWindowSize()
@@ -113,50 +109,48 @@ function MYOPage() {
   const {
     isConnected, connect, isOnBase,
     BASE_RPC, NFT_ADDRESS,
-    mintTemplateNFT, // write helper
-    getContracts,    // for preflight gas / decode if available
+    mintTemplateNFT,
   } = useTx()
 
-  // Limits/state
+  // limits/state
   const [maxParts, setMaxParts] = useState(24)
   const [maxPartBytes, setMaxPartBytes] = useState(96)
   const [maxTotalBytes, setMaxTotalBytes] = useState(4096)
   const [paused, setPaused] = useState(false)
 
-  // Contract BLANK token (default literal)
+  // BLANK token from contract (default placeholder)
   const [blankToken, setBlankToken] = useState('[BLANK]')
 
-  // Display fee (fallback) — **actual value** comes from onchain getMintPriceWei + buffer
+  // Display-only fee; actual fee pulled on mint (with buffer)
   const DISPLAY_FEE_WEI = (() => {
     try { return ethers.parseEther('0.0005') } catch { return 500000000000000n }
   })()
   const DISPLAY_FEE_ETH = Number(ethers.formatEther(DISPLAY_FEE_WEI)).toFixed(6)
 
-  // Fee buffer (bps)
+  // Buffer for price drift
   const BUFFER_BPS = (() => {
     const v = Number(process.env.NEXT_PUBLIC_MYO_FEE_BUFFER_BPS)
-    if (Number.isFinite(v) && v >= 0 && v <= 5000) return Math.floor(v)
-    return 200 // 2%
+    return Number.isFinite(v) && v >= 0 && v <= 5000 ? Math.floor(v) : 200
   })()
 
   const [loading, setLoading] = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
 
-  // Template meta
+  // meta
   const [title, setTitle] = useState('')
   const [theme, setTheme] = useState('')
   const [description, setDescription] = useState('')
 
-  // Story + fills
+  // story + fills
   const storyRef = useRef(null)
   const [story, setStory] = useState(PROMPT_STARTERS[0])
   const blanksInStory = Math.max(0, stripWeird(story).split(/\[BLANK\]/g).length - 1)
   const [fills, setFills] = useState(Array(blanksInStory).fill(''))
 
-  // Background
+  // background
   const [bgKey, setBgKey] = useState(BG_CHOICES[0].key)
 
-  // Keep fills aligned with number of [BLANK]s
+  // keep fills aligned
   useEffect(() => {
     setFills((prev) => {
       const next = Array(blanksInStory).fill('')
@@ -165,7 +159,7 @@ function MYOPage() {
     })
   }, [blanksInStory])
 
-  // Safe contract reads (optional)
+  // safe reads for limits + BLANK + paused
   useEffect(() => {
     if (!NFT_ADDRESS) return
     const provider = new ethers.JsonRpcProvider(BASE_RPC)
@@ -174,7 +168,6 @@ function MYOPage() {
 
     const pull = async () => {
       try {
-        // Read each view defensively; if method doesn't exist or reverts, use fallback.
         const [blk, mp, mpb, mtb, isPaused] = await Promise.all([
           ct.BLANK().catch(() => '[BLANK]'),
           ct.MAX_PARTS().catch(() => null),
@@ -191,7 +184,6 @@ function MYOPage() {
       } catch {
         if (!alive) return
         setBlankToken('[BLANK]')
-        // keep defaults for limits; don't set paused → assume open
       }
     }
 
@@ -200,32 +192,27 @@ function MYOPage() {
     const onVis = () => { if (document.visibilityState === 'visible') pull() }
     document.addEventListener('visibilitychange', onVis)
 
-    return () => {
-      alive = false
-      clearInterval(id)
-      document.removeEventListener('visibilitychange', onVis)
-    }
+    return () => { alive = false; clearInterval(id); document.removeEventListener('visibilitychange', onVis) }
   }, [BASE_RPC, NFT_ADDRESS])
 
-  // Derived parts & byte accounting
+  // derive parts + sizes
   const { partsForContract, partsForPreview, blanksRemaining } = useMemo(
     () => computeParts(story, fills, blankToken),
     [story, fills, blankToken]
   )
-
   const partsBytes = useMemo(
     () => partsForPreview.reduce((sum, p) => sum + bytes(p), 0),
     [partsForPreview]
   )
   const totalBytes = bytes(title) + bytes(description) + bytes(theme) + partsBytes
 
-  // Background class
+  // bg class
   const bgCls = useMemo(
     () => (BG_CHOICES.find((b) => b.key === bgKey) || BG_CHOICES[0]).cls,
     [bgKey]
   )
 
-  // Editor helpers
+  // editor helpers
   const insertBlankAtCursor = () => {
     const el = storyRef.current
     const token = '[BLANK]'
@@ -242,6 +229,7 @@ function MYOPage() {
       el.setSelectionRange(pos, pos)
     })
   }
+
   const randomizeStarter = () => {
     const pick = PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)]
     setStory(pick)
@@ -253,49 +241,35 @@ function MYOPage() {
     setBgKey(BG_CHOICES[next].key)
   }
 
-  // Validation
+  // validation
   const validate = () => {
     if (!NFT_ADDRESS) {
-      addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_NFT_ADDRESS (template).' })
+      addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS.' })
       return false
     }
-    if (!isConnected) {
-      addToast({ type: 'error', title: 'Wallet Required', message: 'Please connect your wallet.' })
-      return false
-    }
-    if (!isOnBase) {
-      addToast({ type: 'error', title: 'Wrong Network', message: 'Switch to Base (8453) and try again.' })
-      return false
-    }
-    if (paused) {
-      addToast({ type: 'error', title: 'Paused', message: 'Minting is currently paused.' })
-      return false
-    }
+    if (!isConnected) { addToast({ type: 'error', title: 'Wallet Required', message: 'Please connect your wallet.' }); return false }
+    if (!isOnBase) { addToast({ type: 'error', title: 'Wrong Network', message: 'Please switch your wallet to Base and try again.' }); return false }
+    if (paused) { addToast({ type: 'error', title: 'Paused', message: 'Minting is currently paused.' }); return false }
     if (!title.trim() || !theme.trim() || !description.trim()) {
       addToast({ type: 'error', title: 'Missing Fields', message: 'Title, Theme, and Description are required.' })
       return false
     }
     if (partsForContract.length > maxParts) {
-      addToast({ type: 'error', title: 'Too Many Parts', message: `Max ${maxParts} parts.` })
-      return false
+      addToast({ type: 'error', title: 'Too Many Parts', message: `Max ${maxParts} parts.` }); return false
     }
-    // Check each *rendered* segment (what players see) against part byte limit
     if (partsForPreview.some((p) => bytes(p) > maxPartBytes)) {
-      addToast({ type: 'error', title: 'Part Too Long', message: `Each part must be ≤ ${maxPartBytes} bytes.` })
-      return false
+      addToast({ type: 'error', title: 'Part Too Long', message: `Each part must be ≤ ${maxPartBytes} bytes.` }); return false
     }
     if (totalBytes > maxTotalBytes) {
-      addToast({ type: 'error', title: 'Too Large', message: `Total bytes must be ≤ ${maxTotalBytes}.` })
-      return false
+      addToast({ type: 'error', title: 'Too Large', message: `Total bytes must be ≤ ${maxTotalBytes}.` }); return false
     }
     if (blanksRemaining < 1) {
-      addToast({ type: 'error', title: 'Add a Blank', message: 'Leave at least one [BLANK] unfilled.' })
-      return false
+      addToast({ type: 'error', title: 'Add a Blank', message: 'Leave at least one [BLANK] unfilled.' }); return false
     }
     return true
   }
 
-  // Onchain price + buffer with safe fallback
+  // onchain price + buffer
   const readFeeWithBuffer = useCallback(async () => {
     if (!NFT_ADDRESS) return DISPLAY_FEE_WEI
     try {
@@ -311,39 +285,18 @@ function MYOPage() {
     }
   }, [BASE_RPC, NFT_ADDRESS, BUFFER_BPS])
 
+  // mint
   const handleMint = useCallback(async () => {
     if (!validate()) return
     setLoading(true)
     try {
       const valueWei = await readFeeWithBuffer()
 
-      // Optional defensive preflight if signer + iface available:
-      // If your TxProvider exposes getContracts().nft (write), attempt a callStatic/simulate:
-      try {
-        const { nftWrite, signer, iface } = (await getContracts?.()) || {}
-        if (nftWrite && signer && iface && iface.encodeFunctionData) {
-          // We assume a function signature like: mintTemplate(string,string,string,string[])
-          // If your method name differs, update here accordingly or remove this preflight.
-          const data = iface.encodeFunctionData('mintTemplate', [
-            String(title).slice(0, 128),
-            String(description).slice(0, 2048),
-            String(theme).slice(0, 128),
-            partsForContract,
-          ])
-          // simulate
-          await signer.call({ to: NFT_ADDRESS, data, value: valueWei }).catch(() => {
-            // ignore — some RPCs block call with value; we’ll still try the tx
-          })
-        }
-      } catch {
-        // best-effort only
-      }
-
       const tx = await mintTemplateNFT(
         String(title).slice(0, 128),
         String(description).slice(0, 2048),
         String(theme).slice(0, 128),
-        partsForContract,
+        partsForContract, // TxProvider will normalize "[BLANK]" -> on-chain BLANK()
         { value: valueWei }
       )
 
@@ -358,7 +311,7 @@ function MYOPage() {
       setShowConfetti(true)
       setTimeout(() => setShowConfetti(false), 1800)
 
-      // Reset (keep background)
+      // reset (keep background)
       setTitle(''); setTheme(''); setDescription('')
       setStory(PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)])
       setFills([])
@@ -370,14 +323,13 @@ function MYOPage() {
         e?.reason ||
         e?.message ||
         'Transaction failed.'
-      // common revert clues
       if (/insufficient funds|underpriced|max fee/i.test(msg)) {
-        addToast({ type: 'error', title: 'Fee Too Low', message: 'Increase buffer (NEXT_PUBLIC_MYO_FEE_BUFFER_BPS) and try again.' })
+        addToast({ type: 'error', title: 'Fee Too Low', message: 'ETH balance or buffer too low. Increase NEXT_PUBLIC_MYO_FEE_BUFFER_BPS and retry.' })
       } else if (/execution reverted|no data/i.test(msg)) {
         addToast({
           type: 'error',
           title: 'Mint Reverted',
-          message: 'This usually means one of the contract limits was exceeded or wrong function signature. Double-check bytes/parts and keep at least one BLANK.',
+          message: 'Likely over a limit, wrong parts shape, or no BLANK left. Check bytes/parts and ensure at least one BLANK.',
         })
       } else {
         addToast({ type: 'error', title: 'Mint Failed', message: msg })
@@ -386,10 +338,7 @@ function MYOPage() {
     } finally {
       setLoading(false)
     }
-  }, [
-    validate, readFeeWithBuffer, mintTemplateNFT, getContracts,
-    title, description, theme, partsForContract, addToast
-  ])
+  }, [validate, readFeeWithBuffer, mintTemplateNFT, title, description, theme, partsForContract, addToast])
 
   const wordsForPreview = useMemo(() => {
     const w = {}
@@ -629,7 +578,7 @@ function MYOPage() {
                 </div>
               </div>
 
-              {/* Single-line fee bar in preview */}
+              {/* Fee line */}
               <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
                 <div className="flex items-center gap-3 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
                   <div className="shrink-0">
@@ -666,18 +615,18 @@ function MYOPage() {
               </div>
 
               <div className="text-xs text-slate-400">
-                Seeing <i>“execution reverted / no data”</i>? Ensure:
-                &nbsp;• At least one <code>[BLANK]</code> remains unfilled
-                &nbsp;• Parts/bytes within limits
-                &nbsp;• On Base network
-                &nbsp;• If fee changes rapidly, raise buffer via <code>NEXT_PUBLIC_MYO_FEE_BUFFER_BPS</code>.
+                Seeing <i>“execution reverted / no data”</i>? Ensure at least one <code>[BLANK]</code> remains,
+                parts/bytes are within limits, you’re on Base, and consider raising <code>NEXT_PUBLIC_MYO_FEE_BUFFER_BPS</code>.
               </div>
             </CardContent>
           </Card>
         </div>
       </main>
+
+      {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
     </Layout>
   )
 }
 
-export default dynamic(() => Promise.resolve(MYOPage), { ssr: false })
+/* keep words object shape StyledCard expects */
+function wordsForPreview() { return {} }
