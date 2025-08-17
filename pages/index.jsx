@@ -33,34 +33,26 @@ const POOLS_ABI = [
   { inputs: [], name: 'BPS_DENOMINATOR', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
 ]
 
-/* ---------- safe deploy-block parsing (supports hex or decimal) ---------- */
-const parseBlock = (v) => {
-  const s = (v ?? '').toString().trim()
-  if (!s) return null
-  if (s.startsWith('0x')) {
-    const n = Number.parseInt(s, 16)
-    return Number.isFinite(n) && n >= 0 ? n : null
-  }
-  const n = Number(s)
-  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null
-}
-const FILLIN_DEPLOY_BLOCK = parseBlock(process.env.NEXT_PUBLIC_FILLIN_DEPLOY_BLOCK)
-const NFT_DEPLOY_BLOCK    = parseBlock(process.env.NEXT_PUBLIC_NFT_DEPLOY_BLOCK)
-
-/* ---------- event topics (keeps stats fast without ABI decoding) ---------- */
-const TOPIC_POOL1_CREATED = ethers.id('Pool1Created(uint256,address,uint256,uint256)')
-const TOPIC_POOL1_CLAIMED = ethers.id('Pool1Claimed(uint256,address,uint256)')
-const TOPIC_POOL2_CREATED = ethers.id('Pool2Created(uint256,uint256,address,uint256,uint256)')
-const TOPIC_TRANSFER      = ethers.id('Transfer(address,address,uint256)')
-const TOPIC_ZERO_ADDRESS  = ethers.zeroPadValue(ethers.ZeroAddress, 32)
-
-/* ========== Helpers ========== */
+/* ===== Helpers ===== */
 const sanitizeOneWord = (raw) =>
   String(raw || '')
     .trim()
     .split(' ')[0]
     .replace(/[^a-zA-Z0-9\-_]/g, '')
     .slice(0, 16)
+
+/* Soft network error patterns we treat as “probably mined; verify on-chain”. */
+const SOFT_ERROR_TEXTS = ['coalesce', 'replacement transaction', 'repriced', 'failed to fetch', 'nonce has already been used']
+const isSoftError = (msg='') => SOFT_ERROR_TEXTS.some(s => (msg || '').toLowerCase().includes(s))
+
+/* Best-effort event topic for verification without ABI (creator is indexed param #2). */
+const TOPIC_POOL1_CREATED = ethers.id('Pool1Created(uint256,address,uint256,uint256)')
+const pad32 = (addr) => ethers.zeroPadValue(addr, 32)
+
+/* A tiny spinner */
+const Spinner = () => (
+  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/70 border-t-transparent align-middle" />
+)
 
 const BG_CHOICES = [
   { key: 'indigoNebula', label: 'Indigo Nebula', cls: 'from-indigo-900 via-purple-800 to-slate-900' },
@@ -70,15 +62,6 @@ const BG_CHOICES = [
   { key: 'forest',       label: 'Forest',        cls: 'from-emerald-700 via-teal-700 to-slate-900' },
 ]
 
-/* ---------- tiny UI helper ---------- */
-const StatTile = ({ label, value, sub, className = '' }) => (
-  <div className={`rounded-xl border border-slate-700 bg-slate-900/60 p-4 ${className}`}>
-    <div className="text-xs uppercase tracking-wide text-slate-400">{label}</div>
-    <div className="mt-1 text-3xl font-extrabold">{value}</div>
-    {sub ? <div className="text-xs text-slate-400 mt-1">{sub}</div> : null}
-  </div>
-)
-
 function IndexPage() {
   useMiniAppReady()
   const { addToast } = useToast()
@@ -86,8 +69,9 @@ function IndexPage() {
 
   // ✅ single unified source
   const {
+    address,
     createPool1, isConnected, connect, isOnBase, switchToBase,
-    BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS
+    BASE_RPC, FILLIN_ADDRESS
   } = useTx()
 
   // chain / fees
@@ -97,6 +81,12 @@ function IndexPage() {
   // ui
   const [showConfetti, setShowConfetti] = useState(false)
   const [loading, setLoading] = useState(false)
+
+  // tx status bar
+  const [txStatus, setTxStatus] = useState('')       // human text
+  const [txError, setTxError] = useState('')         // error text if any
+  const [txHash, setTxHash] = useState(null)         // last tx hash
+  const [verifying, setVerifying] = useState(false)  // soft-error verification toggle
 
   // template pickers
   const [catIdx, setCatIdx] = useState(0)
@@ -215,7 +205,7 @@ function IndexPage() {
     }
   }, [currentTemplate, currentCategory])
 
-  /* ---------- validation & tx ---------- */
+  /* ---------- validation ---------- */
   const validate = () => {
     const addr = FILLIN_ADDRESS || FILLIN_ADDR_FALLBACK
     if (!addr) { addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_FILLIN_ADDRESS.' }); return false }
@@ -231,12 +221,47 @@ function IndexPage() {
     return true
   }
 
+  /* ---------- helpers: tx wait + fallback verification ---------- */
+  const provider = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [BASE_RPC])
+
+  async function waitForReceipt(hash, timeoutMs = 30000) {
+    try {
+      const rec = await provider.waitForTransaction(hash, 1, timeoutMs)
+      return rec?.status === 1
+    } catch { return false }
+  }
+
+  async function verifyCreatedOnChain({ creator, contractAddr, lookback = 3000 }) {
+    try {
+      const latest = await provider.getBlockNumber()
+      const fromBlock = Math.max(0, latest - lookback)
+      const logs = await provider.getLogs({
+        address: contractAddr,
+        fromBlock,
+        toBlock: latest,
+        topics: [TOPIC_POOL1_CREATED, null, pad32(creator)],
+      })
+      return (logs && logs.length > 0)
+    } catch { return false }
+  }
+
+  function clearStatusSoon() {
+    setTimeout(() => { setTxStatus(''); setTxError('') }, 3000)
+  }
+
+  /* ---------- create tx ---------- */
   const handleCreatePool1 = async () => {
     if (!validate()) return
+    setTxError('')
+    setTxStatus('')
+    setTxHash(null)
+    setVerifying(false)
+
     try {
       setLoading(true)
+      setTxStatus('Waiting for wallet confirmation…')
 
-      await createPool1({
+      const res = await createPool1({
         title: String(title).slice(0, 128),
         theme: String(theme).slice(0, 128),
         parts,
@@ -247,122 +272,83 @@ function IndexPage() {
         blankIndex: Number(blankIndex) & 0xff,
       })
 
-      addToast({ type: 'success', title: 'Round Created!', message: 'Your Pool 1 round is live.' })
-      setShowConfetti(true)
-      setTimeout(() => setShowConfetti(false), 1600)
-      setCreatorWord('')
+      // Try to pick up a hash from common shapes
+      const hash =
+        res?.hash ||
+        res?.transactionHash ||
+        (typeof res === 'string' && res.startsWith('0x') ? res : null)
+
+      if (hash) setTxHash(hash)
+      setTxStatus('Submitting transaction…')
+
+      let success = false
+      if (hash) {
+        success = await waitForReceipt(hash, 35000)
+      }
+
+      // If receipt didn’t confirm but network/wallet flaked, verify via logs
+      if (!success) {
+        setVerifying(true)
+        setTxStatus('Verifying on-chain…')
+        const ok = await verifyCreatedOnChain({
+          creator: address,
+          contractAddr: FILLIN_ADDRESS || FILLIN_ADDR_FALLBACK,
+        })
+        success = ok
+      }
+
+      if (success) {
+        addToast({ type: 'success', title: 'Round Created!', message: 'Your Pool 1 round is live.' })
+        setTxStatus('Round created ✓')
+        setShowConfetti(true)
+        setTimeout(() => setShowConfetti(false), 1600)
+        setCreatorWord('')
+        clearStatusSoon()
+      } else {
+        setTxError('We could not confirm the creation. Please check your wallet activity or Basescan.')
+        setTxStatus('Not confirmed')
+      }
     } catch (e) {
       console.error(e)
       const msg = e?.info?.error?.message || e?.shortMessage || e?.reason || e?.message || 'Transaction failed.'
+
+      if (isSoftError(msg)) {
+        // Soft error: verify via logs (many wallets throw but tx actually lands)
+        setVerifying(true)
+        setTxStatus('Network hiccup. Verifying on-chain…')
+        const ok = await verifyCreatedOnChain({
+          creator: address,
+          contractAddr: FILLIN_ADDRESS || FILLIN_ADDR_FALLBACK,
+        })
+        if (ok) {
+          addToast({ type: 'success', title: 'Round Created!', message: 'Your Pool 1 round is live.' })
+          setTxStatus('Round created ✓')
+          setShowConfetti(true)
+          setTimeout(() => setShowConfetti(false), 1600)
+          setCreatorWord('')
+          setTxError('')
+          clearStatusSoon()
+          setLoading(false)
+          setVerifying(false)
+          return
+        }
+      }
+
+      // Hard error: show inline + toast
       addToast({ type: 'error', title: 'Create Failed', message: msg })
+      setTxError(msg)
+      setTxStatus('Create failed')
       setShowConfetti(false)
-    } finally { setLoading(false) }
+    } finally {
+      setLoading(false)
+      setVerifying(false)
+    }
   }
 
   /* ---------- SEO / frame ---------- */
   const pageUrl = absoluteUrl('/')
   const ogImage = buildOgUrl({ screen: 'home', title: 'MadFill — Create a Round' })
   const feeUsd = (usd && feeEth) ? (parseFloat(feeEth || '0') * usd) : null
-
-  /* ================== LIVE STATS (bottom card) ================== */
-  const [statsLoading, setStatsLoading] = useState(true)
-  const [statsError, setStatsError] = useState(null)
-  const [stats, setStats] = useState({
-    totalPools: 0,
-    claimedPools: 0,
-    activePools: 0,
-    totalChallenges: 0,
-    nftsMinted: 0,
-  })
-
-  useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      setStatsLoading(true)
-      setStatsError(null)
-      try {
-        const provider = new ethers.JsonRpcProvider(BASE_RPC)
-        const poolsAddr = (FILLIN_ADDRESS || FILLIN_ADDR_FALLBACK)
-        const nftAddr   = NFT_ADDRESS
-
-        // fromBlock windows
-        const latest = await provider.getBlockNumber()
-        const defaultWindow = Math.max(0, latest - 500_000)
-        const poolsFrom = FILLIN_DEPLOY_BLOCK ?? defaultWindow
-        const nftFrom   = NFT_DEPLOY_BLOCK ?? defaultWindow
-
-        // ----- Pools topics
-        let totalPools = 0
-        let claimedPools = 0
-        let totalChallenges = 0
-
-        if (poolsAddr) {
-          const [p1Created, p1Claimed, p2Created] = await Promise.all([
-            provider.getLogs({
-              address: poolsAddr,
-              fromBlock: poolsFrom,
-              toBlock: latest,
-              topics: [TOPIC_POOL1_CREATED],
-            }).catch(() => []),
-            provider.getLogs({
-              address: poolsAddr,
-              fromBlock: poolsFrom,
-              toBlock: latest,
-              topics: [TOPIC_POOL1_CLAIMED],
-            }).catch(() => []),
-            provider.getLogs({
-              address: poolsAddr,
-              fromBlock: poolsFrom,
-              toBlock: latest,
-              topics: [TOPIC_POOL2_CREATED],
-            }).catch(() => []),
-          ])
-          totalPools = p1Created.length
-          claimedPools = p1Claimed.length
-          totalChallenges = p2Created.length
-        }
-
-        const activePools = Math.max(0, totalPools - claimedPools)
-
-        // ----- NFT mints (Transfer with from == 0x0)
-        let nftsMinted = 0
-        if (nftAddr) {
-          const nftLogs = await provider.getLogs({
-            address: nftAddr,
-            fromBlock: nftFrom,
-            toBlock: latest,
-            topics: [TOPIC_TRANSFER, TOPIC_ZERO_ADDRESS],
-          }).catch(() => [])
-          nftsMinted = nftLogs.length
-        }
-
-        if (!cancelled) {
-          setStats({ totalPools, claimedPools, activePools, totalChallenges, nftsMinted })
-          setStatsLoading(false)
-        }
-      } catch (err) {
-        console.error('stats error', err)
-        if (!cancelled) {
-          setStatsError('Could not load on-chain stats')
-          setStatsLoading(false)
-        }
-      }
-    }
-
-    load()
-    const id = setInterval(load, 60_000)
-    return () => { cancelled = true; clearInterval(id) }
-  }, [BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS])
-
-  const pctClaimed = useMemo(() => {
-    const tot = stats.totalPools || 0
-    return tot > 0 ? Math.min(100, Math.round((stats.claimedPools / tot) * 100)) : 0
-  }, [stats.totalPools, stats.claimedPools])
-
-  const pctActive = useMemo(() => {
-    const tot = stats.totalPools || 0
-    return tot > 0 ? Math.min(100, Math.round((stats.activePools / tot) * 100)) : 0
-  }, [stats.totalPools, stats.activePools])
 
   return (
     <Layout>
@@ -385,6 +371,34 @@ function IndexPage() {
       />
 
       {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
+
+      {/* Inline TX status bar (prominent, with Basescan link) */}
+      {(txStatus || txError) && (
+        <div className="mx-auto mt-3 max-w-6xl px-4">
+          <div
+            className={[
+              'rounded-lg border px-3 py-2 text-sm flex items-center gap-2',
+              txError ? 'bg-rose-900/40 border-rose-500/40 text-rose-100' : 'bg-emerald-900/30 border-emerald-500/30 text-emerald-100'
+            ].join(' ')}
+          >
+            {verifying || (loading && !txError) ? <Spinner /> : <span>✅</span>}
+            <div className="flex-1">
+              <div className="font-medium">{txStatus || (txError ? 'Error' : '')}</div>
+              {txError && <div className="text-rose-100/80">{txError}</div>}
+            </div>
+            {txHash && (
+              <a
+                className="underline decoration-dotted"
+                href={`https://basescan.org/tx/${txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                View Tx
+              </a>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Hero */}
       <section className="mx-auto max-w-6xl px-4 pt-8 md:pt-12">
@@ -740,50 +754,6 @@ function IndexPage() {
                 hashtags={['MadFill','Base','Farcaster']}
                 embed="/og/cover.PNG"
               />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* ===================== Live Network Stats ===================== */}
-        <Card className="bg-slate-900/70 border border-slate-700">
-          <CardHeader className="border-b border-slate-700">
-            <h3 className="text-lg font-bold">Network Activity</h3>
-            {statsError && (
-              <p className="mt-2 text-xs text-rose-300">
-                {statsError}. Check RPC/contract addresses and deploy block envs.
-              </p>
-            )}
-          </CardHeader>
-          <CardContent className="p-5 space-y-5">
-            {/* Tiles */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <StatTile label="Active Pools"   value={statsLoading ? '—' : stats.activePools} sub={!statsLoading && `${pctActive}% of total`} />
-              <StatTile label="Claimed Pools"  value={statsLoading ? '—' : stats.claimedPools} sub={!statsLoading && `${pctClaimed}% of total`} />
-              <StatTile label="Total Pools"    value={statsLoading ? '—' : stats.totalPools} />
-              <StatTile label="Challenges"     value={statsLoading ? '—' : stats.totalChallenges} />
-              <StatTile label="NFTs Minted"    value={statsLoading ? '—' : stats.nftsMinted} />
-            </div>
-
-            {/* Simple progress bars */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
-                <div className="flex justify-between text-xs text-slate-300">
-                  <span>Active vs Total</span>
-                  <span>{statsLoading ? '—' : `${stats.activePools}/${stats.totalPools}`}</span>
-                </div>
-                <div className="mt-2 h-2 rounded bg-slate-700">
-                  <div className="h-2 rounded bg-emerald-400 transition-all" style={{ width: `${pctActive}%` }} />
-                </div>
-              </div>
-              <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
-                <div className="flex justify-between text-xs text-slate-300">
-                  <span>Claimed vs Total</span>
-                  <span>{statsLoading ? '—' : `${stats.claimedPools}/${stats.totalPools}`}</span>
-                </div>
-                <div className="mt-2 h-2 rounded bg-slate-700">
-                  <div className="h-2 rounded bg-indigo-400 transition-all" style={{ width: `${pctClaimed}%` }} />
-                </div>
-              </div>
             </div>
           </CardContent>
         </Card>
