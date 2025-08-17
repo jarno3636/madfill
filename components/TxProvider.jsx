@@ -28,23 +28,19 @@ function buildBufferedOverrides({ from, value, gasLimitBase = 250_000, gasJitter
   if (from) overrides.from = from
   if (value !== undefined && value !== null) overrides.value = ethers.toBigInt(value)
   overrides.gasLimit = BigInt(gasLimitBase) + BigInt(Math.floor(Math.random() * Math.max(1, gasJitter)))
-  // Let the wallet set EIP-1559 fee fields.
   return overrides
 }
 
 export function TxProvider({ children }) {
   const {
     provider, signer, isOnBase, connect, switchToBase, address,
-    // also expose isWarpcast via WalletProvider value (computed there)
     isWarpcast,
   } = useWallet()
 
-  // tx lifecycle state (for global confirmation UI)
-  const [txStatus, setTxStatus] = useState(null)   // "pending" | "success" | "error" | null
-  const [pendingTx, setPendingTx] = useState(null) // tx hash while pending
-  const [lastTx, setLastTx] = useState(null)       // last confirmed receipt (or null)
+  const [txStatus, setTxStatus] = useState(null)
+  const [pendingTx, setPendingTx] = useState(null)
+  const [lastTx, setLastTx] = useState(null)
 
-  // read-only provider for preflights/estimates
   const read = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [])
 
   const getContracts = useCallback(
@@ -59,16 +55,10 @@ export function TxProvider({ children }) {
     [provider, signer, read]
   )
 
-  /** Ensure wallet + Base before any write.
-   * In Warpcast: never try to switch; treat as Base.
-   * Outside Warpcast: switch if needed.
-   */
   const ensureReady = useCallback(async () => {
     if (!address) await connect()
 
     if (isWarpcast) {
-      // Mini wallet runs on Base; do not attempt wallet_switchEthereumChain
-      // Optionally, soft-check network but don't block:
       try {
         const net = await (signer ?? provider)?.getNetwork?.()
         if (net?.chainId && net.chainId !== BASE_CHAIN_ID) {
@@ -78,22 +68,15 @@ export function TxProvider({ children }) {
       return
     }
 
-    // Normal wallets (MetaMask, CB Wallet, etc.)
     if (!isOnBase) {
       const ok = await switchToBase()
       if (!ok) throw new Error('Please switch to Base.')
     }
   }, [address, isOnBase, isWarpcast, connect, switchToBase, signer, provider])
 
-  /**
-   * Preflight on the Base read RPC + best-effort gasLimit.
-   * NOTE: We do NOT set any fee fields; wallet will set them.
-   */
   const estimateWithRead = useCallback(
     async (contractAddress, abi, fnName, args, { from, value } = {}) => {
       const ctRead = new ethers.Contract(contractAddress, abi, read)
-
-      // Would this revert given msg.sender/value?
       try {
         await ctRead[fnName].staticCall(...args, { from, value })
       } catch (e) {
@@ -113,16 +96,12 @@ export function TxProvider({ children }) {
       try {
         const est = await ctRead[fnName].estimateGas(...args, { from, value })
         overrides.gasLimit = (est * 12n) / 10n + 50_000n
-      } catch {
-        // proceed without explicit gasLimit; wallet will estimate
-      }
-
+      } catch {}
       return overrides
     },
     [read]
   )
 
-  /** Standardize tx lifecycle for global UI */
   async function runTx(sendFn) {
     try {
       setTxStatus('pending')
@@ -220,18 +199,32 @@ export function TxProvider({ children }) {
 
   /**
    * ---------------- NFT: mint template ----------------
-   * Light preflight (staticCall) then send with small gas buffer.
-   * Wallet computes fees on Base.
+   * Normalizes placeholder "[BLANK]" to contract BLANK() before sending.
    */
   const mintTemplateNFT = useCallback(async (title, description, theme, parts, { value } = {}) => {
     await ensureReady()
-    const { nft } = getContracts(true)
+    const { nft }     = getContracts(true)
+    const { nft: nr } = getContracts(false) // read-only
+
+    let onchainBlank = '[BLANK]'
+    try {
+      const b = await nr.BLANK()
+      if (typeof b === 'string' && b.length) onchainBlank = b
+    } catch {}
+
+    const normalizedParts = Array.isArray(parts)
+      ? parts.map((p) => (p === '[BLANK]' ? onchainBlank : String(p ?? '')))
+      : []
+
+    if (!normalizedParts.some((p) => p === onchainBlank)) {
+      throw new Error('At least one BLANK must remain unfilled.')
+    }
 
     const args = [
       String(title ?? ''),
       String(description ?? ''),
       String(theme ?? ''),
-      Array.isArray(parts) ? parts.map((p) => String(p ?? '')) : [],
+      normalizedParts,
     ]
 
     const preflight = await estimateWithRead(
@@ -254,30 +247,25 @@ export function TxProvider({ children }) {
 
   /** ---------------- Context Value ---------------- */
   const value = useMemo(() => ({
-    // connection
     address,
     isConnected: !!address,
     isOnBase,
-    isWarpcast,         // expose to pages if needed
+    isWarpcast,
     connect,
     switchToBase,
     provider,
 
-    // contracts (optional reads)
     getContracts,
 
-    // tx helpers
     createPool1,
     joinPool1,
     claimPool1,
     mintTemplateNFT,
 
-    // tx state for UI confirmations
     txStatus,
     pendingTx,
     lastTx,
 
-    // constants
     BASE_RPC,
     FILLIN_ADDRESS,
     NFT_ADDRESS,
