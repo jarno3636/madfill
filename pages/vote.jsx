@@ -1,7 +1,7 @@
 // pages/vote.jsx
 'use client'
 
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import { ethers } from 'ethers'
@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
+import { useTx } from '@/lib/TxProvider'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -23,27 +24,26 @@ const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
-
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
-const BASE_CHAIN_ID = 8453n
-const BASE_CHAIN_ID_HEX = '0x2105' // Base
-
-// IMPORTANT: V3 does not expose Pool2 vote fee in views. Use env.
-// Fallback: 0.0005 ETH
-const DEFAULT_VOTE_FEE_WEI = ethers.parseUnits('0.0005', 18)
-const VOTE_FEE_WEI =
-  (process.env.NEXT_PUBLIC_POOL2_VOTE_FEE_WEI && BigInt(process.env.NEXT_PUBLIC_POOL2_VOTE_FEE_WEI)) ||
-  DEFAULT_VOTE_FEE_WEI
 
 export default function VotePage() {
   useMiniAppReady()
+
+  // from TxProvider
+  const {
+    address,
+    isOnBase,
+    isWarpcast,
+    connect,
+    switchToBase,    // safe: no-ops under Warpcast per your WalletProvider logic
+    votePool2,
+    claimPool2,
+  } = useTx()
 
   // state
   const [rounds, setRounds] = useState([]) // Pool2 cards
   const [loading, setLoading] = useState(true)
   const [status, setStatus] = useState('')
-  const [address, setAddress] = useState(null)
-  const [isOnBase, setIsOnBase] = useState(true)
   const [success, setSuccess] = useState(false)
   const [claimedId, setClaimedId] = useState(null)
   const [filter, setFilter] = useState('all')
@@ -53,27 +53,10 @@ export default function VotePage() {
   const { width, height } = useWindowSize()
   const tickRef = useRef(null)
 
-  // Prefer Warpcast Mini wallet; fallback to injected
-  const miniProvRef = useRef(null)
-  const getEip1193 = useCallback(async () => {
-    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
-    if (miniProvRef.current) return miniProvRef.current
-    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
-    if (!inWarpcast) return null
-    try {
-      const mod = await import('@farcaster/miniapp-sdk')
-      const prov = await mod.sdk.wallet.getEthereumProvider()
-      miniProvRef.current = prov
-      return prov
-    } catch {
-      return null
-    }
-  }, [])
-
   // ---- utils ----
-  const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
   const toEth = (wei) => (wei ? Number(ethers.formatEther(wei)) : 0)
-  const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
+  const fmt = (n, d = 2) =>
+    new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
   const explorer = (path) => `https://basescan.org/${path}`
 
   function parseStoredWord(stored) {
@@ -87,12 +70,8 @@ export default function VotePage() {
     }
     return { index: 0, word: stored }
   }
-
-  const needsSpaceBefore = (str) => {
-    if (!str) return false
-    const ch = str[0]
-    return !(/\s/.test(ch) || /[.,!?;:)"'\]]/.test(ch))
-  }
+  const needsSpaceBefore = (str) =>
+    !( /\s/.test(str?.[0]) || /[.,!?;:)"'\]]/.test(str?.[0]) )
 
   function buildPreviewSingle(parts, word, blankIndex) {
     const n = parts?.length || 0
@@ -117,81 +96,9 @@ export default function VotePage() {
     }
     return out.join('')
   }
-
   function buildPreviewFromStored(parts, stored) {
     const { index, word } = parseStoredWord(stored)
     return buildPreviewSingle(parts, word, index)
-  }
-
-  // ---- wallet / chain (observe only) ----
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      if (typeof window !== 'undefined' && window.ethereum) {
-        try {
-          const accts = await window.ethereum.request({ method: 'eth_accounts' })
-          if (!cancelled) setAddress(accts?.[0] || null)
-        } catch {}
-        try {
-          const provider = new ethers.BrowserProvider(window.ethereum)
-          const net = await provider.getNetwork()
-          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-        } catch {
-          if (!cancelled) setIsOnBase(true)
-        }
-        const onChain = () => location.reload()
-        const onAcct = (accs) => setAddress(accs?.[0] || null)
-        window.ethereum.on?.('chainChanged', onChain)
-        window.ethereum.on?.('accountsChanged', onAcct)
-        return () => {
-          window.ethereum.removeListener?.('chainChanged', onChain)
-          window.ethereum.removeListener?.('accountsChanged', onAcct)
-        }
-      }
-      // Warpcast Mini fallback
-      const mini = await getEip1193()
-      if (mini && !cancelled) {
-        try {
-          const p = new ethers.BrowserProvider(mini)
-          const signer = await p.getSigner().catch(() => null)
-          const addr = await signer?.getAddress().catch(() => null)
-          if (!cancelled) setAddress(addr || null)
-          const net = await p.getNetwork()
-          if (!cancelled) setIsOnBase(net?.chainId === BASE_CHAIN_ID)
-        } catch {}
-      }
-    })()
-    return () => { cancelled = true }
-  }, [getEip1193])
-
-  async function switchToBase() {
-    const eip = await getEip1193()
-    if (!eip) return
-    try {
-      await eip.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: BASE_CHAIN_ID_HEX }],
-      })
-      setIsOnBase(true)
-    } catch (e) {
-      if (e?.code === 4902) {
-        try {
-          await eip.request({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: BASE_CHAIN_ID_HEX,
-              chainName: 'Base',
-              rpcUrls: [BASE_RPC],
-              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-              blockExplorerUrls: ['https://basescan.org'],
-            }],
-          })
-          setIsOnBase(true)
-        } catch (err) {
-          console.error(err)
-        }
-      }
-    }
   }
 
   // ---- price + ticker ----
@@ -218,54 +125,71 @@ export default function VotePage() {
       try {
         const provider = new ethers.JsonRpcProvider(BASE_RPC)
         const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
-
         const p2Count = Number(await ct.pool2Count())
-        const cards = []
-        for (let id = 1; id <= p2Count; id++) {
-          const info = await ct.getPool2Info(BigInt(id))
-          const originalPool1Id = Number(info.originalPool1Id ?? info[0])
-          const challengerWordRaw = info.challengerWord ?? info[1]
-          const challengerUsername = info.challengerUsername ?? info[2]
-          const challengerAddr = info.challenger ?? info[3]
-          const votersOriginal = Number(info.votersOriginal ?? info[4])
-          const votersChallenger = Number(info.votersChallenger ?? info[5])
-          const claimed = Boolean(info.claimed ?? info[6])
-          const challengerWon = Boolean(info.challengerWon ?? info[7])
-          const poolBalance = info.poolBalance ?? info[8]
-
-          const p1 = await ct.getPool1Info(BigInt(originalPool1Id))
-          const parts = p1.parts_ || p1[2]
-          const creatorAddr = p1.creator_ || p1[5]
-          const p1CreatorSub = await ct.getPool1Submission(BigInt(originalPool1Id), creatorAddr)
-          const originalWordRaw = p1CreatorSub[1]
-
-          const originalPreview = buildPreviewFromStored(parts, originalWordRaw)
-          const challengerPreview = buildPreviewFromStored(parts, challengerWordRaw)
-
-          const poolEth = toEth(poolBalance)
-          const poolUsd = poolEth * priceUsd
-
-          cards.push({
-            id,
-            originalPool1Id,
-            parts,
-            originalPreview,
-            originalWordRaw,
-            challengerPreview,
-            challengerWordRaw,
-            challengerUsername,
-            challengerAddr,
-            votersOriginal,
-            votersChallenger,
-            claimed,
-            challengerWon,
-            poolEth,
-            poolUsd,
-          })
+        if (p2Count === 0) {
+          if (!cancelled) setRounds([])
+          return
         }
 
-        if (cancelled) return
-        setRounds(cards)
+        // Build ids [1..p2Count], fetch in parallel
+        const ids = Array.from({ length: p2Count }, (_, i) => i + 1)
+
+        const p2Infos = await Promise.all(
+          ids.map((id) => ct.getPool2InfoFull(BigInt(id)).then((info) => ({ id, info })).catch(() => null))
+        )
+
+        // For each Pool2, fetch its Pool1 + original submission in parallel
+        const enriched = await Promise.all(
+          p2Infos.filter(Boolean).map(async ({ id, info }) => {
+            const originalPool1Id = Number(info.originalPool1Id ?? info[0])
+            const challengerWordRaw = info.challengerWord ?? info[1]
+            const challengerUsername = info.challengerUsername ?? info[2]
+            const challengerAddr = info.challenger ?? info[3]
+            const votersOriginal = Number(info.votersOriginalCount ?? info[4])
+            const votersChallenger = Number(info.votersChallengerCount ?? info[5])
+            const claimed = Boolean(info.claimed ?? info[6])
+            const challengerWon = Boolean(info.challengerWon ?? info[7])
+            const poolBalance = info.poolBalance ?? info[8]
+            const feeBase = info.feeBase ?? info[9] ?? info[10] // tolerate tuple indexing
+            const deadline = info.deadline ?? info[10] ?? info[11]
+
+            const p1 = await ct.getPool1Info(BigInt(originalPool1Id))
+            const parts = p1.parts_ || p1[2]
+            const creatorAddr = p1.creator_ || p1[5]
+            const p1CreatorSub = await ct.getPool1Submission(BigInt(originalPool1Id), creatorAddr)
+            const originalWordRaw = p1CreatorSub.word || p1CreatorSub[1]
+
+            const originalPreview = buildPreviewFromStored(parts, originalWordRaw)
+            const challengerPreview = buildPreviewFromStored(parts, challengerWordRaw)
+
+            const poolEth = toEth(poolBalance)
+            const poolUsd = poolEth * priceUsd
+            const feeEth = toEth(feeBase)
+
+            return {
+              id,
+              originalPool1Id,
+              parts,
+              originalPreview,
+              originalWordRaw,
+              challengerPreview,
+              challengerWordRaw,
+              challengerUsername,
+              challengerAddr,
+              votersOriginal,
+              votersChallenger,
+              claimed,
+              challengerWon,
+              poolEth,
+              poolUsd,
+              feeBaseWei: BigInt(feeBase ?? 0n),
+              feeEth,
+              deadline: Number(deadline ?? 0),
+            }
+          })
+        )
+
+        if (!cancelled) setRounds(enriched)
       } catch (e) {
         console.error('Error loading vote rounds', e)
         if (!cancelled) setRounds([])
@@ -277,28 +201,20 @@ export default function VotePage() {
     return () => { cancelled = true }
   }, [priceUsd])
 
-  // ---- actions ----
-  async function votePool2(id, voteChallenger) {
+  // ---- actions (use TxProvider) ----
+  async function doVote(id, voteChallenger, feeBaseWei) {
     try {
-      const eip = await getEip1193()
-      if (!eip) throw new Error('Wallet not found')
+      if (!address) await connect()
       setStatus('Submitting vote…')
 
-      await eip.request?.({ method: 'eth_requestAccounts' })
-      const provider = new ethers.BrowserProvider(eip)
-      const net = await provider.getNetwork()
-      if (net?.chainId !== BASE_CHAIN_ID) await switchToBase()
-      const signer = await provider.getSigner()
-      const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
+      await votePool2({
+        id,
+        voteChallenger,
+        feeWei: feeBaseWei, // provider will read on-chain if omitted; we pass it for clarity
+      })
 
-      // ✅ send configured fee with tiny buffer to avoid rounding reverts
-      const value = (VOTE_FEE_WEI * 1005n) / 1000n
-
-      // V3: votePool2(uint256 id, bool voteChallenger) payable
-      const tx = await ct.votePool2(BigInt(id), Boolean(voteChallenger), { value })
-      await tx.wait()
       setStatus('✅ Vote recorded!')
-      setSuccess(true) // ✅ confetti
+      setSuccess(true)
       await reloadCard(id)
       setTimeout(() => setSuccess(false), 1500)
     } catch (e) {
@@ -308,27 +224,46 @@ export default function VotePage() {
     }
   }
 
+  async function doClaim(id) {
+    try {
+      if (!address) await connect()
+      setStatus('Claiming…')
+
+      await claimPool2(id)
+
+      setClaimedId(id)
+      setStatus('✅ Claimed!')
+      await reloadCard(id)
+      setTimeout(() => setClaimedId(null), 1500)
+    } catch (err) {
+      console.error('Claim failed:', err)
+      setStatus('❌ ' + (err?.shortMessage || err?.message || 'Error claiming prize'))
+    }
+  }
+
   async function reloadCard(id) {
     try {
       const provider = new ethers.JsonRpcProvider(BASE_RPC)
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
+      const info = await ct.getPool2InfoFull(BigInt(id))
 
-      const info = await ct.getPool2Info(BigInt(id))
       const originalPool1Id = Number(info.originalPool1Id ?? info[0])
       const challengerWordRaw = info.challengerWord ?? info[1]
       const challengerUsername = info.challengerUsername ?? info[2]
       const challengerAddr = info.challenger ?? info[3]
-      const votersOriginal = Number(info.votersOriginal ?? info[4])
-      const votersChallenger = Number(info.votersChallenger ?? info[5])
+      const votersOriginal = Number(info.votersOriginalCount ?? info[4])
+      const votersChallenger = Number(info.votersChallengerCount ?? info[5])
       const claimed = Boolean(info.claimed ?? info[6])
       const challengerWon = Boolean(info.challengerWon ?? info[7])
       const poolBalance = info.poolBalance ?? info[8]
+      const feeBase = info.feeBase ?? info[9] ?? info[10]
+      const deadline = info.deadline ?? info[10] ?? info[11]
 
       const p1 = await ct.getPool1Info(BigInt(originalPool1Id))
       const parts = p1.parts_ || p1[2]
       const creatorAddr = p1.creator_ || p1[5]
       const p1CreatorSub = await ct.getPool1Submission(BigInt(originalPool1Id), creatorAddr)
-      const originalWordRaw = p1CreatorSub[1]
+      const originalWordRaw = p1CreatorSub.word || p1CreatorSub[1]
 
       const poolEth = toEth(poolBalance)
       const poolUsd = poolEth * priceUsd
@@ -352,37 +287,15 @@ export default function VotePage() {
                 challengerWon,
                 poolEth,
                 poolUsd,
+                feeBaseWei: BigInt(feeBase ?? 0n),
+                feeEth: toEth(feeBase),
+                deadline: Number(deadline ?? 0),
               }
             : r
         )
       )
     } catch {
       // ignore
-    }
-  }
-
-  async function claimPool2(id) {
-    try {
-      const eip = await getEip1193()
-      if (!eip) throw new Error('Wallet not found')
-      setStatus('Claiming…')
-
-      await eip.request?.({ method: 'eth_requestAccounts' })
-      const provider = new ethers.BrowserProvider(eip)
-      const net = await provider.getNetwork()
-      if (net?.chainId !== BASE_CHAIN_ID) await switchToBase()
-      const signer = await provider.getSigner()
-      const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
-
-      const tx = await ct.claimPool2(BigInt(id))
-      await tx.wait()
-      setClaimedId(id)
-      setStatus('✅ Claimed!')
-      await reloadCard(id)
-      setTimeout(() => setClaimedId(null), 1500)
-    } catch (err) {
-      console.error('Claim failed:', err)
-      setStatus('❌ ' + (err?.shortMessage || err?.message || 'Error claiming prize'))
     }
   }
 
@@ -399,7 +312,11 @@ export default function VotePage() {
 
   const sorted = useMemo(() => {
     const arr = [...filtered]
-    if (sortBy === 'votes') return arr.sort((a, b) => (b.votersOriginal + b.votersChallenger) - (a.votersOriginal + a.votersChallenger))
+    if (sortBy === 'votes')
+      return arr.sort(
+        (a, b) =>
+          b.votersOriginal + b.votersChallenger - (a.votersOriginal + a.votersChallenger)
+      )
     if (sortBy === 'prize') return arr.sort((a, b) => b.poolUsd - a.poolUsd)
     return arr.sort((a, b) => b.id - a.id) // recent
   }, [filtered, sortBy])
@@ -407,11 +324,17 @@ export default function VotePage() {
   // ---- SEO (SSR-safe) ----
   const pageUrl = absoluteUrl('/vote')
   const ogTitle = 'Community Vote — MadFill'
-  const ogDesc = 'Pick the punchline. Vote Original vs Challenger and split the pool with the winners on Base.'
+  const ogDesc =
+    'Pick the punchline. Vote Original vs Challenger and split the pool with the winners on Base.'
   const ogImage = buildOgUrl({ screen: 'vote', title: 'Community Vote' })
 
   function StatusPill({ claimed, challengerWon }) {
-    if (!claimed) return <span className="px-2 py-1 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 text-xs">Voting</span>
+    if (!claimed)
+      return (
+        <span className="px-2 py-1 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 text-xs">
+          Voting
+        </span>
+      )
     return (
       <span className="px-2 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs">
         {challengerWon ? 'Challenger Won' : 'Original Won'}
@@ -440,7 +363,7 @@ export default function VotePage() {
         <meta property="fc:frame:button:1:target" content={pageUrl} />
         <link rel="canonical" href={pageUrl} />
       </Head>
-      
+
       {(success || claimedId) && <Confetti width={width} height={height} />}
 
       <main className="max-w-6xl mx-auto p-4 md:p-6 text-white">
@@ -450,14 +373,12 @@ export default function VotePage() {
             🗳️ Community Vote
           </h1>
           <p className="mt-2 text-slate-300 max-w-3xl">
-            Pick the punchline! Each challenge pits the <span className="font-semibold">Original</span> card (from the round creator)
-            against a <span className="font-semibold">Challenger</span> card. Pay a tiny fee to vote; when voting ends, the winning side
-            <span className="font-semibold"> splits the prize pool</span>. Feeling spicy?{' '}
+            Pick the punchline! Each challenge pits the <span className="font-semibold">Original</span> card against a <span className="font-semibold">Challenger</span>.
+            Pay a tiny fee to vote; when voting ends, the winning side <span className="font-semibold">splits the prize pool</span>. Feeling spicy?{' '}
             <Link href="/challenge" className="underline text-purple-300">Submit a Challenger</Link>.
           </p>
           <p className="mt-1 text-xs text-slate-400">
-            Note: V3 doesn&apos;t expose vote deadlines on-chain—cards show as “Voting” until someone finalizes. You can always try to claim:
-            if it&apos;s not time yet, the transaction will revert.
+            Tip: You can always try to claim once voting is over—the contract will revert if it’s too early.
           </p>
         </div>
 
@@ -491,8 +412,15 @@ export default function VotePage() {
               <option value="prize">Largest Pool</option>
             </select>
           </div>
+
           {!isOnBase && (
-            <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600 text-sm" aria-label="Switch to Base">
+            <Button
+              onClick={() => !isWarpcast && switchToBase()}
+              disabled={isWarpcast}
+              className="bg-cyan-700 hover:bg-cyan-600 text-sm disabled:opacity-60"
+              aria-label="Switch to Base"
+              title={isWarpcast ? 'Warpcast wallet handles network internally' : 'Switch to Base'}
+            >
               Switch to Base
             </Button>
           )}
@@ -557,17 +485,19 @@ export default function VotePage() {
                       <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
                         Votes — Orig: {r.votersOriginal} • Chall: {r.votersChallenger}
                       </span>
+                      <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
+                        Fee: {fmt(r.feeEth, 6)} ETH
+                      </span>
                     </div>
 
                     {/* Actions */}
                     <div className="flex flex-wrap items-center gap-3">
                       {!r.claimed ? (
                         <>
-                          {/* true = voteChallenger */}
-                          <Button onClick={() => votePool2(r.id, true)} className="bg-blue-600 hover:bg-blue-500">
+                          <Button onClick={() => doVote(r.id, true, r.feeBaseWei)} className="bg-blue-600 hover:bg-blue-500">
                             Vote Challenger
                           </Button>
-                          <Button onClick={() => votePool2(r.id, false)} className="bg-green-600 hover:bg-green-500">
+                          <Button onClick={() => doVote(r.id, false, r.feeBaseWei)} className="bg-green-600 hover:bg-green-500">
                             Vote Original
                           </Button>
                           <a
@@ -581,7 +511,7 @@ export default function VotePage() {
                       ) : (
                         <>
                           <span className="text-sm text-slate-300">🏁 Voting Ended</span>
-                          <Button onClick={() => claimPool2(r.id)} className="bg-indigo-600 hover:bg-indigo-500">
+                          <Button onClick={() => doClaim(r.id)} className="bg-indigo-600 hover:bg-indigo-500">
                             Claim (if you were on the winning side)
                           </Button>
                         </>
@@ -598,8 +528,7 @@ export default function VotePage() {
                     </div>
 
                     <div className="text-[11px] text-slate-500">
-                      Voting fee comes from the challenge. App sends {fmt(toEth(VOTE_FEE_WEI), 6)} ETH (+ tiny buffer).
-                      To override, set <code className="mx-1 bg-slate-800 px-1 rounded">NEXT_PUBLIC_POOL2_VOTE_FEE_WEI</code>.
+                      Vote fee comes from each challenge’s on-chain <code>feeBase</code>. We add a tiny buffer on send to avoid rounding reverts.
                     </div>
                   </CardContent>
                 </Card>
