@@ -1,7 +1,7 @@
 // pages/vote.jsx
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import { ethers } from 'ethers'
@@ -17,6 +17,7 @@ import abi from '@/abi/FillInStoryV3_ABI.json'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useTx } from '@/components/TxProvider'
+import { Countdown } from '@/components/Countdown' // ⏳ time badge
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -25,6 +26,9 @@ const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
+
+// small util
+const nowSec = () => Math.floor(Date.now() / 1000)
 
 export default function VotePage() {
   useMiniAppReady()
@@ -35,7 +39,7 @@ export default function VotePage() {
     isOnBase,
     isWarpcast,
     connect,
-    switchToBase,    // safe: no-ops under Warpcast per your WalletProvider logic
+    switchToBase,
     votePool2,
     claimPool2,
   } = useTx()
@@ -116,90 +120,128 @@ export default function VotePage() {
     return () => clearInterval(tickRef.current)
   }, [])
 
-  // ---- load Pool2 list + previews ----
-  useEffect(() => {
-    let cancelled = false
+  // ---- load Pool2 list + previews (with retry/backoff & abort) ----
+  const abortRef = useRef(null)
+
+  const loadAll = useCallback(async () => {
+    if (abortRef.current) abortRef.current.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
     setLoading(true)
+    setStatus('')
 
-    ;(async () => {
-      try {
-        const provider = new ethers.JsonRpcProvider(BASE_RPC)
-        const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
-        const p2Count = Number(await ct.pool2Count())
-        if (p2Count === 0) {
-          if (!cancelled) setRounds([])
-          return
+    const provider = new ethers.JsonRpcProvider(BASE_RPC, undefined, { staticNetwork: true })
+    const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
+
+    // tiny helper to retry calls
+    const retry = async (fn, tries = 3) => {
+      let lastErr
+      for (let i = 0; i < tries; i++) {
+        try {
+          if (controller.signal.aborted) throw new Error('aborted')
+          return await fn()
+        } catch (e) {
+          lastErr = e
+          await new Promise(res => setTimeout(res, 200 * (i + 1)))
         }
-
-        // Build ids [1..p2Count], fetch in parallel
-        const ids = Array.from({ length: p2Count }, (_, i) => i + 1)
-
-        const p2Infos = await Promise.all(
-          ids.map((id) => ct.getPool2InfoFull(BigInt(id)).then((info) => ({ id, info })).catch(() => null))
-        )
-
-        // For each Pool2, fetch its Pool1 + original submission in parallel
-        const enriched = await Promise.all(
-          p2Infos.filter(Boolean).map(async ({ id, info }) => {
-            const originalPool1Id = Number(info.originalPool1Id ?? info[0])
-            const challengerWordRaw = info.challengerWord ?? info[1]
-            const challengerUsername = info.challengerUsername ?? info[2]
-            const challengerAddr = info.challenger ?? info[3]
-            const votersOriginal = Number(info.votersOriginalCount ?? info[4])
-            const votersChallenger = Number(info.votersChallengerCount ?? info[5])
-            const claimed = Boolean(info.claimed ?? info[6])
-            const challengerWon = Boolean(info.challengerWon ?? info[7])
-            const poolBalance = info.poolBalance ?? info[8]
-            const feeBase = info.feeBase ?? info[9] ?? info[10] // tolerate tuple indexing
-            const deadline = info.deadline ?? info[10] ?? info[11]
-
-            const p1 = await ct.getPool1Info(BigInt(originalPool1Id))
-            const parts = p1.parts_ || p1[2]
-            const creatorAddr = p1.creator_ || p1[5]
-            const p1CreatorSub = await ct.getPool1Submission(BigInt(originalPool1Id), creatorAddr)
-            const originalWordRaw = p1CreatorSub.word || p1CreatorSub[1]
-
-            const originalPreview = buildPreviewFromStored(parts, originalWordRaw)
-            const challengerPreview = buildPreviewFromStored(parts, challengerWordRaw)
-
-            const poolEth = toEth(poolBalance)
-            const poolUsd = poolEth * priceUsd
-            const feeEth = toEth(feeBase)
-
-            return {
-              id,
-              originalPool1Id,
-              parts,
-              originalPreview,
-              originalWordRaw,
-              challengerPreview,
-              challengerWordRaw,
-              challengerUsername,
-              challengerAddr,
-              votersOriginal,
-              votersChallenger,
-              claimed,
-              challengerWon,
-              poolEth,
-              poolUsd,
-              feeBaseWei: BigInt(feeBase ?? 0n),
-              feeEth,
-              deadline: Number(deadline ?? 0),
-            }
-          })
-        )
-
-        if (!cancelled) setRounds(enriched)
-      } catch (e) {
-        console.error('Error loading vote rounds', e)
-        if (!cancelled) setRounds([])
-      } finally {
-        if (!cancelled) setLoading(false)
       }
-    })()
+      throw lastErr
+    }
 
-    return () => { cancelled = true }
+    try {
+      const p2Count = Number(await retry(() => ct.pool2Count()))
+      if (controller.signal.aborted) return
+
+      if (!p2Count) {
+        setRounds([])
+        return
+      }
+
+      // Limit parallelism for stability
+      const ids = Array.from({ length: p2Count }, (_, i) => i + 1)
+      const chunk = (arr, n) => arr.length ? [arr.slice(0, n), ...chunk(arr.slice(n), n)] : []
+      const chunks = chunk(ids.reverse(), 25) // pull newest first, 25 at a time
+
+      const results = []
+      for (const group of chunks) {
+        const infos = await Promise.allSettled(
+          group.map((id) =>
+            retry(() => ct.getPool2InfoFull(BigInt(id))).then((info) => ({ id, info }))
+          )
+        )
+        for (const r of infos) if (r.status === 'fulfilled') results.push(r.value)
+        if (controller.signal.aborted) return
+      }
+
+      // hydrate each with its Pool1 + original submission
+      const enriched = await Promise.all(results.map(async ({ id, info }) => {
+        const originalPool1Id = Number(info.originalPool1Id ?? info[0])
+        const challengerWordRaw = info.challengerWord ?? info[1]
+        const challengerUsername = info.challengerUsername ?? info[2]
+        const challengerAddr = info.challenger ?? info[3]
+        const votersOriginal = Number(info.votersOriginalCount ?? info[4])
+        const votersChallenger = Number(info.votersChallengerCount ?? info[5])
+        const claimed = Boolean(info.claimed ?? info[6])
+        const challengerWon = Boolean(info.challengerWon ?? info[7])
+        const poolBalance = info.poolBalance ?? info[8]
+        const feeBase = info.feeBase ?? info[9] ?? info[10]
+        const deadline = Number(info.deadline ?? info[10] ?? info[11] ?? 0)
+
+        const p1 = await retry(() => ct.getPool1Info(BigInt(originalPool1Id)))
+        const parts = p1.parts_ || p1[2]
+        const creatorAddr = p1.creator_ || p1[5]
+        const p1CreatorSub = await retry(() =>
+          ct.getPool1Submission(BigInt(originalPool1Id), creatorAddr)
+        )
+        const originalWordRaw = p1CreatorSub.word || p1CreatorSub[1]
+
+        const originalPreview = buildPreviewFromStored(parts, originalWordRaw)
+        const challengerPreview = buildPreviewFromStored(parts, challengerWordRaw)
+
+        const poolEth = toEth(poolBalance)
+        const poolUsd = poolEth * priceUsd
+        const feeEth = toEth(feeBase)
+
+        // countdown: if we don't know total duration, seed totalSeconds with first observed remaining
+        const remaining = Math.max(0, deadline - nowSec())
+        const totalSeconds = Math.max(1, remaining)
+
+        return {
+          id,
+          originalPool1Id,
+          parts,
+          originalPreview,
+          originalWordRaw,
+          challengerPreview,
+          challengerWordRaw,
+          challengerUsername,
+          challengerAddr,
+          votersOriginal,
+          votersChallenger,
+          claimed,
+          challengerWon,
+          poolEth,
+          poolUsd,
+          feeBaseWei: BigInt(feeBase ?? 0n),
+          feeEth,
+          deadline,
+          totalSeconds,
+        }
+      }))
+
+      // newest first
+      setRounds(enriched.sort((a, b) => b.id - a.id))
+    } catch (e) {
+      console.error('Error loading vote rounds', e)
+      setRounds([])
+      setStatus('Could not load voting rounds. Try Refresh.')
+    } finally {
+      if (!controller.signal.aborted) setLoading(false)
+    }
   }, [priceUsd])
+
+  useEffect(() => { loadAll() }, [loadAll])
 
   // ---- actions (use TxProvider) ----
   async function doVote(id, voteChallenger, feeBaseWei) {
@@ -207,11 +249,7 @@ export default function VotePage() {
       if (!address) await connect()
       setStatus('Submitting vote…')
 
-      await votePool2({
-        id,
-        voteChallenger,
-        feeWei: feeBaseWei, // provider will read on-chain if omitted; we pass it for clarity
-      })
+      await votePool2({ id, voteChallenger, feeWei: feeBaseWei })
 
       setStatus('✅ Vote recorded!')
       setSuccess(true)
@@ -257,7 +295,7 @@ export default function VotePage() {
       const challengerWon = Boolean(info.challengerWon ?? info[7])
       const poolBalance = info.poolBalance ?? info[8]
       const feeBase = info.feeBase ?? info[9] ?? info[10]
-      const deadline = info.deadline ?? info[10] ?? info[11]
+      const deadline = Number(info.deadline ?? info[10] ?? info[11] ?? 0)
 
       const p1 = await ct.getPool1Info(BigInt(originalPool1Id))
       const parts = p1.parts_ || p1[2]
@@ -267,6 +305,7 @@ export default function VotePage() {
 
       const poolEth = toEth(poolBalance)
       const poolUsd = poolEth * priceUsd
+      const remaining = Math.max(0, deadline - nowSec())
 
       setRounds((prev) =>
         prev.map((r) =>
@@ -289,7 +328,9 @@ export default function VotePage() {
                 poolUsd,
                 feeBaseWei: BigInt(feeBase ?? 0n),
                 feeEth: toEth(feeBase),
-                deadline: Number(deadline ?? 0),
+                deadline,
+                // keep original totalSeconds; if missing, seed from current remaining
+                totalSeconds: r.totalSeconds || Math.max(1, remaining),
               }
             : r
         )
@@ -369,9 +410,42 @@ export default function VotePage() {
       <main className="max-w-6xl mx-auto p-4 md:p-6 text-white">
         {/* Hero */}
         <div className="rounded-2xl bg-slate-900/70 border border-slate-700 p-6 md:p-8 mb-6">
-          <h1 className="text-3xl md:text-4xl font-extrabold bg-gradient-to-r from-amber-300 via-pink-300 to-indigo-300 bg-clip-text text-transparent">
-            🗳️ Community Vote
-          </h1>
+          <div className="flex items-center justify-between gap-3">
+            <h1 className="text-3xl md:text-4xl font-extrabold bg-gradient-to-r from-amber-300 via-pink-300 to-indigo-300 bg-clip-text text-transparent">
+              🗳️ Community Vote
+            </h1>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-xs px-2 py-1 border-slate-600"
+                onClick={() => { setFilter('all'); setSortBy('recent'); loadAll() }}
+                title="Reset filters & reload"
+              >
+                Reset
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                className="text-xs px-2 py-1 bg-slate-700 hover:bg-slate-600"
+                onClick={loadAll}
+                title="Refresh rounds"
+              >
+                Refresh
+              </Button>
+              {!isOnBase && (
+                <Button
+                  onClick={() => !isWarpcast && switchToBase()}
+                  disabled={isWarpcast}
+                  className="bg-cyan-700 hover:bg-cyan-600 text-sm disabled:opacity-60"
+                  aria-label="Switch to Base"
+                  title={isWarpcast ? 'Warpcast wallet handles network internally' : 'Switch to Base'}
+                >
+                  Switch to Base
+                </Button>
+              )}
+            </div>
+          </div>
           <p className="mt-2 text-slate-300 max-w-3xl">
             Pick the punchline! Each challenge pits the <span className="font-semibold">Original</span> card against a <span className="font-semibold">Challenger</span>.
             Pay a tiny fee to vote; when voting ends, the winning side <span className="font-semibold">splits the prize pool</span>. Feeling spicy?{' '}
@@ -412,36 +486,44 @@ export default function VotePage() {
               <option value="prize">Largest Pool</option>
             </select>
           </div>
-
-          {!isOnBase && (
-            <Button
-              onClick={() => !isWarpcast && switchToBase()}
-              disabled={isWarpcast}
-              className="bg-cyan-700 hover:bg-cyan-600 text-sm disabled:opacity-60"
-              aria-label="Switch to Base"
-              title={isWarpcast ? 'Warpcast wallet handles network internally' : 'Switch to Base'}
-            >
-              Switch to Base
-            </Button>
-          )}
         </div>
 
         {/* Body */}
         {loading ? (
           <div className="rounded-xl bg-slate-900/70 p-6 animate-pulse text-slate-300 text-center">Loading voting rounds…</div>
         ) : sorted.length === 0 ? (
-          <div className="rounded-xl bg-slate-900/70 p-6 text-slate-300 text-center">No voting rounds right now.</div>
+          <div className="rounded-xl bg-slate-900/70 p-6 text-slate-300 text-center">
+            No voting rounds right now.
+            <div className="mt-3">
+              <Button size="sm" variant="secondary" className="text-xs px-2 py-1 bg-slate-700 hover:bg-slate-600" onClick={loadAll}>Refresh</Button>
+            </div>
+          </div>
         ) : (
           <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
             {sorted.map((r) => {
               const shareUrl = absoluteUrl(`/round/${r.originalPool1Id}`)
               const shareText = `Vote on MadFill Challenge #${r.id} → Round #${r.originalPool1Id}!`
+              const remaining = Math.max(0, (r.deadline || 0) - nowSec())
               return (
                 <Card key={r.id} className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
                   <CardHeader className="flex items-start justify-between gap-2 bg-slate-800/60 border-b border-slate-700">
                     <div className="space-y-0.5">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs"><StatusPill claimed={r.claimed} challengerWon={r.challengerWon} /></span>
+                        {!r.claimed && r.deadline > 0 && (
+                          <span className="inline-flex items-center gap-1">
+                            <Countdown
+                              targetTimestamp={r.deadline}
+                              totalSeconds={r.totalSeconds || Math.max(1, remaining)}
+                              size={42}
+                              stroke={5}
+                              className="align-middle"
+                              progressColor="rgb(250 204 21)"   // amber-300
+                              trackColor="rgb(71 85 105)"        // slate-600
+                            />
+                            <span className="text-[11px] text-slate-300">left</span>
+                          </span>
+                        )}
                         <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800/80 border border-slate-700">
                           Challenge #{r.id}
                         </span>
@@ -538,6 +620,23 @@ export default function VotePage() {
         )}
 
         {status && <div className="mt-6 text-center text-yellow-300" aria-live="polite">{status}</div>}
+
+        {/* Footer */}
+        <footer className="mt-10 text-xs text-slate-400 flex flex-wrap items-center gap-3 justify-between border-top border-slate-800 pt-4">
+          <div className="flex items-center gap-3">
+            <Link href="/challenge" className="underline text-indigo-300">Start a Challenge</Link>
+            <a
+              href={explorer(`address/${CONTRACT_ADDRESS}`)}
+              target="_blank"
+              rel="noreferrer"
+              className="underline text-indigo-300"
+              title="View contract on BaseScan"
+            >
+              Contract
+            </a>
+          </div>
+          <div className="opacity-80">Built on Base • MadFill</div>
+        </footer>
       </main>
     </Layout>
   )
