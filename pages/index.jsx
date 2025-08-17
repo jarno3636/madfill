@@ -768,9 +768,6 @@ function IndexPage() {
                 </div>
               </div>
             </div>
-
-            <div className="text-xs text-slate-400">
-              Updated every minute from Base via <span className="font-mono">BASE_RPC</span>. Set <span className="font-mono">NEXT_PUBLIC_FILLIN_DEPLOY_BLOCK</span> and <span className="font-mono">NEXT_PUBLIC_NFT_DEPLOY_BLOCK</span> for faster queries.
             </div>
           </CardContent>
         </Card>
