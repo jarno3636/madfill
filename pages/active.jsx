@@ -13,7 +13,6 @@ import { Button } from '@/components/ui/button'
 import Countdown from '@/components/Countdown'
 import ShareBar from '@/components/ShareBar'
 import SEO from '@/components/SEO'
-import { fetchFarcasterProfile } from '@/lib/neynar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 
@@ -21,7 +20,24 @@ import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // fallback
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
+
+/* Optional deploy-block (hex or decimal) */
+const parseBlock = (v) => {
+  const s = (v ?? '').toString().trim()
+  if (!s) return null
+  if (s.startsWith('0x')) {
+    const n = Number.parseInt(s, 16)
+    return Number.isFinite(n) && n >= 0 ? n : null
+  }
+  const n = Number(s)
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null
+}
+const FILLIN_DEPLOY_BLOCK = parseBlock(process.env.NEXT_PUBLIC_FILLIN_DEPLOY_BLOCK)
+
+/* ------------------ Topics ------------------- */
+const TOPIC_POOL1_CREATED = ethers.id('Pool1Created(uint256,address,uint256,uint256)')
+const TOPIC_POOL1_CLAIMED = ethers.id('Pool1Claimed(uint256,address,uint256)')
 
 /* ------------------ Utils ------------------- */
 const needsSpaceBefore = (str) => {
@@ -66,27 +82,18 @@ function ShareBoundary({ children }) {
   }
   return <ErrorCatcher onError={setError}>{children}</ErrorCatcher>
 }
-
 class ErrorCatcher extends React.Component {
-  constructor(props) {
-    super(props)
-    this.state = { hasError: false }
-  }
+  constructor(props) { super(props); this.state = { hasError: false } }
   static getDerivedStateFromError() { return { hasError: true } }
-  componentDidCatch(error) {
-    if (this.props.onError) this.props.onError(error)
-  }
-  render() {
-    if (this.state.hasError) return null
-    return this.props.children
-  }
+  componentDidCatch(error) { this.props.onError?.(error) }
+  render() { return this.state.hasError ? null : this.props.children }
 }
 
 /* ------------------ Page -------------------- */
 export default function ActivePools() {
   useMiniAppReady()
 
-  // 🔥 Mini-wallet warm-up so Warpcast provider is ready by the time users click into a round
+  // Warm-up (Warpcast mini app)
   const warmed = useRef(false)
   useEffect(() => {
     if (warmed.current) return
@@ -107,7 +114,7 @@ export default function ActivePools() {
   const [filter, setFilter] = useState('all')
   const [page, setPage] = useState(1)
   const [baseUsd, setBaseUsd] = useState(0)
-  const [fallbackPrice, setFallbackPrice] = useState(false)
+  const [usdIsApprox, setUsdIsApprox] = useState(false)
   const [expanded, setExpanded] = useState({})
   const [likes, setLikes] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -123,158 +130,191 @@ export default function ActivePools() {
     return new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
   }, [provider])
 
-  // price loaders
+  /* ---------------- Price with fallbacks --------------- */
   const loadPrice = async (signal) => {
-    let price = 0
     try {
       const cbRes = await fetch('https://api.coinbase.com/v2/prices/ETH-USD/spot', { signal })
       const cbJson = await cbRes.json()
-      const cbPrice = parseFloat(cbJson?.data?.amount)
-      if (cbPrice && cbPrice > 0.5) { setBaseUsd(cbPrice); setFallbackPrice(false); return cbPrice }
+      const p = parseFloat(cbJson?.data?.amount)
+      if (Number.isFinite(p) && p > 0.5) { setBaseUsd(p); setUsdIsApprox(false); return p }
       throw new Error('bad cb')
     } catch {}
 
     try {
-      const res = await fetch(
-        'https://api.coingecko.com/api/v3/simple/price?ids=l2-standard-bridged-weth-base&vs_currencies=usd',
-        { signal }
-      )
-      const json = await res.json()
-      price = json['l2-standard-bridged-weth-base']?.usd
-      if (price && price > 0.5) { setBaseUsd(price); setFallbackPrice(false); return price }
+      const cgRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd', { signal })
+      const cgJson = await cgRes.json()
+      const p = Number(cgJson?.ethereum?.usd)
+      if (Number.isFinite(p) && p > 0.5) { setBaseUsd(p); setUsdIsApprox(false); return p }
       throw new Error('bad cg')
     } catch {}
 
-    try {
-      const apiKey = process.env.NEXT_PUBLIC_ALCHEMY_KEY
-      if (apiKey) {
-        const alchemyRes = await fetch(`https://eth-mainnet.g.alchemy.com/v2/${apiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: 1, jsonrpc: '2.0', method: 'alchemy_getTokenMetadata',
-            params: ['0x4200000000000000000000000000000000000006'],
-          }),
-          signal,
-        })
-        const data = await alchemyRes.json()
-        price = data?.result?.price?.usd
-        if (price && price > 0.5) { setBaseUsd(price); setFallbackPrice(false); return price }
-      }
-      throw new Error('bad alchemy')
-    } catch {
-      price = 3800
-      setBaseUsd(price)
-      setFallbackPrice(true)
-      return price
-    }
+    const fallback = 3800
+    setBaseUsd(fallback); setUsdIsApprox(true)
+    return fallback
   }
 
-  const loadRounds = async (priceOverride, signal) => {
-    if (!contract) return
-    const priceToUse = priceOverride || baseUsd
-    const now = Math.floor(Date.now() / 1000)
-    const all = []
-
-    let count = 0
-    try {
-      const countRaw = await contract.pool1Count()
-      count = Number(countRaw || 0n)
-    } catch {
-      setRounds([])
-      return
+  /* ---------------- Helpers --------------- */
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  const withRetry = async (fn, { tries = 3, delay = 200 } = {}) => {
+    let last
+    for (let i = 0; i < tries; i++) {
+      try { return await fn() } catch (e) { last = e; if (i < tries - 1) await sleep(delay * (i + 1)) }
     }
+    throw last
+  }
 
-    for (let i = 1; i <= count; i++) {
-      if (signal?.aborted) break
-      try {
-        const info = await contract.getPool1Info(BigInt(i))
-        if (signal?.aborted) break
+  // simple concurrency limiter
+  const limitMap = async (items, limit, worker, signal) => {
+    const results = new Array(items.length)
+    let idx = 0
+    const run = async () => {
+      while (idx < items.length) {
+        if (signal?.aborted) return
+        const cur = idx++
+        results[cur] = await worker(items[cur], cur)
+      }
+    }
+    const runners = Array.from({ length: Math.min(limit, items.length) }, () => run())
+    await Promise.all(runners)
+    return results
+  }
 
-        const name = info.name_ ?? info[0]
-        const theme = info.theme_ ?? info[1]
-        const parts = info.parts_ ?? info[2]
-        const feeBaseWei = info.feeBase_ ?? info[3] ?? 0n
-        const feeBase = Number(ethers.formatEther(feeBaseWei))
-        const deadline = Number(info.deadline_ ?? info[4])
-        const participants = info.participants_ ?? info[6] ?? []
-        const claimed = Boolean(info.claimed_ ?? info[8])
+  /* -------------- Load rounds via logs (fast & reliable) -------------- */
+  const loadRounds = async (price, signal) => {
+    if (!contract) return setRounds([])
 
-        if (!claimed && deadline > now) {
-          const avatars = await Promise.all(
-            participants.map(async (addr) => {
-              try {
-                const res = await fetchFarcasterProfile(addr)
-                return {
-                  address: addr,
-                  avatar: res?.pfp_url || '/Capitalize.PNG',
-                  fallbackUsername: res?.username || (typeof addr === 'string' ? addr.slice(2, 6).toUpperCase() : 'USER'),
-                }
-              } catch {
-                return {
-                  address: addr,
-                  avatar: '/Capitalize.PNG',
-                  fallbackUsername: typeof addr === 'string' ? addr.slice(2, 6).toUpperCase() : 'USER',
-                }
-              }
+    const latest = await withRetry(() => provider.getBlockNumber())
+    const windowBlocks = 500_000 // ~a few days; adjust if you want a longer list
+    const fromBlock = FILLIN_DEPLOY_BLOCK ?? Math.max(0, latest - windowBlocks)
+
+    // 1) Get created + claimed logs in one window
+    const [createdLogs, claimedLogs] = await Promise.all([
+      withRetry(() =>
+        provider.getLogs({
+          address: CONTRACT_ADDRESS,
+          fromBlock,
+          toBlock: latest,
+          topics: [TOPIC_POOL1_CREATED],
+        })
+      ).catch(() => []),
+      withRetry(() =>
+        provider.getLogs({
+          address: CONTRACT_ADDRESS,
+          fromBlock,
+          toBlock: latest,
+          topics: [TOPIC_POOL1_CLAIMED],
+        })
+      ).catch(() => []),
+    ])
+    if (signal?.aborted) return
+
+    // 2) Build sets of ids
+    const createdIds = Array.from(
+      new Set(
+        createdLogs
+          .map((lg) => {
+            try { return BigInt(lg.topics[1]).toString() } catch { return null }
+          })
+          .filter(Boolean)
+      )
+    )
+
+    const claimedSet = new Set(
+      claimedLogs
+        .map((lg) => {
+          try { return BigInt(lg.topics[1]).toString() } catch { return null }
+        })
+        .filter(Boolean)
+    )
+
+    // 3) Query getPool1Info for those ids (unclaimed + time window)
+    const now = Math.floor(Date.now() / 1000)
+
+    const details = await limitMap(
+      createdIds,
+      6, // concurrency
+      async (idStr) => {
+        if (signal?.aborted) return null
+        if (claimedSet.has(idStr)) return null
+
+        try {
+          const idBI = BigInt(idStr)
+          const info = await withRetry(() => contract.getPool1Info(idBI))
+          const name = info.name_ ?? info[0]
+          const theme = info.theme_ ?? info[1]
+          const parts = info.parts_ ?? info[2]
+          const feeBaseWei = info.feeBase_ ?? info[3] ?? 0n
+          const deadline = Number(info.deadline_ ?? info[4])
+          const participants = info.participants_ ?? info[6] ?? []
+          const claimed = Boolean(info.claimed_ ?? info[8])
+
+          // Only active (not claimed + deadline in future)
+          if (claimed || deadline <= now) return null
+
+          // Pull submissions packed (cheap) for previews
+          let submissions = []
+          try {
+            const packed = await withRetry(() => contract.getPool1SubmissionsPacked(idBI))
+            const addrs = packed.addrs || packed[0] || []
+            const usernames = packed.usernames || packed[1] || []
+            const words = packed.words || packed[2] || []
+            const blankIdxs = packed.blankIndexes || packed[3] || []
+            submissions = addrs.map((addr, i) => {
+              const username = usernames[i] || ''
+              const word = words[i] || ''
+              const idx = Number(blankIdxs[i] ?? 0)
+              const preview = buildPreviewSingle(parts, word, idx)
+              return { address: addr, username, word, blankIndex: idx, preview }
             })
-          )
-          if (signal?.aborted) break
+          } catch {}
 
-          const submissions = await Promise.all(
-            participants.map(async (addr) => {
-              try {
-                const sub = await contract.getPool1Submission(BigInt(i), addr)
-                const username = sub.username_ || sub[0] || ''
-                const word = sub.word_ || sub[1] || ''
-                const submitter = sub.submitter_ || sub[2] || addr
-                const blankIndex = Number(sub.blankIndex_ ?? sub[3] ?? 0)
-                const preview = buildPreviewSingle(parts, word, blankIndex)
-                return { address: submitter, username, word, blankIndex, preview }
-              } catch {
-                return { address: addr, username: '', word: '', blankIndex: 0, preview: buildPreviewSingle(parts, '', 0) }
-              }
-            })
-          )
+          const feeBase = Number(ethers.formatEther(feeBaseWei))
+          const estimatedUsd = price * (participants?.length || 0) * feeBase
 
-          const estimatedUsd = priceToUse * participants.length * feeBase
-
-          all.push({
-            id: i,
-            name: name || 'Untitled',
+          return {
+            id: Number(idBI), // safe for UI order
+            name: name || `Round #${idStr}`,
             theme,
             parts,
             feeBase: feeBase.toFixed(4),
             deadline,
-            count: participants.length,
+            count: participants?.length || 0,
             usd: estimatedUsd.toFixed(2),
-            usdApprox: fallbackPrice,
-            participants: avatars,
+            usdApprox: usdIsApprox,
             submissions,
+            // fun bits
             badge: deadline - now < 3600 ? '🔥 Ends Soon' : estimatedUsd > 5 ? '💰 Top Pool' : null,
-            emoji: ['🐸', '🦊', '🦄', '🐢', '🐙'][i % 5],
-          })
+            emoji: ['🐸', '🦊', '🦄', '🐢', '🐙'][Number(idStr) % 5],
+          }
+        } catch {
+          return null
         }
-      } catch (e) {
-        if (signal?.aborted) break
-        console.warn(`Error loading round ${i}`, e)
-      }
-    }
+      },
+      signal
+    )
 
-    if (!signal?.aborted) setRounds(all)
+    const all = details.filter(Boolean)
+
+    // Defensive: if logs window missed very old still-active rounds,
+    // you can optionally fall back to the last N IDs from pool1Count.
+    // (Kept off by default to avoid extra RPC.)
+    setRounds(all)
   }
 
+  /* -------------- Main polling loop -------------- */
   useEffect(() => {
     if (!CONTRACT_ADDRESS) return
     const controller = new AbortController()
+
     const tick = async () => {
       if (controller.signal.aborted) return
       const price = await loadPrice(controller.signal)
       if (controller.signal.aborted) return
       await loadRounds(price, controller.signal)
     }
+
     tick()
-    const interval = setInterval(tick, 30000)
+    const interval = setInterval(tick, 30_000)
     return () => {
       controller.abort()
       clearInterval(interval)
@@ -282,9 +322,7 @@ export default function ActivePools() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contract])
 
-  useEffect(() => {
-    setPage(1)
-  }, [search, sortBy, filter])
+  useEffect(() => { setPage(1) }, [search, sortBy, filter])
 
   const handleLike = (roundId, submissionIdx) => {
     const key = `${roundId}-${submissionIdx}`
@@ -300,7 +338,7 @@ export default function ActivePools() {
       const matchesSearch = r.name.toLowerCase().includes(search.toLowerCase())
       const matchesFilter =
         filter === 'all' ||
-        filter === 'unclaimed' ||
+        filter === 'unclaimed' || // kept for compatibility; all are unclaimed by construction
         (filter === 'high' && parseFloat(r.usd) >= 5)
       return matchesSearch && matchesFilter
     })
@@ -315,8 +353,9 @@ export default function ActivePools() {
     })
   }, [filtered, sortBy])
 
-  const totalPages = Math.ceil(sorted.length / roundsPerPage)
-  const paginated = sorted.slice((page - 1) * roundsPerPage, page * roundsPerPage)
+  const totalPages = Math.ceil(sorted.length / roundsPerPage) || 1
+  const pageSafe = Math.min(page, totalPages)
+  const paginated = sorted.slice((pageSafe - 1) * roundsPerPage, pageSafe * roundsPerPage)
 
   // SEO / Frame
   const pageUrl = absoluteUrl('/active')
@@ -389,7 +428,7 @@ export default function ActivePools() {
           </div>
         ) : (
           <motion.div
-            key={page}
+            key={pageSafe}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4 }}
@@ -423,7 +462,6 @@ export default function ActivePools() {
                     <p><strong>Participants:</strong> {r.count}</p>
                     <p><strong>Total Pool:</strong> {r.usdApprox ? '~' : ''}${r.usd}</p>
 
-                    {/* 🔗 Share — SAFE props from r, wrapped in an error boundary */}
                     <div className="pt-1">
                       <ShareBoundary>
                         <ShareBar
@@ -439,50 +477,48 @@ export default function ActivePools() {
                       </ShareBoundary>
                     </div>
 
-                    <button
-                      onClick={() => setExpanded((prev) => ({ ...prev, [r.id]: !prev[r.id] }))}
-                      className="text-indigo-400 text-xs underline"
-                    >
-                      {expanded[r.id] ? 'Hide Entries' : 'Show Entries'}
-                    </button>
+                    {r.submissions?.length > 0 && (
+                      <>
+                        <button
+                          onClick={() => setExpanded((prev) => ({ ...prev, [r.id]: !prev[r.id] }))}
+                          className="text-indigo-400 text-xs underline"
+                        >
+                          {expanded[r.id] ? 'Hide Entries' : 'Show Entries'}
+                        </button>
 
-                    {expanded[r.id] && (
-                      <div className="bg-slate-700 p-2 rounded text-xs text-slate-100 max-h-48 overflow-y-auto space-y-2">
-                        {r.submissions.map((s, idx) => {
-                          const p = r.participants.find(
-                            (p) =>
-                              typeof p.address === 'string' &&
-                              typeof s.address === 'string' &&
-                              p.address.toLowerCase() === s.address.toLowerCase()
-                          )
-                          const likeKey = `${r.id}-${idx}`
-                          const displayName =
-                            s.username || p?.fallbackUsername || (typeof s.address === 'string' ? s.address.slice(2, 6).toUpperCase() : 'USER')
-                          return (
-                            <div key={`${s.address}-${idx}`} className="flex items-start gap-2">
-                              <img
-                                src={p?.avatar || '/Capitalize.PNG'}
-                                alt={displayName}
-                                width={24}
-                                height={24}
-                                className="rounded-full border border-white mt-1"
-                                onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
-                              />
-                              <div className="flex-1">
-                                <p className="text-slate-300 font-semibold">@{displayName}</p>
-                                <p className="italic leading-relaxed">{s.preview}</p>
-                              </div>
-                              <button
-                                onClick={() => handleLike(r.id, idx)}
-                                className="text-pink-400 text-sm ml-1"
-                                title="Like"
-                              >
-                                {likes[likeKey] ? '❤️' : '🤍'}
-                              </button>
-                            </div>
-                          )
-                        })}
-                      </div>
+                        {expanded[r.id] && (
+                          <div className="bg-slate-700 p-2 rounded text-xs text-slate-100 max-h-48 overflow-y-auto space-y-2">
+                            {r.submissions.map((s, idx) => {
+                              const likeKey = `${r.id}-${idx}`
+                              const displayName =
+                                s.username || (typeof s.address === 'string' ? s.address.slice(2, 6).toUpperCase() : 'USER')
+                              return (
+                                <div key={`${s.address}-${idx}`} className="flex items-start gap-2">
+                                  <img
+                                    src={`https://effigy.im/a/${s.address}`}
+                                    alt={displayName}
+                                    width={24}
+                                    height={24}
+                                    className="rounded-full border border-white mt-1"
+                                    onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
+                                  />
+                                  <div className="flex-1">
+                                    <p className="text-slate-300 font-semibold">@{displayName}</p>
+                                    <p className="italic leading-relaxed">{s.preview}</p>
+                                  </div>
+                                  <button
+                                    onClick={() => handleLike(r.id, idx)}
+                                    className="text-pink-400 text-sm ml-1"
+                                    title="Like"
+                                  >
+                                    {likes[likeKey] ? '❤️' : '🤍'}
+                                  </button>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </>
                     )}
 
                     <Link href={`/round/${r.id}`}>
@@ -500,7 +536,7 @@ export default function ActivePools() {
             {Array.from({ length: totalPages }).map((_, i) => (
               <Button
                 key={i}
-                className={`px-4 py-1 rounded-full ${page === i + 1 ? 'bg-indigo-600' : 'bg-slate-700'} text-sm`}
+                className={`px-4 py-1 rounded-full ${pageSafe === i + 1 ? 'bg-indigo-600' : 'bg-slate-700'} text-sm`}
                 onClick={() => setPage(i + 1)}
               >
                 {i + 1}
