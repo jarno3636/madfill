@@ -2,7 +2,7 @@
 'use client'
 
 import { useRouter } from 'next/router'
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import Head from 'next/head'
 import Link from 'next/link'
@@ -17,17 +17,11 @@ import SEO from '@/components/SEO'
 import ShareBar from '@/components/ShareBar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
-
-// ✅ Unified Tx provider (single source of truth)
 import { useTx } from '@/components/TxProvider'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
-const CONTRACT_ADDRESS =
-  process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
-
-/* ---------- Error helpers ---------- */
+/* -------------------- Error helpers -------------------- */
 function extractDeepError(e) {
   const guess =
     e?.shortMessage ||
@@ -36,6 +30,7 @@ function extractDeepError(e) {
     e?.info?.error?.message ||
     e?.data?.message ||
     e?.message
+
   const payload = e?.data || e?.error?.data || e?.info?.error?.data || null
   if (!payload) return guess || 'Transaction failed'
   try {
@@ -46,12 +41,21 @@ function extractDeepError(e) {
   try {
     const panicIface = new ethers.Interface(['function Panic(uint256)'])
     const [code] = panicIface.decodeErrorResult('Panic', payload)
-    if (code) return `Panic: 0x${BigInt(code).toString(16)}`
+    if (code != null) return `Panic: 0x${BigInt(code).toString(16)}`
   } catch {}
   return guess || 'Transaction would revert'
 }
 
-/* ---------- Text helpers ---------- */
+const SOFT_ERROR_PATTERNS = [
+  'coalesce',
+  'failed to fetch',
+  'replacement transaction',
+  'repriced',
+]
+const isSoftNetworkError = (msg = '') =>
+  SOFT_ERROR_PATTERNS.some((p) => msg.toLowerCase().includes(p))
+
+/* -------------------- Text helpers -------------------- */
 const needsSpaceBefore = (str) => {
   if (!str) return false
   const ch = str[0]
@@ -82,6 +86,33 @@ function buildPreviewSingle(parts, word, blankIndex) {
   return out.join('')
 }
 
+/* -------------------- Tiny UI helpers -------------------- */
+const Chip = ({ children }) => (
+  <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700 text-sm">
+    {children}
+  </span>
+)
+
+/* -------------------- Cache helpers -------------------- */
+const CACHE_TTL_MS = 20_000
+function loadCache(id) {
+  try {
+    const raw = localStorage.getItem(`madfill:round:${id}`)
+    if (!raw) return null
+    const obj = JSON.parse(raw)
+    if (!obj?.ts || Date.now() - obj.ts > CACHE_TTL_MS) return null
+    return obj
+  } catch { return null }
+}
+function saveCache(id, payload) {
+  try {
+    localStorage.setItem(
+      `madfill:round:${id}`,
+      JSON.stringify({ ts: Date.now(), ...payload })
+    )
+  } catch {}
+}
+
 /* ===================================================== */
 
 export default function RoundDetailPage() {
@@ -92,7 +123,7 @@ export default function RoundDetailPage() {
   const idParam = isReady ? router.query?.id : undefined
   const id = useMemo(() => (Array.isArray(idParam) ? idParam[0] : idParam), [idParam])
 
-  // ✅ Tx context: address, chain status, helpers, and BASE RPC
+  // ✅ Unified Tx context
   const {
     address,
     isOnBase,
@@ -100,7 +131,13 @@ export default function RoundDetailPage() {
     joinPool1,
     claimPool1,
     BASE_RPC,
+    FILLIN_ADDRESS,
   } = useTx()
+
+  const CONTRACT_ADDRESS =
+    FILLIN_ADDRESS ||
+    process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
+    '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -120,9 +157,14 @@ export default function RoundDetailPage() {
   const [claimedNow, setClaimedNow] = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
   const [shareUrl, setShareUrl] = useState('')
+  const [lastTxHash, setLastTxHash] = useState(null)
+  const [optimisticKey, setOptimisticKey] = useState(null) // rollback handle
 
   const { width, height } = useWindowSize()
   const [tick, setTick] = useState(0)
+
+  // Track in-flight to prevent double-joins
+  const inFlightRef = useRef(false)
 
   const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
   const toEth = (wei) => {
@@ -141,7 +183,7 @@ export default function RoundDetailPage() {
   }, [round?.deadline])
 
   const youWon = useMemo(() => {
-    if (!address || !round?.winner || round?.winner === '0x0000000000000000000000000000000000000000') return false
+    if (!address || !round?.winner || round?.winner === ethers.ZeroAddress) return false
     return address.toLowerCase() === round.winner.toLowerCase()
   }, [address, round?.winner])
 
@@ -188,83 +230,110 @@ export default function RoundDetailPage() {
     return () => clearInterval(intId)
   }, [router.asPath, id, isReady])
 
-  /* ---------- load round (read-only provider) ---------- */
+  /* ---------- read-only provider + helpers ---------- */
+  const provider = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [BASE_RPC])
+  const contract = useMemo(() => {
+    try { return new ethers.Contract(CONTRACT_ADDRESS, abi, provider) } catch { return null }
+  }, [CONTRACT_ADDRESS, provider])
+
+  const fetchRoundState = useCallback(async (rid) => {
+    if (!contract) throw new Error('Contract not available')
+    const info = await contract.getPool1Info(BigInt(rid))
+    const name = info.name_ ?? info[0]
+    const theme = info.theme_ ?? info[1]
+    const parts = info.parts_ ?? info[2]
+    const feeBase = info.feeBase_ ?? info[3]
+    const deadline = Number(info.deadline_ ?? info[4])
+    const creator = info.creator_ ?? info[5]
+    const participants = info.participants_ ?? info[6]
+    const winner = info.winner_ ?? info[7]
+    const claimed = info.claimed_ ?? info[8]
+    const poolBalance = info.poolBalance_ ?? info[9]
+
+    let subms = []
+    let takenSetLocal = new Set()
+    try {
+      const packed = await contract.getPool1SubmissionsPacked(BigInt(rid))
+      const addrs = packed.addrs || packed[0] || []
+      const usernames = packed.usernames || packed[1] || []
+      const words = packed.words || packed[2] || []
+      const blankIdxs = packed.blankIndexes || packed[3] || []
+      subms = addrs.map((addr, i) => {
+        const username = usernames[i] || ''
+        const word = words[i] || ''
+        const idx = Number(blankIdxs[i] ?? 0)
+        return { addr, username, word, index: idx, preview: buildPreviewSingle(parts, word, idx) }
+      })
+    } catch {}
+
+    if (subms.length === 0 && (participants?.length || 0) > 0) {
+      subms = await Promise.all(
+        (participants || []).map(async (addr) => {
+          try {
+            const s = await contract.getPool1Submission(BigInt(rid), addr)
+            const username = s?.[0] || ''
+            const word = s?.[1] || ''
+            const idx = Number(s?.[3] ?? 0)
+            return { addr, username, word, index: idx, preview: buildPreviewSingle(parts, word, idx) }
+          } catch {
+            return { addr, username: '', word: '', index: 0, preview: buildPreviewSingle(parts, '', 0) }
+          }
+        })
+      )
+    }
+
+    try {
+      const taken = await contract.getPool1Taken(BigInt(rid))
+      takenSetLocal = new Set((taken || []).map((b, i) => (b ? i : null)).filter((x) => x !== null))
+    } catch {
+      takenSetLocal = new Set(subms.map((s) => s.index))
+    }
+
+    return {
+      round: {
+        id: rid,
+        name: name || `Round #${rid}`,
+        theme,
+        parts,
+        feeBase,
+        deadline,
+        creator,
+        winner,
+        claimed,
+        poolBalance,
+        entrants: participants?.length ?? subms.length,
+      },
+      submissions: subms,
+      takenSet: takenSetLocal,
+    }
+  }, [contract])
+
+  /* ---------- load round with cache ---------- */
   useEffect(() => {
     if (!isReady || !id) return
     let cancelled = false
     setLoading(true); setError(null)
 
+    // Warm from cache for snappy UI
+    const cached = loadCache(id)
+    if (cached && !cancelled) {
+      setRound(cached.round)
+      setSubmissions(cached.submissions)
+      setTakenSet(new Set(cached.takenList || []))
+      setLoading(false)
+    }
+
     ;(async () => {
       try {
-        const provider = new ethers.JsonRpcProvider(BASE_RPC)
-        const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
-
-        const info = await ct.getPool1Info(BigInt(id))
-        const name = info.name_ ?? info[0]
-        const theme = info.theme_ ?? info[1]
-        const parts = info.parts_ ?? info[2]
-        const feeBase = info.feeBase_ ?? info[3]
-        const deadline = Number(info.deadline_ ?? info[4])
-        const creator = info.creator_ ?? info[5]
-        const participants = info.participants_ ?? info[6]
-        const winner = info.winner_ ?? info[7]
-        const claimed = info.claimed_ ?? info[8]
-        const poolBalance = info.poolBalance_ ?? info[9]
-
-        let subms = []
-        let takenSetLocal = new Set()
-        try {
-          const packed = await ct.getPool1SubmissionsPacked(BigInt(id))
-          const addrs = packed.addrs || packed[0] || []
-          const usernames = packed.usernames || packed[1] || []
-          const words = packed.words || packed[2] || []
-          const blankIdxs = packed.blankIndexes || packed[3] || []
-          subms = addrs.map((addr, i) => {
-            const username = usernames[i] || ''
-            const word = words[i] || ''
-            const idx = Number(blankIdxs[i] ?? 0)
-            return { addr, username, word, index: idx, preview: buildPreviewSingle(parts, word, idx) }
-          })
-        } catch {}
-
-        if (subms.length === 0 && (participants?.length || 0) > 0) {
-          subms = await Promise.all(
-            (participants || []).map(async (addr) => {
-              try {
-                const s = await ct.getPool1Submission(BigInt(id), addr)
-                const username = s?.[0] || ''
-                const word = s?.[1] || ''
-                const idx = Number(s?.[3] ?? 0)
-                return { addr, username, word, index: idx, preview: buildPreviewSingle(parts, word, idx) }
-              } catch {
-                return { addr, username: '', word: '', index: 0, preview: buildPreviewSingle(parts, '', 0) }
-              }
-            })
-          )
-        }
-
-        try {
-          const taken = await ct.getPool1Taken(BigInt(id))
-          takenSetLocal = new Set((taken || []).map((b, i) => (b ? i : null)).filter((x) => x !== null))
-        } catch {
-          takenSetLocal = new Set(subms.map((s) => s.index))
-        }
-
+        const fresh = await fetchRoundState(id)
         if (cancelled) return
-        setTakenSet(takenSetLocal)
-        setSubmissions(subms)
-        setRound({
-          id,
-          name: name || `Round #${id}`,
-          theme,
-          parts,
-          feeBase,
-          deadline,
-          creator,
-          winner,
-          claimed,
-          poolBalance,
-          entrants: participants?.length ?? subms.length,
+        setRound(fresh.round)
+        setSubmissions(fresh.submissions)
+        setTakenSet(fresh.takenSet)
+        saveCache(id, {
+          round: fresh.round,
+          submissions: fresh.submissions,
+          takenList: Array.from(fresh.takenSet),
         })
       } catch (e) {
         console.error(e)
@@ -275,7 +344,7 @@ export default function RoundDetailPage() {
     })()
 
     return () => { cancelled = true }
-  }, [id, isReady, BASE_RPC])
+  }, [id, isReady, fetchRoundState])
 
   /* ---------- inputs ---------- */
   function sanitizeWord(raw) {
@@ -292,9 +361,69 @@ export default function RoundDetailPage() {
     setInputError(clean ? '' : 'Please enter one word (max 16 chars).')
   }
 
-  /* ---------- actions (use Tx helpers) ---------- */
+  /* ---------- awaiters ---------- */
+  async function waitForTxOrState({ hash, rid, timeoutMs = 30000 }) {
+    const start = Date.now()
+    try {
+      if (hash) {
+        const rec = await provider.waitForTransaction(hash, 1, timeoutMs).catch(() => null)
+        if (rec && rec.status === 1) return true
+      }
+    } catch {}
+
+    // Fallback: poll contract state until claimed/winner or new entrant shows up
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const { round: rd, submissions: subs } = await fetchRoundState(rid)
+        const entrantSeen = address
+          ? subs.some((s) => s.addr?.toLowerCase?.() === address.toLowerCase())
+          : false
+        const payoutSeen = rd.claimed || (rd.winner && rd.winner !== ethers.ZeroAddress)
+        if (entrantSeen || payoutSeen) return true
+      } catch {}
+      await new Promise((r) => setTimeout(r, 1500))
+    }
+    return false
+  }
+
+  /* ---------- optimistic helpers ---------- */
+  function addOptimisticEntry() {
+    if (!address || !round) return null
+    const key = `optim:${address.toLowerCase()}:${Date.now()}`
+    const temp = {
+      addr: address,
+      username: (usernameInput || '').trim().slice(0, 32),
+      word: sanitizeWord(wordInput),
+      index: Number(selectedBlank),
+      preview: buildPreviewSingle(round.parts, sanitizeWord(wordInput), Number(selectedBlank)),
+      _optimistic: true,
+      _key: key,
+    }
+    setSubmissions((subs) => [temp, ...subs])
+    setTakenSet((s) => new Set([...s, Number(selectedBlank)]))
+    setRound((r) => (r ? { ...r, entrants: (r.entrants || 0) + 1 } : r))
+    setOptimisticKey(key)
+    return key
+  }
+  function rollbackOptimisticEntry(key) {
+    if (!key) return
+    setSubmissions((subs) => subs.filter((s) => s._key !== key))
+    setTakenSet((s) => {
+      // if no real submission occupied that blank, free it
+      const stillTakenByReal = submissions.some((s2) => !s2._optimistic && s2.index === selectedBlank)
+      if (stillTakenByReal) return s
+      const next = new Set(s); next.delete(Number(selectedBlank)); return next
+    })
+    setRound((r) => (r ? { ...r, entrants: Math.max(0, (r.entrants || 0) - 1) } : r))
+    setOptimisticKey(null)
+  }
+
+  /* ---------- actions ---------- */
   const handleJoin = useCallback(async () => {
     try {
+      if (inFlightRef.current) return
+      inFlightRef.current = true
+
       if (!round) throw new Error('Round not ready')
       if (ended) throw new Error('Round ended')
       if (!wordInput.trim()) throw new Error('Please enter one word')
@@ -302,7 +431,7 @@ export default function RoundDetailPage() {
       if (alreadyEntered) throw new Error('You already entered this round')
       if (takenSet.has(selectedBlank)) throw new Error('That blank is already taken')
 
-      setBusy(true); setStatus('Submitting your entry…')
+      setBusy(true); setStatus('Submitting your entry…'); setLastTxHash(null)
 
       const ok = await switchToBase()
       if (!ok) throw new Error('Please switch to Base')
@@ -310,7 +439,10 @@ export default function RoundDetailPage() {
       const feeBaseWei = round.feeBase ?? 0n
       if (feeBaseWei <= 0n) throw new Error('Entry fee not available yet, try again.')
 
-      await joinPool1({
+      // 🚀 Optimistic UI
+      const optKey = addOptimisticEntry()
+
+      const res = await joinPool1({
         id,
         word: sanitizeWord(wordInput),
         username: (usernameInput || '').trim().slice(0, 32),
@@ -318,33 +450,104 @@ export default function RoundDetailPage() {
         feeBaseWei: BigInt(feeBaseWei),
       })
 
-      setStatus('Entry submitted!'); setShowConfetti(true)
-      router.replace(router.asPath)
+      const txHash = res?.hash || res?.transactionHash || (typeof res === 'string' && res.startsWith('0x') ? res : null)
+      if (txHash) setLastTxHash(txHash)
+
+      const ok2 = await waitForTxOrState({ hash: txHash, rid: id, timeoutMs: 30000 })
+      if (ok2) {
+        setStatus('Entry submitted!')
+        setShowConfetti(true)
+        const fresh = await fetchRoundState(id)
+        setRound(fresh.round); setSubmissions(fresh.submissions); setTakenSet(fresh.takenSet)
+        saveCache(id, {
+          round: fresh.round,
+          submissions: fresh.submissions,
+          takenList: Array.from(fresh.takenSet),
+        })
+        setOptimisticKey(null) // real data arrived
+      } else {
+        setStatus('Submitted. Waiting for confirmation on-chain…')
+      }
     } catch (e) {
       console.error(e)
-      setStatus(extractDeepError(e).split('\n')[0])
-      setShowConfetti(false)
-    } finally { setBusy(false) }
-  }, [round, ended, wordInput, inputError, alreadyEntered, takenSet, selectedBlank, switchToBase, joinPool1, usernameInput, id, router])
+      const msg = extractDeepError(e).split('\n')[0] || ''
+      if (isSoftNetworkError(msg)) {
+        setStatus('Network hiccup. Verifying on-chain…')
+        try {
+          const fresh = await fetchRoundState(id)
+          setRound(fresh.round); setSubmissions(fresh.submissions); setTakenSet(fresh.takenSet)
+          saveCache(id, {
+            round: fresh.round,
+            submissions: fresh.submissions,
+            takenList: Array.from(fresh.takenSet),
+          })
+          const joined =
+            address && fresh.submissions.some((s) => s.addr?.toLowerCase?.() === address.toLowerCase())
+          if (joined) { setShowConfetti(true); setStatus('Entry submitted!'); setOptimisticKey(null) }
+          else if (optimisticKey) rollbackOptimisticEntry(optimisticKey)
+        } catch {
+          if (optimisticKey) rollbackOptimisticEntry(optimisticKey)
+        }
+      } else {
+        if (optimisticKey) rollbackOptimisticEntry(optimisticKey)
+        setStatus(msg)
+        setShowConfetti(false)
+      }
+    } finally {
+      setBusy(false)
+      inFlightRef.current = false
+    }
+  }, [round, ended, wordInput, inputError, alreadyEntered, takenSet, selectedBlank, switchToBase, joinPool1, usernameInput, id, fetchRoundState, optimisticKey, address])
 
   const handleFinalizePayout = useCallback(async () => {
     try {
       if (!round) throw new Error('Round not ready')
-      setBusy(true); setStatus('Finalizing and paying out…')
+      setBusy(true); setStatus('Finalizing and paying out…'); setLastTxHash(null)
 
       const ok = await switchToBase()
       if (!ok) throw new Error('Please switch to Base')
 
-      await claimPool1(id)
+      const res = await claimPool1(id)
+      const txHash = res?.hash || res?.transactionHash || (typeof res === 'string' && res.startsWith('0x') ? res : null)
+      if (txHash) setLastTxHash(txHash)
 
-      setStatus('Payout executed'); setClaimedNow(true); setShowConfetti(true)
-      setTimeout(() => router.replace(router.asPath), 1500)
+      const confirmed = await waitForTxOrState({ hash: txHash, rid: id, timeoutMs: 30000 })
+      if (confirmed) {
+        setStatus('Payout executed')
+        setClaimedNow(true)
+        setShowConfetti(true)
+        const fresh = await fetchRoundState(id)
+        setRound(fresh.round); setSubmissions(fresh.submissions); setTakenSet(fresh.takenSet)
+        saveCache(id, {
+          round: fresh.round,
+          submissions: fresh.submissions,
+          takenList: Array.from(fresh.takenSet),
+        })
+      } else {
+        setStatus('Finalized. Waiting for confirmation on-chain…')
+      }
     } catch (e) {
       console.error(e)
-      setStatus(extractDeepError(e).split('\n')[0])
-      setShowConfetti(false)
+      const msg = extractDeepError(e).split('\n')[0] || ''
+      if (isSoftNetworkError(msg)) {
+        setStatus('Network hiccup. Verifying on-chain…')
+        try {
+          const fresh = await fetchRoundState(id)
+          setRound(fresh.round); setSubmissions(fresh.submissions); setTakenSet(fresh.takenSet)
+          saveCache(id, {
+            round: fresh.round,
+            submissions: fresh.submissions,
+            takenList: Array.from(fresh.takenSet),
+          })
+          const success = fresh.round?.claimed || (fresh.round?.winner && fresh.round.winner !== ethers.ZeroAddress)
+          if (success) { setClaimedNow(true); setShowConfetti(true); setStatus('Payout executed') }
+        } catch {}
+      } else {
+        setStatus(msg)
+        setShowConfetti(false)
+      }
     } finally { setBusy(false) }
-  }, [round, switchToBase, claimPool1, id, router])
+  }, [round, switchToBase, claimPool1, id, fetchRoundState])
 
   /* ---------- derived for ShareBar ---------- */
   const feeEthNum = useMemo(() => toEth(round?.feeBase), [round?.feeBase])
@@ -376,6 +579,12 @@ export default function RoundDetailPage() {
   const pageUrl = shareUrl || absoluteUrl(`/round/${id || ''}`)
   const ogImage = buildOgUrl({ screen: 'round', roundId: String(id || '') })
 
+  /* ---------- Blank occupancy mini bar ---------- */
+  const occupancyPct = useMemo(() => {
+    if (!blanksCount) return 0
+    return Math.round((takenSet.size / blanksCount) * 100)
+  }, [blanksCount, takenSet.size])
+
   return (
     <Layout>
       <Head>
@@ -400,6 +609,14 @@ export default function RoundDetailPage() {
             <a className="underline decoration-dotted" href={explorer(`address/${CONTRACT_ADDRESS}`)} target="_blank" rel="noopener noreferrer">
               View Contract
             </a>
+            {lastTxHash && (
+              <>
+                <span className="mx-2">•</span>
+                <a className="underline decoration-dotted" href={explorer(`tx/${lastTxHash}`)} target="_blank" rel="noopener noreferrer">
+                  View Tx
+                </a>
+              </>
+            )}
           </div>
         </div>
 
@@ -409,6 +626,7 @@ export default function RoundDetailPage() {
         {!loading && !error && round && (
           <>
             <div className="grid md:grid-cols-2 gap-6">
+              {/* Original Card */}
               <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
                 <CardHeader className="text-center font-bold bg-slate-800/60 border-b border-slate-700">
                   😂 Original Card
@@ -431,6 +649,7 @@ export default function RoundDetailPage() {
                 </CardContent>
               </Card>
 
+              {/* Enter */}
               <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
                 <CardHeader className="text-center font-bold bg-slate-800/60 border-b border-slate-700">
                   ✍️ Enter This Round
@@ -454,31 +673,48 @@ export default function RoundDetailPage() {
                       {blanksCount === 0 ? (
                         <div className="text-xs text-amber-300">This template has no blanks.</div>
                       ) : (
-                        <div className="flex flex-wrap gap-2">
-                          {[...Array(blanksCount).keys()].map((i) => {
-                            const isTaken = takenSet.has(i)
-                            const isActive = selectedBlank === i
-                            return (
-                              <button
-                                key={i}
-                                type="button"
-                                onClick={() => !isTaken && setSelectedBlank(i)}
-                                disabled={isTaken || busy}
-                                className={[
-                                  'px-3 py-1 rounded-lg border text-sm',
-                                  isTaken
-                                    ? 'bg-slate-800/40 border-slate-700 text-slate-500 cursor-not-allowed'
-                                    : isActive
-                                    ? 'bg-indigo-600 border-indigo-500 text-white'
-                                    : 'bg-slate-800/70 border-slate-700 text-slate-200 hover:bg-slate-700/70',
-                                ].join(' ')}
-                                title={isTaken ? 'Already taken by another entry' : `Insert into Blank #${i + 1}`}
-                              >
-                                #{i + 1}
-                              </button>
-                            )
-                          })}
-                        </div>
+                        <>
+                          {/* Mini occupancy bar */}
+                          <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
+                            <div className="flex justify-between text-xs text-slate-300">
+                              <span>Blank Occupancy</span>
+                              <span>{takenSet.size}/{blanksCount} ({occupancyPct}%)</span>
+                            </div>
+                            <div className="mt-2 h-2 rounded bg-slate-700 overflow-hidden">
+                              <div
+                                className="h-2 rounded bg-emerald-400 transition-all"
+                                style={{ width: `${occupancyPct}%` }}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Chips per-blank */}
+                          <div className="flex flex-wrap gap-2">
+                            {[...Array(blanksCount).keys()].map((i) => {
+                              const isTaken = takenSet.has(i)
+                              const isActive = selectedBlank === i
+                              return (
+                                <button
+                                  key={i}
+                                  type="button"
+                                  onClick={() => !isTaken && setSelectedBlank(i)}
+                                  disabled={isTaken || busy}
+                                  className={[
+                                    'px-3 py-1 rounded-lg border text-sm',
+                                    isTaken
+                                      ? 'bg-slate-800/40 border-slate-700 text-slate-500 cursor-not-allowed'
+                                      : isActive
+                                      ? 'bg-indigo-600 border-indigo-500 text-white'
+                                      : 'bg-slate-800/70 border-slate-700 text-slate-200 hover:bg-slate-700/70',
+                                  ].join(' ')}
+                                  title={isTaken ? 'Already taken by another entry' : `Insert into Blank #${i + 1}`}
+                                >
+                                  #{i + 1}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </>
                       )}
                     </div>
 
@@ -503,15 +739,9 @@ export default function RoundDetailPage() {
                     </div>
 
                     <div className="flex flex-wrap items-center gap-3 text-sm">
-                      <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
-                        Entry Fee: {fmt(feeEthNum, 6)} ETH (~${fmt(feeUsd)})
-                      </span>
-                      <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
-                        Entrants: {round.entrants}
-                      </span>
-                      <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
-                        Prize Pool: {fmt(poolEth, 6)} ETH (~${fmt(poolUsd)})
-                      </span>
+                      <Chip>Entry Fee: {fmt(feeEthNum, 6)} ETH (~${fmt(feeUsd)})</Chip>
+                      <Chip>Entrants: {round.entrants}</Chip>
+                      <Chip>Prize Pool: {fmt(poolEth, 6)} ETH (~${fmt(poolUsd)})</Chip>
                     </div>
 
                     {blanksCount > 0 && takenSet.size === blanksCount && (
@@ -548,7 +778,7 @@ export default function RoundDetailPage() {
               </Card>
             </div>
 
-            {/* Stats + actions */}
+            {/* Status + payout actions */}
             <div className="mt-6 rounded-xl bg-slate-900/70 border border-slate-700 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="text-sm text-slate-300">
@@ -576,14 +806,88 @@ export default function RoundDetailPage() {
               </div>
             </div>
 
-            {/* Entrants */}
+            {/* 🏁 Results Card */}
+            <div className="mt-6 grid md:grid-cols-2 gap-6">
+              <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
+                <CardHeader className="text-center font-bold bg-slate-800/60 border-b border-slate-700">
+                  🏁 Results & Payout
+                </CardHeader>
+                <CardContent className="p-5 space-y-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Chip>Prize Pool: {fmt(poolEth, 6)} ETH</Chip>
+                    {round.claimed && <Chip>Claimed</Chip>}
+                    {!round.claimed && ended && <Chip>Pending Payout</Chip>}
+                  </div>
+                  <div className="text-sm text-slate-300">
+                    {round.winner && round.winner !== ethers.ZeroAddress ? (
+                      <>
+                        Winner:{' '}
+                        <a className="underline decoration-dotted" href={explorer(`address/${round.winner}`)} target="_blank" rel="noopener noreferrer">
+                          {shortAddr(round.winner)}
+                        </a>
+                      </>
+                    ) : (
+                      <>Winner: —</>
+                    )}
+                  </div>
+                  {lastTxHash && (
+                    <div className="text-sm">
+                      Payout Tx:{' '}
+                      <a className="underline decoration-dotted" href={explorer(`tx/${lastTxHash}`)} target="_blank" rel="noopener noreferrer">
+                        {shortAddr(lastTxHash)}
+                      </a>
+                    </div>
+                  )}
+                  <div className="text-xs text-slate-400">
+                    Note: If your contract supports multiple winners/splits, share the ABI method and I’ll display per-winner amounts precisely.
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Entrants quick stats + per-blank grid */}
+              <Card className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
+                <CardHeader className="text-center font-bold bg-slate-800/60 border-b border-slate-700">
+                  📊 Blanks Snapshot
+                </CardHeader>
+                <CardContent className="p-5 space-y-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Chip>Blanks: {blanksCount}</Chip>
+                    <Chip>Taken: {takenSet.size}</Chip>
+                    <Chip>Open: {Math.max(0, blanksCount - takenSet.size)}</Chip>
+                  </div>
+                  <div className="grid grid-cols-6 sm:grid-cols-8 md:grid-cols-10 gap-1">
+                    {[...Array(blanksCount).keys()].map((i) => {
+                      const taken = takenSet.has(i)
+                      return (
+                        <div
+                          key={i}
+                          className={[
+                            'h-3 rounded',
+                            taken ? 'bg-emerald-400' : 'bg-slate-700'
+                          ].join(' ')}
+                          title={taken ? `Blank #${i + 1}: taken` : `Blank #${i + 1}: open`}
+                        />
+                      )
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Entrants list */}
             <div className="mt-6 rounded-xl bg-slate-900/70 border border-slate-700 p-5">
               <div className="text-slate-200 mb-3">Entrants ({submissions.length})</div>
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {submissions.map((s, i) => {
                   const primary = `https://effigy.im/a/${s.addr}`
                   return (
-                    <div key={`${s.addr}-${i}`} className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
+                    <div
+                      key={`${s.addr}-${i}-${s._key || ''}`}
+                      className={[
+                        'rounded-lg border p-3',
+                        s._optimistic ? 'bg-indigo-900/30 border-indigo-500/50' : 'bg-slate-800/60 border-slate-700'
+                      ].join(' ')}
+                    >
                       <div className="flex items-center gap-2">
                         <img
                           src={primary}
@@ -593,10 +897,14 @@ export default function RoundDetailPage() {
                           className="rounded-full ring-1 ring-slate-700"
                           onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
                         />
-                        <div className="truncate text-sm">{s.username || shortAddr(s.addr)}</div>
+                        <div className="truncate text-sm">
+                          {s.username || shortAddr(s.addr)}
+                          {s._optimistic && <span className="ml-1 text-[10px] text-indigo-300">(pending)</span>}
+                        </div>
                       </div>
                       <div className="mt-2 text-xs italic line-clamp-3">{s.preview}</div>
                       <div className="mt-2 flex items-center gap-3 text-[11px]">
+                        <span className="px-1.5 py-0.5 rounded bg-slate-800/70 border border-slate-700">Blank #{s.index + 1}</span>
                         <a className="underline text-slate-300" target="_blank" rel="noopener noreferrer" href={explorer(`address/${s.addr}`)}>
                           Explorer
                         </a>
