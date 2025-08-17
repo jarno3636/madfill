@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button'
 import abi from '@/abi/FillInStoryV3_ABI.json'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
-import { useTx } from '@/lib/TxProvider'
+import { useTx } from '@/components/TxProvider'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
