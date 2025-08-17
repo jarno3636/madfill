@@ -16,6 +16,7 @@ import abi from '@/abi/FillInStoryV3_ABI.json'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
+import { useTx } from '@/lib/TxProvider'
 import dynamic from 'next/dynamic'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
@@ -23,7 +24,7 @@ const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 // Env
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
-  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b' // FillInStoryV3 on Base mainnet
+  '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 const BASE_CHAIN_ID_HEX = '0x2105' // 8453
 
@@ -34,14 +35,20 @@ const DEFAULT_FEE_ETH = 0.002
 export default function ChallengePage() {
   useMiniAppReady()
 
-  // wallet / chain
-  const [address, setAddress] = useState(null)
-  const [isOnBase, setIsOnBase] = useState(true)
+  // -------- from TxProvider (wallet+network+tx helpers) --------
+  const {
+    address,
+    isOnBase,
+    isWarpcast,
+    connect,
+    switchToBase, // will no-op inside Warpcast per provider logic
+    createPool2,
+  } = useTx()
 
   // round + template data
   const [roundId, setRoundId] = useState('')
-  const [parts, setParts] = useState([])
-  const [originalWordRaw, setOriginalWordRaw] = useState('')
+  const [parts, setParts] = useState<string[]>([])
+  const [originalWordRaw, setOriginalWordRaw] = useState('') // "idx::word"
   const [creatorAddr, setCreatorAddr] = useState('')
   const [roundName, setRoundName] = useState('')
 
@@ -59,17 +66,14 @@ export default function ChallengePage() {
   const [showConfetti, setShowConfetti] = useState(false)
 
   const { width, height } = useWindowSize()
-  const tickRef = useRef(null)
+  const tickRef = useRef<any>(null)
   const router = useRouter()
 
-  // keep a reference to mini-app provider (if any)
-  const miniProvRef = useRef(null)
-
   // ---------- utils ----------
-  const needsSpaceBefore = (str) =>
+  const needsSpaceBefore = (str: string) =>
     !(/\s/.test(str?.[0]) || /[.,!?;:)"'\]]/.test(str?.[0]))
 
-  function parseStoredWord(stored) {
+  function parseStoredWord(stored: string) {
     if (!stored) return { index: 0, word: '' }
     const sep = stored.indexOf('::')
     if (sep > -1) {
@@ -81,12 +85,12 @@ export default function ChallengePage() {
     return { index: 0, word: stored }
   }
 
-  function buildPreviewSingle(_parts, w, idx) {
+  function buildPreviewSingle(_parts: string[], w: string, idx: number) {
     const n = _parts?.length || 0
     if (n === 0) return ''
     const blanks = Math.max(0, n - 1)
     const safeIdx = Math.max(0, Math.min(Math.max(0, blanks - 1), Number(idx) || 0))
-    const out = []
+    const out: string[] = []
     for (let i = 0; i < n; i++) {
       out.push(_parts[i] || '')
       if (i < n - 1) {
@@ -105,12 +109,12 @@ export default function ChallengePage() {
     return out.join('')
   }
 
-  function buildPreviewFromStored(_parts, stored) {
+  function buildPreviewFromStored(_parts: string[], stored: string) {
     const { index, word } = parseStoredWord(stored)
     return buildPreviewSingle(_parts, word, index)
   }
 
-  const sanitizeWord = (raw) =>
+  const sanitizeWord = (raw: string) =>
     (raw || '')
       .replace(/\s+/g, ' ')
       .trim()
@@ -133,110 +137,6 @@ export default function ChallengePage() {
     () => buildPreviewSingle(parts, word, blankIndex),
     [parts, word, blankIndex]
   )
-
-  // ---------- prefer Mini App provider if present ----------
-  const getEip1193 = useCallback(async () => {
-    if (typeof window !== 'undefined' && window.ethereum) return window.ethereum
-    if (miniProvRef.current) return miniProvRef.current
-    const inWarpcast = typeof navigator !== 'undefined' && /Warpcast/i.test(navigator.userAgent)
-    if (!inWarpcast) return null
-    try {
-      // MiniApp SDK provider (lazy import to avoid SSR issues)
-      const mod = await import('@farcaster/miniapp-sdk')
-      const prov = await mod.sdk.wallet.getEthereumProvider()
-      miniProvRef.current = prov
-      return prov
-    } catch {
-      return null
-    }
-  }, [])
-
-  // ---------- wallet + chain (passive observe) ----------
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      // injected first
-      if (typeof window !== 'undefined' && window.ethereum) {
-        try {
-          const accts = await window.ethereum.request({ method: 'eth_accounts' })
-          if (!cancelled) setAddress(accts?.[0] || null)
-        } catch {}
-        try {
-          const p = new ethers.BrowserProvider(window.ethereum)
-          const net = await p.getNetwork()
-          if (!cancelled) setIsOnBase(net?.chainId === 8453n)
-        } catch {
-          if (!cancelled) setIsOnBase(true)
-        }
-        const onChain = () => {
-          try { window.location.reload() } catch {}
-        }
-        const onAcct = (accs) => setAddress(accs?.[0] || null)
-        window.ethereum.on?.('chainChanged', onChain)
-        window.ethereum.on?.('accountsChanged', onAcct)
-        return () => {
-          window.ethereum.removeListener?.('chainChanged', onChain)
-          window.ethereum.removeListener?.('accountsChanged', onAcct)
-        }
-      }
-
-      // else try mini app provider
-      const mini = await getEip1193()
-      if (mini && !cancelled) {
-        try {
-          const p = new ethers.BrowserProvider(mini)
-          const signer = await p.getSigner().catch(() => null)
-          const addr = await signer?.getAddress().catch(() => null)
-          if (!cancelled) setAddress(addr || null)
-          const net = await p.getNetwork()
-          if (!cancelled) setIsOnBase(net?.chainId === 8453n)
-        } catch {}
-      }
-    })()
-    return () => { cancelled = true }
-  }, [getEip1193])
-
-  useEffect(() => {
-    if (!address) return
-    ;(async () => {
-      try {
-        const p = await fetchFarcasterProfile(address)
-        if (p?.username) setUsername((u) => (u ? u : p.username.slice(0, 32)))
-      } catch {}
-    })()
-  }, [address])
-
-  async function switchToBase() {
-    const eip = await getEip1193()
-    if (!eip) return
-    try {
-      await eip.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: BASE_CHAIN_ID_HEX }]
-      })
-      setIsOnBase(true)
-    } catch (e) {
-      if (e?.code === 4902) {
-        try {
-          await eip.request({
-            method: 'wallet_addEthereumChain',
-            params: [
-              {
-                chainId: BASE_CHAIN_ID_HEX,
-                chainName: 'Base',
-                rpcUrls: [BASE_RPC],
-                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-                blockExplorerUrls: ['https://basescan.org']
-              }
-            ]
-          })
-          setIsOnBase(true)
-        } catch (err) {
-          console.error(err)
-        }
-      }
-    }
-  }
 
   // ---------- ticks / UX ----------
   useEffect(() => {
@@ -273,7 +173,7 @@ export default function ChallengePage() {
 
         const sub = await ct.getPool1Submission(BigInt(roundId), creator)
         if (cancelled || controller.signal.aborted) return
-        const origWordRaw = sub.word_ ?? sub[1] // stored as "idx::word"
+        const origWordRaw = sub.word_ ?? sub[1] // "idx::word"
 
         setParts(Array.isArray(_parts) ? _parts : [])
         setCreatorAddr(creator)
@@ -311,11 +211,12 @@ export default function ChallengePage() {
     )
   }, [parts])
 
-  // ---------- submit (Pool2) ----------
+  // ---------- submit (Pool2 via TxProvider) ----------
   async function handleSubmit() {
     try {
-      const eip = await getEip1193()
-      if (!eip) throw new Error('No wallet detected')
+      if (!address) {
+        await connect()
+      }
       if (!roundId || !/^\d+$/.test(String(roundId))) throw new Error('Invalid Round ID')
       if (!parts.length) throw new Error('Round has no template loaded yet')
 
@@ -325,50 +226,28 @@ export default function ChallengePage() {
       setBusy(true)
       setStatus('Submitting your challenger…')
 
-      await eip.request?.({ method: 'eth_requestAccounts' })
-
-      const provider = new ethers.BrowserProvider(eip)
-      const net = await provider.getNetwork()
-      if (net?.chainId !== 8453n) await switchToBase()
-
-      const signer = await provider.getSigner()
-      const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, signer)
-
+      // encode blank index into word string for onchain storage (ABI has no blankIndex)
       const encodedWord = `${blankIndex}::${cleanWord}`
       const safeFee = Number.isFinite(feeEth) && feeEth >= 0 ? feeEth : DEFAULT_FEE_ETH
-      const feeBase = ethers.parseUnits(String(safeFee), 18) // wei
-      const duration = BigInt(
-        Number.isFinite(durationSec) && durationSec > 0 ? durationSec : DEFAULT_DURATION_SECONDS
-      )
+      const feeBaseWei = ethers.parseUnits(String(safeFee), 18)
+      const durationSecs = Number.isFinite(durationSec) && durationSec > 0
+        ? durationSec
+        : DEFAULT_DURATION_SECONDS
 
-      // Slight buffer to avoid rounding reverts
-      const value = (feeBase * 1005n) / 1000n
+      // Provider handles staticCall, gas buffer, Base chain, and Warpcast quirks internally
+      await createPool2({
+        pool1Id: BigInt(roundId),
+        challengerWord: encodedWord,
+        challengerUsername: (username || '').slice(0, 32),
+        feeBaseWei,
+        durationSecs: BigInt(durationSecs),
+      })
 
-      // Preflight to surface clear reverts before sending tx
-      await ct.createPool2.staticCall(
-        BigInt(roundId),
-        encodedWord,
-        (username || '').slice(0, 32),
-        feeBase,
-        duration,
-        { value }
-      )
-
-      const tx = await ct.createPool2(
-        BigInt(roundId),
-        encodedWord,
-        (username || '').slice(0, 32),
-        feeBase,
-        duration,
-        { value }
-      )
-
-      await tx.wait()
       setStatus(`Challenger submitted to Round #${roundId}`)
       setShowConfetti(true)
       setTimeout(() => setShowConfetti(false), 2200)
       setTimeout(() => router.push('/vote'), 1400)
-    } catch (err) {
+    } catch (err: any) {
       console.error(err)
       setStatus(String(err?.shortMessage || err?.message || 'Submission failed'))
     } finally {
@@ -419,7 +298,12 @@ export default function ChallengePage() {
           <CardHeader className="bg-slate-800/60 border-b border-slate-700 flex items-center justify-between">
             <div className="font-bold">Challenger Form</div>
             {!isOnBase && (
-              <Button onClick={switchToBase} className="bg-cyan-700 hover:bg-cyan-600 text-sm">
+              <Button
+                onClick={() => !isWarpcast && switchToBase()}
+                disabled={isWarpcast}
+                className="bg-cyan-700 hover:bg-cyan-600 text-sm disabled:opacity-60"
+                title={isWarpcast ? 'Warpcast wallet handles network internally' : 'Switch to Base'}
+              >
                 Switch to Base
               </Button>
             )}
@@ -513,7 +397,7 @@ export default function ChallengePage() {
                       onChange={(e) => setWord(e.target.value)}
                       onBlur={() => setWord((w) => w.trim())}
                       placeholder="e.g., neon"
-                      className="mt-1 w_FULL rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
+                      className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                     />
                     {word && wordError && (
                       <div className="text-xs text-amber-300 mt-1">{wordError}</div>
@@ -546,9 +430,9 @@ export default function ChallengePage() {
                         <option value={2 * 24 * 60 * 60}>2 days</option>
                         <option value={3 * 24 * 60 * 60}>3 days</option>
                         <option value={5 * 24 * 60 * 60}>5 days</option>
-                        <option value={7 * 24 * 60 * 60}>7 days</option>
+                        <option value={7 * 60 * 60 * 24}>7 days</option>
                       </select>
-                      <div className="text_[11px] text-slate-400 mt-1">How long the vote stays open.</div>
+                      <div className="text-[11px] text-slate-400 mt-1">How long the vote stays open.</div>
                     </label>
                   </div>
                 </div>
@@ -560,28 +444,39 @@ export default function ChallengePage() {
               <Button
                 onClick={handleSubmit}
                 disabled={
-                  busy || !address || !parts.length || !roundId || !word || !!wordError
+                  busy || !roundId || !parts.length || !word || !!wordError
                 }
                 className="bg-blue-600 hover:bg-blue-500"
                 title={!address ? 'Connect your wallet' : 'Submit challenger'}
               >
-                Submit Challenger
+                {address ? 'Submit Challenger' : 'Connect & Submit'}
               </Button>
+
+              {!address && (
+                <Button
+                  variant="outline"
+                  onClick={connect}
+                  className="border-slate-600 text-slate-200"
+                >
+                  Connect Wallet
+                </Button>
+              )}
+
               <Link href="/vote" className="underline text-indigo-300 text-sm">
                 View Community Vote
               </Link>
               <span className="text-xs text-slate-400">
-                We send a small buffer over fee to avoid rounding reverts.
+                We send a small buffer over fee in the provider to avoid rounding reverts.
               </span>
             </div>
 
             {status && <div className="text-sm text-yellow-300">{status}</div>}
 
-            {/* ✅ Safe ShareBar after submit (no undefined round refs) */}
+            {/* ✅ Safe ShareBar after submit */}
             {String(status).toLowerCase().includes('submitted') && (
               <div className="text-sm mt-4">
                 <ShareBar
-                  url={absoluteUrl('/vote')} // send friends straight to the voting page
+                  url={absoluteUrl('/vote')}
                   title={`🧠 Vote in MadFill Round #${roundId}!`}
                   theme="MadFill"
                   templateName={roundName || `Round #${roundId}`}
