@@ -768,7 +768,6 @@ function IndexPage() {
                 </div>
               </div>
             </div>
-            </div>
           </CardContent>
         </Card>
       </main>
