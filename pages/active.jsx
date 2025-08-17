@@ -179,41 +179,57 @@ export default function ActivePools() {
     return results
   }
 
-  /* -------------- Load rounds via logs (fast & reliable) -------------- */
+  // chunked getLogs to avoid RPC window limits
+  const getLogsChunked = async ({ address, topics, fromBlock, toBlock, chunkSize = 200_000 }, signal) => {
+    const logs = []
+    let start = fromBlock
+    while (start <= toBlock) {
+      if (signal?.aborted) break
+      const end = Math.min(toBlock, start + chunkSize)
+      // eslint-disable-next-line no-await-in-loop
+      const part = await withRetry(() =>
+        provider.getLogs({ address, topics, fromBlock: start, toBlock: end })
+      ).catch(() => [])
+      logs.push(...part)
+      start = end + 1
+    }
+    return logs
+  }
+
+  /* -------------- Load rounds via logs + robust fallback -------------- */
   const loadRounds = async (price, signal) => {
     if (!contract) return setRounds([])
 
-    const latest = await withRetry(() => provider.getBlockNumber())
-    const windowBlocks = 500_000 // ~a few days; adjust if you want a longer list
-    const fromBlock = FILLIN_DEPLOY_BLOCK ?? Math.max(0, latest - windowBlocks)
+    const nowSec = Math.floor(Date.now() / 1000)
 
-    // 1) Get created + claimed logs in one window
+    // widen window (and chunk it) so we don't miss older still-active rounds
+    const latest = await withRetry(() => provider.getBlockNumber())
+    const DEFAULT_WINDOW = 2_000_000 // ~weeks on Base; widen if needed
+    const fromBlock = FILLIN_DEPLOY_BLOCK ?? Math.max(0, latest - DEFAULT_WINDOW)
+
+    // 1) Logs (created & claimed) in chunks
     const [createdLogs, claimedLogs] = await Promise.all([
-      withRetry(() =>
-        provider.getLogs({
-          address: CONTRACT_ADDRESS,
-          fromBlock,
-          toBlock: latest,
-          topics: [TOPIC_POOL1_CREATED],
-        })
-      ).catch(() => []),
-      withRetry(() =>
-        provider.getLogs({
-          address: CONTRACT_ADDRESS,
-          fromBlock,
-          toBlock: latest,
-          topics: [TOPIC_POOL1_CLAIMED],
-        })
-      ).catch(() => []),
+      getLogsChunked({
+        address: CONTRACT_ADDRESS,
+        topics: [TOPIC_POOL1_CREATED],
+        fromBlock,
+        toBlock: latest,
+      }, signal),
+      getLogsChunked({
+        address: CONTRACT_ADDRESS,
+        topics: [TOPIC_POOL1_CLAIMED],
+        fromBlock,
+        toBlock: latest,
+      }, signal),
     ])
     if (signal?.aborted) return
 
-    // 2) Build sets of ids
+    // 2) Parse IDs
     const createdIds = Array.from(
       new Set(
         createdLogs
           .map((lg) => {
-            try { return BigInt(lg.topics[1]).toString() } catch { return null }
+            try { return BigInt(lg.topics?.[1]).toString() } catch { return null }
           })
           .filter(Boolean)
       )
@@ -222,83 +238,107 @@ export default function ActivePools() {
     const claimedSet = new Set(
       claimedLogs
         .map((lg) => {
-          try { return BigInt(lg.topics[1]).toString() } catch { return null }
+          try { return BigInt(lg.topics?.[1]).toString() } catch { return null }
         })
         .filter(Boolean)
     )
 
-    // 3) Query getPool1Info for those ids (unclaimed + time window)
-    const now = Math.floor(Date.now() / 1000)
+    // helper to build a UI round from on-chain info
+    const roundFromInfo = async (idBI, info) => {
+      const name = info.name_ ?? info[0]
+      const theme = info.theme_ ?? info[1]
+      const parts = info.parts_ ?? info[2]
+      const feeBaseWei = info.feeBase_ ?? info[3] ?? 0n
+      const deadline = Number(info.deadline_ ?? info[4])
+      const participants = info.participants_ ?? info[6] ?? []
+      const claimed = Boolean(info.claimed_ ?? info[8])
 
-    const details = await limitMap(
-      createdIds,
-      6, // concurrency
-      async (idStr) => {
-        if (signal?.aborted) return null
-        if (claimedSet.has(idStr)) return null
+      if (claimed || deadline <= nowSec) return null
 
-        try {
-          const idBI = BigInt(idStr)
-          const info = await withRetry(() => contract.getPool1Info(idBI))
-          const name = info.name_ ?? info[0]
-          const theme = info.theme_ ?? info[1]
-          const parts = info.parts_ ?? info[2]
-          const feeBaseWei = info.feeBase_ ?? info[3] ?? 0n
-          const deadline = Number(info.deadline_ ?? info[4])
-          const participants = info.participants_ ?? info[6] ?? []
-          const claimed = Boolean(info.claimed_ ?? info[8])
+      let submissions = []
+      try {
+        const packed = await withRetry(() => contract.getPool1SubmissionsPacked(idBI))
+        const addrs = packed.addrs || packed[0] || []
+        const usernames = packed.usernames || packed[1] || []
+        const words = packed.words || packed[2] || []
+        const blankIdxs = packed.blankIndexes || packed[3] || []
+        submissions = addrs.map((addr, i) => {
+          const username = usernames[i] || ''
+          const word = words[i] || ''
+          const idx = Number(blankIdxs[i] ?? 0)
+          return { address: addr, username, word, blankIndex: idx, preview: buildPreviewSingle(parts, word, idx) }
+        })
+      } catch { /* non-fatal */ }
 
-          // Only active (not claimed + deadline in future)
-          if (claimed || deadline <= now) return null
+      const feeBase = Number(ethers.formatEther(feeBaseWei))
+      const estimatedUsd = price * (participants?.length || 0) * feeBase
 
-          // Pull submissions packed (cheap) for previews
-          let submissions = []
+      return {
+        id: Number(idBI),
+        name: name || `Round #${idBI}`,
+        theme,
+        parts,
+        feeBase: feeBase.toFixed(4),
+        deadline,
+        count: participants?.length || 0,
+        usd: estimatedUsd.toFixed(2),
+        usdApprox: usdIsApprox,
+        submissions,
+        badge: deadline - nowSec < 3600 ? '🔥 Ends Soon' : estimatedUsd > 5 ? '💰 Top Pool' : null,
+        emoji: ['🐸', '🦊', '🦄', '🐢', '🐙'][Number(idBI) % 5],
+      }
+    }
+
+    // 3) Build from logs
+    let roundsFromLogs = []
+    if (createdIds.length > 0) {
+      const details = await limitMap(
+        createdIds,
+        6, // concurrency
+        async (idStr) => {
+          if (signal?.aborted) return null
+          if (claimedSet.has(idStr)) return null
           try {
-            const packed = await withRetry(() => contract.getPool1SubmissionsPacked(idBI))
-            const addrs = packed.addrs || packed[0] || []
-            const usernames = packed.usernames || packed[1] || []
-            const words = packed.words || packed[2] || []
-            const blankIdxs = packed.blankIndexes || packed[3] || []
-            submissions = addrs.map((addr, i) => {
-              const username = usernames[i] || ''
-              const word = words[i] || ''
-              const idx = Number(blankIdxs[i] ?? 0)
-              const preview = buildPreviewSingle(parts, word, idx)
-              return { address: addr, username, word, blankIndex: idx, preview }
-            })
-          } catch {}
+            const idBI = BigInt(idStr)
+            const info = await withRetry(() => contract.getPool1Info(idBI))
+            return await roundFromInfo(idBI, info)
+          } catch { return null }
+        },
+        signal
+      )
+      roundsFromLogs = details.filter(Boolean)
+    }
 
-          const feeBase = Number(ethers.formatEther(feeBaseWei))
-          const estimatedUsd = price * (participants?.length || 0) * feeBase
+    // 4) Fallback if logs empty (scan the last N ids)
+    if (roundsFromLogs.length === 0) {
+      try {
+        const count = Number(await withRetry(() => contract.pool1Count()))
+        if (count > 0) {
+          const N = 120 // scan last N ids; adjust to your appetite
+          const start = Math.max(1, count - N + 1)
+          const ids = Array.from({ length: count - start + 1 }, (_, i) => BigInt(start + i))
 
-          return {
-            id: Number(idBI), // safe for UI order
-            name: name || `Round #${idStr}`,
-            theme,
-            parts,
-            feeBase: feeBase.toFixed(4),
-            deadline,
-            count: participants?.length || 0,
-            usd: estimatedUsd.toFixed(2),
-            usdApprox: usdIsApprox,
-            submissions,
-            // fun bits
-            badge: deadline - now < 3600 ? '🔥 Ends Soon' : estimatedUsd > 5 ? '💰 Top Pool' : null,
-            emoji: ['🐸', '🦊', '🦄', '🐢', '🐙'][Number(idStr) % 5],
-          }
-        } catch {
-          return null
+          const details = await limitMap(
+            ids.reverse(), // newest first
+            6,
+            async (idBI) => {
+              if (signal?.aborted) return null
+              try {
+                const info = await withRetry(() => contract.getPool1Info(idBI))
+                return await roundFromInfo(idBI, info)
+              } catch { return null }
+            },
+            signal
+          )
+          roundsFromLogs = details.filter(Boolean)
         }
-      },
-      signal
-    )
+      } catch {
+        // leave empty if fallback also fails
+      }
+    }
 
-    const all = details.filter(Boolean)
-
-    // Defensive: if logs window missed very old still-active rounds,
-    // you can optionally fall back to the last N IDs from pool1Count.
-    // (Kept off by default to avoid extra RPC.)
-    setRounds(all)
+    // 5) Commit
+    setRounds(roundsFromLogs.sort((a, b) => (b?.id || 0) - (a?.id || 0)))
   }
 
   /* -------------- Main polling loop -------------- */
