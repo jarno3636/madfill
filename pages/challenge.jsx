@@ -291,7 +291,6 @@ export default function ChallengePage() {
         setShowConfetti(true)
         setTimeout(() => setShowConfetti(false), 2200)
       } else {
-        // rare case: provider returned but status not 1
         setLastTxHash(txHash)
         throw new Error('Transaction reverted or not mined.')
       }
@@ -334,10 +333,13 @@ export default function ChallengePage() {
         {/* Hero */}
         <div className="rounded-2xl bg-slate-900/70 border border-slate-700 p-6 md:p-8 mb-6">
           <div className="flex items-center justify-between gap-3">
-            <h1 className="text-3xl md:text-4xl font-extrabold bg-gradient-to-r from-fuchsia-300 via-amber-300 to-cyan-300 bg-clip-text text-transparent">
-              😆 Submit a Challenger Card
-            </h1>
-            <div className="flex items-center gap-2">
+            {/* prevent wrapping; allow sideways scroll on tiny screens */}
+            <div className="overflow-x-auto max-w-full">
+              <h1 className="whitespace-nowrap text-3xl md:text-4xl font-extrabold bg-gradient-to-r from-fuchsia-300 via-amber-300 to-cyan-300 bg-clip-text text-transparent">
+                😆 Submit a Challenger Card
+              </h1>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
               {!isOnBase && (
                 <Button
                   onClick={() => !isWarpcast && switchToBase()}
@@ -349,12 +351,13 @@ export default function ChallengePage() {
                 </Button>
               )}
               <Button
+                size="sm"
                 variant="outline"
                 onClick={() => refreshRound()}
-                className="border-slate-600 text-slate-200 text-sm"
+                className="border-slate-600 text-slate-200 text-xs px-2 py-1"
                 title="Refresh target round"
               >
-                Refresh Round
+                Refresh
               </Button>
             </div>
           </div>
@@ -383,9 +386,10 @@ export default function ChallengePage() {
                     className="mt-1 w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-400"
                   />
                   <Button
+                    size="sm"
                     variant="secondary"
                     onClick={refreshRound}
-                    className="mt-1 bg-slate-700 hover:bg-slate-600 text-xs"
+                    className="mt-1 bg-slate-700 hover:bg-slate-600 text-[11px] px-2 py-1"
                   >
                     Reload
                   </Button>
@@ -578,12 +582,13 @@ export default function ChallengePage() {
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-bold">Challengeable Rounds</h2>
             <Button
+              size="sm"
               variant="outline"
               onClick={loadChallengeable}
-              className="border-slate-600 text-slate-200 text-sm"
+              className="border-slate-600 text-slate-200 text-xs px-2 py-1"
               title="Refresh list"
             >
-              Refresh List
+              Refresh
             </Button>
           </div>
 
@@ -617,6 +622,25 @@ export default function ChallengePage() {
             </div>
           )}
         </div>
+
+        {/* Footer */}
+        <footer className="mt-10 text-xs text-slate-400 flex flex-wrap items-center gap-3 justify-between border-t border-slate-800 pt-4">
+          <div className="flex items-center gap-3">
+            <Link href="/vote" className="underline text-indigo-300">Community Vote</Link>
+            <a
+              href={explorer(`address/${CONTRACT_ADDRESS}`)}
+              target="_blank"
+              rel="noreferrer"
+              className="underline text-indigo-300"
+              title="View contract on BaseScan"
+            >
+              Contract
+            </a>
+          </div>
+          <div className="opacity-80">
+            Built on Base • MadFill
+          </div>
+        </footer>
       </main>
     </Layout>
   )
