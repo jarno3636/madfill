@@ -20,9 +20,6 @@ import { categories as presetCategories } from '@/data/templates'
 // ✅ unified provider (the only wallet/tx source)
 import { useTx } from '@/components/TxProvider'
 
-// For decoding events
-import fillinAbi from '@/abi/FillInStoryV3_ABI.json'
-
 // Client-only confetti
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -36,9 +33,26 @@ const POOLS_ABI = [
   { inputs: [], name: 'BPS_DENOMINATOR', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
 ]
 
-/* ---------- optional deploy blocks to speed up log queries ---------- */
-const FILLIN_DEPLOY_BLOCK = Number(process.env.NEXT_PUBLIC_FILLIN_DEPLOY_BLOCK || 0) || null
-const NFT_DEPLOY_BLOCK    = Number(process.env.NEXT_PUBLIC_NFT_DEPLOY_BLOCK || 0) || null
+/* ---------- safe deploy-block parsing (supports hex or decimal) ---------- */
+const parseBlock = (v) => {
+  const s = (v ?? '').toString().trim()
+  if (!s) return null
+  if (s.startsWith('0x')) {
+    const n = Number.parseInt(s, 16)
+    return Number.isFinite(n) && n >= 0 ? n : null
+  }
+  const n = Number(s)
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null
+}
+const FILLIN_DEPLOY_BLOCK = parseBlock(process.env.NEXT_PUBLIC_FILLIN_DEPLOY_BLOCK)
+const NFT_DEPLOY_BLOCK    = parseBlock(process.env.NEXT_PUBLIC_NFT_DEPLOY_BLOCK)
+
+/* ---------- event topics (keeps stats fast without ABI decoding) ---------- */
+const TOPIC_POOL1_CREATED = ethers.id('Pool1Created(uint256,address,uint256,uint256)')
+const TOPIC_POOL1_CLAIMED = ethers.id('Pool1Claimed(uint256,address,uint256)')
+const TOPIC_POOL2_CREATED = ethers.id('Pool2Created(uint256,uint256,address,uint256,uint256)')
+const TOPIC_TRANSFER      = ethers.id('Transfer(address,address,uint256)')
+const TOPIC_ZERO_ADDRESS  = ethers.zeroPadValue(ethers.ZeroAddress, 32)
 
 /* ========== Helpers ========== */
 const sanitizeOneWord = (raw) =>
@@ -268,7 +282,6 @@ function IndexPage() {
       setStatsError(null)
       try {
         const provider = new ethers.JsonRpcProvider(BASE_RPC)
-
         const poolsAddr = (FILLIN_ADDRESS || FILLIN_ADDR_FALLBACK)
         const nftAddr   = NFT_ADDRESS
 
@@ -278,48 +291,48 @@ function IndexPage() {
         const poolsFrom = FILLIN_DEPLOY_BLOCK ?? defaultWindow
         const nftFrom   = NFT_DEPLOY_BLOCK ?? defaultWindow
 
-        // ----- Pools logs
-        let poolLogs = []
-        try {
-          poolLogs = await provider.getLogs({
-            address: poolsAddr,
-            fromBlock: poolsFrom,
-            toBlock: 'latest',
-          })
-        } catch {}
-
-        const iface = new ethers.Interface(fillinAbi)
+        // ----- Pools topics
         let totalPools = 0
         let claimedPools = 0
         let totalChallenges = 0
 
-        for (const lg of poolLogs) {
-          try {
-            const parsed = iface.parseLog(lg)
-            const name = parsed?.name || ''
-            const lname = name.toLowerCase()
-            if (lname.includes('poolcreated')) totalPools += 1
-            if (lname.includes('poolclaimed') || lname.includes('claimed')) claimedPools += 1
-            if (lname.includes('join') || lname.includes('challenge')) totalChallenges += 1
-          } catch { /* ignore unknown events */ }
+        if (poolsAddr) {
+          const [p1Created, p1Claimed, p2Created] = await Promise.all([
+            provider.getLogs({
+              address: poolsAddr,
+              fromBlock: poolsFrom,
+              toBlock: latest,
+              topics: [TOPIC_POOL1_CREATED],
+            }).catch(() => []),
+            provider.getLogs({
+              address: poolsAddr,
+              fromBlock: poolsFrom,
+              toBlock: latest,
+              topics: [TOPIC_POOL1_CLAIMED],
+            }).catch(() => []),
+            provider.getLogs({
+              address: poolsAddr,
+              fromBlock: poolsFrom,
+              toBlock: latest,
+              topics: [TOPIC_POOL2_CREATED],
+            }).catch(() => []),
+          ])
+          totalPools = p1Created.length
+          claimedPools = p1Claimed.length
+          totalChallenges = p2Created.length
         }
 
         const activePools = Math.max(0, totalPools - claimedPools)
 
-        // ----- NFT mints
+        // ----- NFT mints (Transfer with from == 0x0)
         let nftsMinted = 0
         if (nftAddr) {
-          const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)')
-          const ZERO_TOPIC = ethers.zeroPadValue(ethers.ZeroAddress, 32)
-          let nftLogs = []
-          try {
-            nftLogs = await provider.getLogs({
-              address: nftAddr,
-              fromBlock: nftFrom,
-              toBlock: 'latest',
-              topics: [TRANSFER_TOPIC, ZERO_TOPIC],
-            })
-          } catch {}
+          const nftLogs = await provider.getLogs({
+            address: nftAddr,
+            fromBlock: nftFrom,
+            toBlock: latest,
+            topics: [TOPIC_TRANSFER, TOPIC_ZERO_ADDRESS],
+          }).catch(() => [])
           nftsMinted = nftLogs.length
         }
 
@@ -735,7 +748,11 @@ function IndexPage() {
         <Card className="bg-slate-900/70 border border-slate-700">
           <CardHeader className="border-b border-slate-700">
             <h3 className="text-lg font-bold">Network Activity</h3>
-            {/* show error */}
+            {statsError && (
+              <p className="mt-2 text-xs text-rose-300">
+                {statsError}. Check RPC/contract addresses and deploy block envs.
+              </p>
+            )}
           </CardHeader>
           <CardContent className="p-5 space-y-5">
             {/* Tiles */}
