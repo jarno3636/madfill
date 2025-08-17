@@ -20,7 +20,7 @@ import { categories as presetCategories } from '@/data/templates'
 // ✅ unified provider (the only wallet/tx source)
 import { useTx } from '@/components/TxProvider'
 
-// For decoding events (already in your project per TxProvider)
+// For decoding events
 import fillinAbi from '@/abi/FillInStoryV3_ABI.json'
 
 // Client-only confetti
@@ -124,7 +124,6 @@ function IndexPage() {
   const durationSecs = useMemo(() => BigInt(Math.max(1, Number(durationDays)) * 24 * 60 * 60), [durationDays])
 
   // usd display
-  the:
   const [usd, setUsd] = useState(null)
 
   // preview words map
@@ -275,11 +274,11 @@ function IndexPage() {
 
         // fromBlock windows
         const latest = await provider.getBlockNumber()
-        const defaultWindow = Math.max(0, latest - 500_000) // fallback window if deploy block unknown
+        const defaultWindow = Math.max(0, latest - 500_000)
         const poolsFrom = FILLIN_DEPLOY_BLOCK ?? defaultWindow
         const nftFrom   = NFT_DEPLOY_BLOCK ?? defaultWindow
 
-        // ----- Pools logs: fetch all events for FillIn (bounded by fromBlock)
+        // ----- Pools logs
         let poolLogs = []
         try {
           poolLogs = await provider.getLogs({
@@ -302,14 +301,12 @@ function IndexPage() {
             if (lname.includes('poolcreated')) totalPools += 1
             if (lname.includes('poolclaimed') || lname.includes('claimed')) claimedPools += 1
             if (lname.includes('join') || lname.includes('challenge')) totalChallenges += 1
-          } catch {
-            // ignore unknown events
-          }
+          } catch { /* ignore unknown events */ }
         }
 
         const activePools = Math.max(0, totalPools - claimedPools)
 
-        // ----- NFT mints: ERC-721 Transfer where from == 0x0
+        // ----- NFT mints
         let nftsMinted = 0
         if (nftAddr) {
           const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)')
@@ -320,7 +317,7 @@ function IndexPage() {
               address: nftAddr,
               fromBlock: nftFrom,
               toBlock: 'latest',
-              topics: [TRANSFER_TOPIC, ZERO_TOPIC], // mint events only
+              topics: [TRANSFER_TOPIC, ZERO_TOPIC],
             })
           } catch {}
           nftsMinted = nftLogs.length
@@ -340,7 +337,7 @@ function IndexPage() {
     }
 
     load()
-    const id = setInterval(load, 60_000) // refresh every minute
+    const id = setInterval(load, 60_000)
     return () => { cancelled = true; clearInterval(id) }
   }, [BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS])
 
@@ -738,7 +735,7 @@ function IndexPage() {
         <Card className="bg-slate-900/70 border border-slate-700">
           <CardHeader className="border-b border-slate-700">
             <h3 className="text-lg font-bold">Network Activity</h3>
-            {statsError && <div className="mt-2 text-xs text-rose-300">{statsError}</div>}
+            {/* show error */}
           </CardHeader>
           <CardContent className="p-5 space-y-5">
             {/* Tiles */}
@@ -772,7 +769,6 @@ function IndexPage() {
               </div>
             </div>
 
-            {/* Tiny legend */}
             <div className="text-xs text-slate-400">
               Updated every minute from Base via <span className="font-mono">BASE_RPC</span>. Set <span className="font-mono">NEXT_PUBLIC_FILLIN_DEPLOY_BLOCK</span> and <span className="font-mono">NEXT_PUBLIC_NFT_DEPLOY_BLOCK</span> for faster queries.
             </div>
