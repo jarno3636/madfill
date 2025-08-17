@@ -1,7 +1,7 @@
 // pages/challenge.jsx
 'use client'
 
-import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
@@ -16,7 +16,7 @@ import abi from '@/abi/FillInStoryV3_ABI.json'
 import { fetchFarcasterProfile } from '@/lib/neynar'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
-import { useTx } from '@/lib/TxProvider'
+import { useTx } from '@/components/TxProvider' // ✅ updated path
 import dynamic from 'next/dynamic'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
@@ -47,7 +47,7 @@ export default function ChallengePage() {
 
   // round + template data
   const [roundId, setRoundId] = useState('')
-  const [parts, setParts] = useState<string[]>([])
+  const [parts, setParts] = useState([])
   const [originalWordRaw, setOriginalWordRaw] = useState('') // "idx::word"
   const [creatorAddr, setCreatorAddr] = useState('')
   const [roundName, setRoundName] = useState('')
@@ -66,14 +66,14 @@ export default function ChallengePage() {
   const [showConfetti, setShowConfetti] = useState(false)
 
   const { width, height } = useWindowSize()
-  const tickRef = useRef<any>(null)
+  const tickRef = useRef(null)
   const router = useRouter()
 
   // ---------- utils ----------
-  const needsSpaceBefore = (str: string) =>
+  const needsSpaceBefore = (str) =>
     !(/\s/.test(str?.[0]) || /[.,!?;:)"'\]]/.test(str?.[0]))
 
-  function parseStoredWord(stored: string) {
+  function parseStoredWord(stored) {
     if (!stored) return { index: 0, word: '' }
     const sep = stored.indexOf('::')
     if (sep > -1) {
@@ -85,12 +85,12 @@ export default function ChallengePage() {
     return { index: 0, word: stored }
   }
 
-  function buildPreviewSingle(_parts: string[], w: string, idx: number) {
+  function buildPreviewSingle(_parts, w, idx) {
     const n = _parts?.length || 0
     if (n === 0) return ''
     const blanks = Math.max(0, n - 1)
     const safeIdx = Math.max(0, Math.min(Math.max(0, blanks - 1), Number(idx) || 0))
-    const out: string[] = []
+    const out = []
     for (let i = 0; i < n; i++) {
       out.push(_parts[i] || '')
       if (i < n - 1) {
@@ -109,12 +109,12 @@ export default function ChallengePage() {
     return out.join('')
   }
 
-  function buildPreviewFromStored(_parts: string[], stored: string) {
+  function buildPreviewFromStored(_parts, stored) {
     const { index, word } = parseStoredWord(stored)
     return buildPreviewSingle(_parts, word, index)
   }
 
-  const sanitizeWord = (raw: string) =>
+  const sanitizeWord = (raw) =>
     (raw || '')
       .replace(/\s+/g, ' ')
       .trim()
@@ -234,7 +234,6 @@ export default function ChallengePage() {
         ? durationSec
         : DEFAULT_DURATION_SECONDS
 
-      // Provider handles staticCall, gas buffer, Base chain, and Warpcast quirks internally
       await createPool2({
         pool1Id: BigInt(roundId),
         challengerWord: encodedWord,
@@ -247,7 +246,7 @@ export default function ChallengePage() {
       setShowConfetti(true)
       setTimeout(() => setShowConfetti(false), 2200)
       setTimeout(() => router.push('/vote'), 1400)
-    } catch (err: any) {
+    } catch (err) {
       console.error(err)
       setStatus(String(err?.shortMessage || err?.message || 'Submission failed'))
     } finally {
@@ -430,7 +429,7 @@ export default function ChallengePage() {
                         <option value={2 * 24 * 60 * 60}>2 days</option>
                         <option value={3 * 24 * 60 * 60}>3 days</option>
                         <option value={5 * 24 * 60 * 60}>5 days</option>
-                        <option value={7 * 60 * 60 * 24}>7 days</option>
+                        <option value={7 * 24 * 60 * 60}>7 days</option>
                       </select>
                       <div className="text-[11px] text-slate-400 mt-1">How long the vote stays open.</div>
                     </label>
