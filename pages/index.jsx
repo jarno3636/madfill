@@ -34,7 +34,7 @@ const POOLS_ABI = [
 ]
 
 /* ===== Helpers ===== */
-const sanitizeOneWord = (raw) =>
+const sanitizeOneWord = (raw: string) =>
   String(raw || '')
     .trim()
     .split(' ')[0]
@@ -43,11 +43,11 @@ const sanitizeOneWord = (raw) =>
 
 /* Soft network error patterns we treat as “probably mined; verify on-chain”. */
 const SOFT_ERROR_TEXTS = ['coalesce', 'replacement transaction', 'repriced', 'failed to fetch', 'nonce has already been used']
-const isSoftError = (msg='') => SOFT_ERROR_TEXTS.some(s => (msg || '').toLowerCase().includes(s))
+const isSoftError = (msg = '') => SOFT_ERROR_TEXTS.some(s => (msg || '').toLowerCase().includes(s))
 
 /* Best-effort event topic for verification without ABI (creator is indexed param #2). */
 const TOPIC_POOL1_CREATED = ethers.id('Pool1Created(uint256,address,uint256,uint256)')
-const pad32 = (addr) => ethers.zeroPadValue(addr, 32)
+const pad32 = (addr: string) => ethers.zeroPadValue(addr, 32)
 
 /* A tiny spinner */
 const Spinner = () => (
@@ -75,7 +75,7 @@ function IndexPage() {
   } = useTx()
 
   // chain / fees
-  const [feeBps, setFeeBps] = useState(null)
+  const [feeBps, setFeeBps] = useState<number | null>(null)
   const [bpsDen, setBpsDen] = useState(10000)
 
   // ui
@@ -85,7 +85,7 @@ function IndexPage() {
   // tx status bar
   const [txStatus, setTxStatus] = useState('')       // human text
   const [txError, setTxError] = useState('')         // error text if any
-  const [txHash, setTxHash] = useState(null)         // last tx hash
+  const [txHash, setTxHash] = useState<string | null>(null)         // last tx hash
   const [verifying, setVerifying] = useState(false)  // soft-error verification toggle
 
   // template pickers
@@ -128,11 +128,11 @@ function IndexPage() {
   const durationSecs = useMemo(() => BigInt(Math.max(1, Number(durationDays)) * 24 * 60 * 60), [durationDays])
 
   // usd display
-  const [usd, setUsd] = useState(null)
+  const [usd, setUsd] = useState<number | null>(null)
 
   // preview words map
   const wordsMapForPreview = useMemo(() => {
-    const w = {}
+    const w: Record<number, string> = {}
     for (let i = 0; i < blanksCount; i++) w[i] = ''
     const word = sanitizeOneWord(creatorWord)
     if (blanksCount > 0 && word) w[blankIndex] = word
@@ -224,14 +224,14 @@ function IndexPage() {
   /* ---------- helpers: tx wait + fallback verification ---------- */
   const provider = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [BASE_RPC])
 
-  async function waitForReceipt(hash, timeoutMs = 30000) {
+  async function waitForReceipt(hash: string, timeoutMs = 30000) {
     try {
       const rec = await provider.waitForTransaction(hash, 1, timeoutMs)
       return rec?.status === 1
     } catch { return false }
   }
 
-  async function verifyCreatedOnChain({ creator, contractAddr, lookback = 3000 }) {
+  async function verifyCreatedOnChain({ creator, contractAddr, lookback = 3000 }: { creator: string, contractAddr: string, lookback?: number }) {
     try {
       const latest = await provider.getBlockNumber()
       const fromBlock = Math.max(0, latest - lookback)
@@ -274,8 +274,8 @@ function IndexPage() {
 
       // Try to pick up a hash from common shapes
       const hash =
-        res?.hash ||
-        res?.transactionHash ||
+        (res as any)?.hash ||
+        (res as any)?.transactionHash ||
         (typeof res === 'string' && res.startsWith('0x') ? res : null)
 
       if (hash) setTxHash(hash)
@@ -308,7 +308,7 @@ function IndexPage() {
         setTxError('We could not confirm the creation. Please check your wallet activity or Basescan.')
         setTxStatus('Not confirmed')
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e)
       const msg = e?.info?.error?.message || e?.shortMessage || e?.reason || e?.message || 'Transaction failed.'
 
@@ -405,7 +405,11 @@ function IndexPage() {
         <div className="rounded-2xl bg-gradient-to-br from-slate-900 via-indigo-900/70 to-purple-900/70 border border-indigo-700 p-6 md:p-8 shadow-xl">
           <div className="grid gap-6 md:grid-cols-3">
             <div className="md:col-span-2">
-              <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight">🧠 MadFill — Create a Round</h1>
+              {/* Page title — unified style */}
+              <div className="text-[11px] uppercase tracking-wider text-indigo-300/80">Create</div>
+              <h1 className="mt-1 text-4xl md:text-5xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-300 via-sky-300 to-fuchsia-300">
+                🧠 MadFill — Create a Round
+              </h1>
               <p className="text-indigo-100 mt-4">
                 MadFill is a social word game on Base. Pick a template with blanks, choose <em>which</em> blank
                 you’ll fill, set the entry fee, and launch a round. Players submit their best word. Community votes. Winners split the pot.
@@ -591,15 +595,12 @@ function IndexPage() {
                     <span className="text-slate-400 text-sm">
                       {usd && feeEth ? `~$${(parseFloat(feeEth || '0') * usd).toFixed(2)}` : '—'}
                     </span>
-                    {feeBps != null && (
-                      <>
-                        <span className="text-slate-500">|</span>
-                        <span className="text-xs text-slate-400">burn {(feeBps / bpsDen * 100).toFixed(2)}%</span>
-                      </>
-                    )}
+                    {/* Removed burn verbiage */}
                   </div>
                   <span className="text-xs text-slate-400">+ gas</span>
                 </div>
+                {/* Explicit, simple note about protocol fee */}
+                <div className="text-xs text-slate-400">Protocol fee: 0.5% (no burn) + gas</div>
               </div>
 
               {/* Duration */}
@@ -686,12 +687,8 @@ function IndexPage() {
                   <div>Blanks: <b>{blanksCount}</b></div>
                   <div className="opacity-80">•</div>
                   <div>You’re filling: <b>{blanksCount ? `Blank #${blankIndex + 1}` : '—'}</b></div>
-                  {feeBps != null && (
-                    <>
-                      <div className="opacity-80">•</div>
-                      <div>Protocol fee (burn): <b>{(feeBps / bpsDen * 100).toFixed(2)}%</b></div>
-                    </>
-                  )}
+                  <div className="opacity-80">•</div>
+                  <div>Protocol fee: <b>0.5%</b></div>
                 </div>
               </div>
 
@@ -737,7 +734,7 @@ function IndexPage() {
               {feeUsd != null && <> Estimated: ~${feeUsd.toFixed(2)}.</>}
             </p>
             <p>
-              <b>Protocol Fee (burn):</b> {feeBps != null ? `${(feeBps / bpsDen * 100).toFixed(2)}%` : '—'} of the entry fee is burned at the protocol level.
+              <b>Protocol Fee:</b> 0.5% of the entry fee (no burn).
             </p>
             <p>
               <b>Gas:</b> Network fee paid to validators. Varies with network congestion.
