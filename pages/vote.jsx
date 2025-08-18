@@ -17,7 +17,6 @@ import abi from '@/abi/FillInStoryV3_ABI.json'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useTx } from '@/components/TxProvider'
-import { Countdown } from '@/components/Countdown' // ⏳ time badge
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -29,6 +28,36 @@ const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 
 // small util
 const nowSec = () => Math.floor(Date.now() / 1000)
+
+// --- tiny live countdown pill (text only) ---
+function formatRemaining(s) {
+  if (s <= 0) return '0:00'
+  const d = Math.floor(s / 86400)
+  const h = Math.floor((s % 86400) / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  if (d > 0) return `${d}d ${h}h`
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}:${sec.toString().padStart(2, '0')}`
+}
+function TimeLeft({ deadline }) {
+  const [left, setLeft] = useState(Math.max(0, (deadline || 0) - nowSec()))
+  useEffect(() => {
+    const id = setInterval(() => {
+      setLeft(Math.max(0, (deadline || 0) - nowSec()))
+    }, 1000)
+    return () => clearInterval(id)
+  }, [deadline])
+  if (!deadline || left <= 0) return null
+  return (
+    <span
+      className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-400/30 text-amber-200 text-[11px] font-medium whitespace-nowrap"
+      title={`${left} seconds left`}
+    >
+      ⏳ {formatRemaining(left)} left
+    </span>
+  )
+}
 
 export default function VotePage() {
   useMiniAppReady()
@@ -203,7 +232,6 @@ export default function VotePage() {
         const poolUsd = poolEth * priceUsd
         const feeEth = toEth(feeBase)
 
-        // countdown: if we don't know total duration, seed totalSeconds with first observed remaining
         const remaining = Math.max(0, deadline - nowSec())
         const totalSeconds = Math.max(1, remaining)
 
@@ -329,7 +357,6 @@ export default function VotePage() {
                 feeBaseWei: BigInt(feeBase ?? 0n),
                 feeEth: toEth(feeBase),
                 deadline,
-                // keep original totalSeconds; if missing, seed from current remaining
                 totalSeconds: r.totalSeconds || Math.max(1, remaining),
               }
             : r
@@ -409,9 +436,10 @@ export default function VotePage() {
 
       <main className="max-w-6xl mx-auto p-4 md:p-6 text-white">
         {/* Hero */}
-        <div className="rounded-2xl bg-slate-900/70 border border-slate-700 p-6 md:p-8 mb-6">
+        <div className="rounded-2xl bg-slate-900/70 border border-slate-700 p-5 md:p-6 mb-6">
           <div className="flex items-center justify-between gap-3">
-            <h1 className="text-3xl md:text-4xl font-extrabold bg-gradient-to-r from-amber-300 via-pink-300 to-indigo-300 bg-clip-text text-transparent">
+            {/* no-wrap + smaller so it never breaks lines */}
+            <h1 className="whitespace-nowrap text-2xl sm:text-3xl font-extrabold leading-tight bg-gradient-to-r from-amber-300 via-pink-300 to-indigo-300 bg-clip-text text-transparent">
               🗳️ Community Vote
             </h1>
             <div className="flex items-center gap-2">
@@ -503,27 +531,13 @@ export default function VotePage() {
             {sorted.map((r) => {
               const shareUrl = absoluteUrl(`/round/${r.originalPool1Id}`)
               const shareText = `Vote on MadFill Challenge #${r.id} → Round #${r.originalPool1Id}!`
-              const remaining = Math.max(0, (r.deadline || 0) - nowSec())
               return (
                 <Card key={r.id} className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
                   <CardHeader className="flex items-start justify-between gap-2 bg-slate-800/60 border-b border-slate-700">
                     <div className="space-y-0.5">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs"><StatusPill claimed={r.claimed} challengerWon={r.challengerWon} /></span>
-                        {!r.claimed && r.deadline > 0 && (
-                          <span className="inline-flex items-center gap-1">
-                            <Countdown
-                              targetTimestamp={r.deadline}
-                              totalSeconds={r.totalSeconds || Math.max(1, remaining)}
-                              size={42}
-                              stroke={5}
-                              className="align-middle"
-                              progressColor="rgb(250 204 21)"   // amber-300
-                              trackColor="rgb(71 85 105)"        // slate-600
-                            />
-                            <span className="text-[11px] text-slate-300">left</span>
-                          </span>
-                        )}
+                        {!r.claimed && r.deadline > 0 && <TimeLeft deadline={r.deadline} />}
                         <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800/80 border border-slate-700">
                           Challenge #{r.id}
                         </span>
