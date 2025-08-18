@@ -112,6 +112,7 @@ export default function ActivePools() {
   const [baseUsd, setBaseUsd] = useState(0)
   const [usdIsApprox, setUsdIsApprox] = useState(false)
   const [expanded, setExpanded] = useState({})
+  const [submissionCache, setSubmissionCache] = useState({}) // id -> submissions[]
   const [likes, setLikes] = useState(() => {
     if (typeof window !== 'undefined') {
       return JSON.parse(localStorage.getItem('madfillLikes') || '{}')
@@ -152,7 +153,7 @@ export default function ActivePools() {
     return fallback
   }, [])
 
-  /* ---------------- Core loader (no logs; chunked reads) --------------- */
+  /* ---------------- Core loader (minimal first; lazy submissions) --------------- */
   const loadActiveRounds = useCallback(async (signal) => {
     if (!contract) { setRounds([]); return }
 
@@ -167,13 +168,13 @@ export default function ActivePools() {
       const total = Number(await withRetry(() => contract.pool1Count()))
       if (!total) { setRounds([]); setStatus(''); return }
 
-      // Pull newest first, bounded to last N
-      const N = 120
+      // Pull newest first, bounded to last N (smaller for speed)
+      const N = 60
       const start = Math.max(1, total - N + 1)
       const ids = Array.from({ length: total - start + 1 }, (_, i) => BigInt(start + i)).reverse()
 
-      // Chunk calls to avoid RPC rate-limits
-      const chunks = chunk(ids, 24)
+      // Chunk calls to avoid RPC rate-limits (smaller groups)
+      const chunks = chunk(ids, 12)
       const out = []
 
       for (const group of chunks) {
@@ -200,24 +201,6 @@ export default function ActivePools() {
             // Only show active rounds
             if (claimed || deadline <= nowSec) continue
 
-            // (Optional) preview from first few submissions if packed call exists
-            let submissions = []
-            try {
-              const packed = await withRetry(() => contract.getPool1SubmissionsPacked(idBI))
-              const addrs = packed.addrs || packed[0] || []
-              const usernames = packed.usernames || packed[1] || []
-              const words = packed.words || packed[2] || []
-              const blankIdxs = packed.blankIndexes || packed[3] || []
-              const m = Math.min(addrs.length, 6)
-              submissions = Array.from({ length: m }, (_, j) => {
-                const addr = addrs[j]
-                const username = usernames[j] || ''
-                const word = words[j] || ''
-                const idx = Number(blankIdxs[j] ?? 0)
-                return { address: addr, username, word, blankIndex: idx, preview: buildPreviewSingle(parts, word, idx) }
-              })
-            } catch { /* safe ignore if not available */ }
-
             const feeBase = Number(ethers.formatEther(feeBaseWei))
             const estimatedUsd = price * (participants?.length || 0) * feeBase
 
@@ -231,7 +214,8 @@ export default function ActivePools() {
               count: participants?.length || 0,
               usd: (estimatedUsd || 0).toFixed(2),
               usdApprox: usdIsApprox,
-              submissions,
+              // submissions loaded lazily on expand
+              hasSubs: false,
               badge: deadline - nowSec < 3600 ? '🔥 Ends Soon' : (estimatedUsd > 5 ? '💰 Top Pool' : null),
               emoji: ['🐸', '🦊', '🦄', '🐢', '🐙'][Number(idBI) % 5],
             })
@@ -249,6 +233,33 @@ export default function ActivePools() {
       if (!signal?.aborted) setLoading(false)
     }
   }, [contract, loadPrice, baseUsd, usdIsApprox])
+
+  /* ---- lazy-load submissions when expanding a card ---- */
+  const ensureSubmissions = useCallback(async (round) => {
+    if (!contract) return
+    const id = round.id
+    if (submissionCache[id]) return
+
+    try {
+      const idBI = BigInt(id)
+      const packed = await withRetry(() => contract.getPool1SubmissionsPacked(idBI))
+      const addrs = packed.addrs || packed[0] || []
+      const usernames = packed.usernames || packed[1] || []
+      const words = packed.words || packed[2] || []
+      const blankIdxs = packed.blankIndexes || packed[3] || []
+
+      const subs = addrs.map((addr, i) => {
+        const username = usernames[i] || ''
+        const word = words[i] || ''
+        const idx = Number(blankIdxs[i] ?? 0)
+        return { address: addr, username, word, blankIndex: idx, preview: buildPreviewSingle(round.parts, word, idx) }
+      })
+      setSubmissionCache((m) => ({ ...m, [id]: subs }))
+    } catch (e) {
+      console.warn('load submissions failed for', id, e)
+      setSubmissionCache((m) => ({ ...m, [id]: [] }))
+    }
+  }, [contract, submissionCache])
 
   /* -------------- Initial + polling -------------- */
   useEffect(() => {
@@ -324,7 +335,7 @@ export default function ActivePools() {
 
       {/* --- CONTAINER + CENTERING + OVERFLOW FIXES --- */}
       <main className="w-full mx-auto max-w-6xl px-4 sm:px-6 md:px-8 py-4 md:py-6 text-white overflow-x-hidden">
-        {/* Hero (match Vote/Community) */}
+        {/* Hero */}
         <div className="w-full min-w-0 rounded-2xl bg-slate-900/70 border border-slate-700 p-5 md:p-6 mb-6">
           <div className="flex items-center justify-between gap-3 min-w-0">
             <h1 className="text-2xl sm:text-3xl font-extrabold leading-tight bg-gradient-to-r from-amber-300 via-pink-300 to-indigo-300 bg-clip-text text-transparent break-words min-w-0">
@@ -415,6 +426,9 @@ export default function ActivePools() {
             {paginated.map((r) => {
               const rUrl = absoluteUrl(`/round/${r.id}`)
               const minsLeft = Math.max(1, Math.round((r.deadline - Math.floor(Date.now() / 1000)) / 60))
+              const subs = submissionCache[r.id] || []
+              const isExpanded = !!expanded[r.id]
+
               return (
                 <Card
                   key={r.id}
@@ -426,7 +440,11 @@ export default function ActivePools() {
                       <div className="min-w-0">
                         <h2 className="text-lg font-bold truncate">#{r.id} — {r.name}</h2>
                         {r.badge && <span className="text-sm text-yellow-400">{r.badge}</span>}
-                        {r.theme && <p className="text-xs text-slate-400 mt-1 break-words">Theme: {r.theme}</p>}
+                        {r.theme && (
+                          <p className="text-xs text-slate-400 mt-1 break-words hyphens-auto">
+                            Theme: {r.theme}
+                          </p>
+                        )}
                       </div>
                     </div>
                     <div className="text-sm font-mono mt-1 shrink-0">
@@ -437,11 +455,11 @@ export default function ActivePools() {
                   <CardContent className="space-y-2 text-sm font-medium min-w-0">
                     <p className="break-words"><strong>Entry Fee:</strong> {r.feeBase} ETH</p>
                     <p><strong>Participants:</strong> {r.count}</p>
-                    <p><strong>Total Pool:</strong> {r.usdApprox ? '~' : ''}${r.usd}</p>
+                    <p className="break-words"><strong>Total Pool:</strong> {r.usdApprox ? '~' : ''}${r.usd}</p>
 
-                    <div className="pt-1 min-w-0">
+                    <div className="pt-1 min-w-0 w-full overflow-hidden">
                       <ShareBoundary>
-                        <div className="min-w-0">
+                        <div className="min-w-0 w-full overflow-hidden">
                           <ShareBar
                             url={rUrl}
                             title={`🧠 Join MadFill Round #${r.id}!`}
@@ -456,48 +474,52 @@ export default function ActivePools() {
                       </ShareBoundary>
                     </div>
 
-                    {r.submissions?.length > 0 && (
-                      <>
-                        <button
-                          onClick={() => setExpanded((prev) => ({ ...prev, [r.id]: !prev[r.id] }))}
-                          className="text-indigo-400 text-xs underline"
-                        >
-                          {expanded[r.id] ? 'Hide Entries' : 'Show Entries'}
-                        </button>
+                    {/* Entries (lazy-load on expand) */}
+                    <button
+                      onClick={async () => {
+                        setExpanded((prev) => ({ ...prev, [r.id]: !prev[r.id] }))
+                        if (!submissionCache[r.id]) {
+                          await ensureSubmissions(r)
+                        }
+                      }}
+                      className="text-indigo-400 text-xs underline"
+                    >
+                      {isExpanded ? 'Hide Entries' : 'Show Entries'}
+                    </button>
 
-                        {expanded[r.id] && (
-                          <div className="bg-slate-700 p-2 rounded text-xs text-slate-100 max-h-48 overflow-y-auto space-y-2">
-                            {r.submissions.map((s, idx) => {
-                              const likeKey = `${r.id}-${idx}`
-                              const displayName =
-                                s.username || (typeof s.address === 'string' ? s.address.slice(2, 6).toUpperCase() : 'USER')
-                              return (
-                                <div key={`${s.address}-${idx}`} className="flex items-start gap-2">
-                                  <img
-                                    src={`https://effigy.im/a/${s.address}`}
-                                    alt={displayName}
-                                    width={24}
-                                    height={24}
-                                    className="w-6 h-6 rounded-full border border-white mt-1 shrink-0"
-                                    onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
-                                  />
-                                  <div className="flex-1 min-w-0">
-                                    <p className="text-slate-300 font-semibold truncate">@{displayName}</p>
-                                    <p className="italic leading-relaxed break-words">{s.preview}</p>
-                                  </div>
-                                  <button
-                                    onClick={() => handleLike(r.id, idx)}
-                                    className="text-pink-400 text-sm ml-1 shrink-0"
-                                    title="Like"
-                                  >
-                                    {likes[likeKey] ? '❤️' : '🤍'}
-                                  </button>
-                                </div>
-                              )
-                            })}
-                          </div>
-                        )}
-                      </>
+                    {isExpanded && (
+                      <div className="bg-slate-800/70 border border-slate-700 p-2 rounded text-xs text-slate-100 max-h-48 overflow-y-auto space-y-2">
+                        {subs.length === 0 ? (
+                          <div className="text-slate-300/80">No entries yet.</div>
+                        ) : subs.map((s, idx) => {
+                          const likeKey = `${r.id}-${idx}`
+                          const displayName =
+                            s.username || (typeof s.address === 'string' ? s.address.slice(2, 6).toUpperCase() : 'USER')
+                          return (
+                            <div key={`${s.address}-${idx}`} className="flex items-start gap-2 min-w-0">
+                              <img
+                                src={`https://effigy.im/a/${s.address}`}
+                                alt={displayName}
+                                width={24}
+                                height={24}
+                                className="w-6 h-6 rounded-full border border-white mt-1 shrink-0"
+                                onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
+                              />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-slate-300 font-semibold truncate">@{displayName}</p>
+                                <p className="italic leading-relaxed break-words hyphens-auto">{s.preview}</p>
+                              </div>
+                              <button
+                                onClick={() => handleLike(r.id, idx)}
+                                className="text-pink-400 text-sm ml-1 shrink-0"
+                                title="Like"
+                              >
+                                {likes[likeKey] ? '❤️' : '🤍'}
+                              </button>
+                            </div>
+                          )
+                        })}
+                      </div>
                     )}
 
                     <Link href={`/round/${r.id}`} className="block">
@@ -524,7 +546,7 @@ export default function ActivePools() {
           </div>
         )}
 
-        {/* Footer (matches Vote/Community) */}
+        {/* Footer */}
         <footer className="mt-10 text-xs text-slate-400 flex flex-wrap items-center gap-3 justify-between border-t border-slate-800 pt-4">
           <div className="flex items-center gap-3">
             <Link href="/challenge" className="underline text-indigo-300">Start a Challenge</Link>
@@ -532,7 +554,7 @@ export default function ActivePools() {
               href={`https://basescan.org/address/${CONTRACT_ADDRESS}`}
               target="_blank"
               rel="noreferrer"
-              className="underline text-indigo-300"
+              className="underline text-indigo-300 break-all"
               title="View contract on BaseScan"
             >
               Contract
