@@ -92,6 +92,19 @@ export default function VotePage() {
     new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
   const explorer = (path) => `https://basescan.org/${path}`
 
+  const benignPatterns = [
+    /could not coalesce/i,
+    /already known/i,
+    /replacement transaction underpriced/i,
+    /nonce .* too low/i,
+    /fee too low/i,
+    /transaction (?:not )?mined/i, // flaky nodes
+  ]
+  const isBenignTxError = (e) => {
+    const msg = String(e?.shortMessage || e?.message || e || '')
+    return benignPatterns.some((re) => re.test(msg))
+  }
+
   function parseStoredWord(stored) {
     if (!stored) return { index: 0, word: '' }
     const sep = stored.indexOf('::')
@@ -273,6 +286,9 @@ export default function VotePage() {
 
   // ---- actions (use TxProvider) ----
   async function doVote(id, voteChallenger, feeBaseWei) {
+    const before = rounds.find((r) => r.id === id)
+    const beforeVotes = before ? before.votersOriginal + before.votersChallenger : 0
+
     try {
       if (!address) await connect()
       setStatus('Submitting vote…')
@@ -284,13 +300,30 @@ export default function VotePage() {
       await reloadCard(id)
       setTimeout(() => setSuccess(false), 1500)
     } catch (e) {
-      console.error(e)
+      console.error('Vote error:', e)
+      if (isBenignTxError(e)) {
+        // Optimistic verify on-chain
+        setStatus('⏳ Submitted, verifying on-chain…')
+        await reloadCard(id)
+        const after = rounds.find((r) => r.id === id)
+        const afterVotes = after ? after.votersOriginal + after.votersChallenger : beforeVotes
+        if (afterVotes > beforeVotes) {
+          setStatus('✅ Vote recorded!')
+          setSuccess(true)
+          setTimeout(() => setSuccess(false), 1500)
+          return
+        }
+      }
       setStatus('❌ ' + (e?.shortMessage || e?.message || 'Vote failed'))
       setSuccess(false)
     }
   }
 
   async function doClaim(id) {
+    // snapshot claimed state
+    const before = rounds.find((r) => r.id === id)
+    const wasClaimed = !!before?.claimed
+
     try {
       if (!address) await connect()
       setStatus('Claiming…')
@@ -301,9 +334,20 @@ export default function VotePage() {
       setStatus('✅ Claimed!')
       await reloadCard(id)
       setTimeout(() => setClaimedId(null), 1500)
-    } catch (err) {
-      console.error('Claim failed:', err)
-      setStatus('❌ ' + (err?.shortMessage || err?.message || 'Error claiming prize'))
+    } catch (e) {
+      console.error('Claim error:', e)
+      if (isBenignTxError(e)) {
+        setStatus('⏳ Submitted, verifying on-chain…')
+        await reloadCard(id)
+        const after = rounds.find((r) => r.id === id)
+        if (after?.claimed && !wasClaimed) {
+          setClaimedId(id)
+          setStatus('✅ Claimed!')
+          setTimeout(() => setClaimedId(null), 1500)
+          return
+        }
+      }
+      setStatus('❌ ' + (e?.shortMessage || e?.message || 'Error claiming prize'))
     }
   }
 
