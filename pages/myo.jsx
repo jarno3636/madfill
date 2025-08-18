@@ -101,6 +101,19 @@ function computeParts(rawStory, rawFills, blankToken) {
   return { partsForContract: parts, partsForPreview: preview, blanksRemaining }
 }
 
+/* ---------- tx status helpers ---------- */
+const SOFT_ERROR_TEXTS = [
+  'coalesce', 'replacement transaction', 'repriced', 'failed to fetch', 'nonce has already been used'
+]
+const isSoftError = (msg='') => SOFT_ERROR_TEXTS.some(s => (msg || '').toLowerCase().includes(s))
+
+const TOPIC_MINTED = ethers.id('Minted(uint256,address,string,string)')
+const pad32 = (addr) => ethers.zeroPadValue(addr, 32)
+
+const Spinner = () => (
+  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/70 border-t-transparent align-middle" />
+)
+
 export default function MYOPage() {
   useMiniAppReady()
   const { addToast } = useToast()
@@ -110,6 +123,7 @@ export default function MYOPage() {
     isConnected, connect, isOnBase,
     BASE_RPC, NFT_ADDRESS,
     mintTemplateNFT,
+    address,
   } = useTx()
 
   // limits/state
@@ -133,8 +147,15 @@ export default function MYOPage() {
     return Number.isFinite(v) && v >= 0 && v <= 5000 ? Math.floor(v) : 200
   })()
 
+  // ui
   const [loading, setLoading] = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
+
+  // tx status bar
+  const [txStatus, setTxStatus] = useState('')       // human text
+  const [txError, setTxError] = useState('')         // error text if any
+  const [txHash, setTxHash] = useState(null)         // last tx hash
+  const [verifying, setVerifying] = useState(false)  // soft-error verification toggle
 
   // meta
   const [title, setTitle] = useState('')
@@ -285,36 +306,96 @@ export default function MYOPage() {
     }
   }, [BASE_RPC, NFT_ADDRESS, BUFFER_BPS])
 
-  // mint
+  /* ---------- helpers: provider + wait + verification ---------- */
+  const provider = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [BASE_RPC])
+
+  async function waitForReceipt(hash, timeoutMs = 35000) {
+    try {
+      const rec = await provider.waitForTransaction(hash, 1, timeoutMs)
+      return rec?.status === 1
+    } catch { return false }
+  }
+
+  async function verifyMintedOnChain({ author, contractAddr, lookback = 3000 }) {
+    try {
+      const latest = await provider.getBlockNumber()
+      const fromBlock = Math.max(0, latest - lookback)
+      const logs = await provider.getLogs({
+        address: contractAddr,
+        fromBlock,
+        toBlock: latest,
+        topics: [TOPIC_MINTED, null, pad32(author)],
+      })
+      return (logs && logs.length > 0)
+    } catch { return false }
+  }
+
+  function clearStatusSoon() {
+    setTimeout(() => { setTxStatus(''); setTxError('') }, 3000)
+  }
+
+  // mint (with soft error + verification)
   const handleMint = useCallback(async () => {
     if (!validate()) return
-    setLoading(true)
+
+    setTxError('')
+    setTxStatus('')
+    setTxHash(null)
+    setVerifying(false)
+
     try {
+      setLoading(true)
+      setTxStatus('Waiting for wallet confirmation…')
+
       const valueWei = await readFeeWithBuffer()
 
-      const tx = await mintTemplateNFT(
+      const res = await mintTemplateNFT(
         String(title).slice(0, 128),
         String(description).slice(0, 2048),
         String(theme).slice(0, 128),
-        partsForContract, // TxProvider will normalize "[BLANK]" -> on-chain BLANK()
+        partsForContract,
         { value: valueWei }
       )
 
-      const hash = tx?.hash || tx?.transactionHash
-      addToast({
-        type: 'success',
-        title: 'Mint submitted',
-        message: hash ? `Tx: ${hash.slice(0, 10)}…` : 'Waiting for confirmations…',
-        link: hash ? `https://basescan.org/tx/${hash}` : undefined,
-      })
+      const hash =
+        res?.hash ||
+        res?.transactionHash ||
+        (typeof res === 'string' && res.startsWith('0x') ? res : null)
 
-      setShowConfetti(true)
-      setTimeout(() => setShowConfetti(false), 1800)
+      if (hash) setTxHash(hash)
+      setTxStatus('Submitting transaction…')
 
-      // reset (keep background)
-      setTitle(''); setTheme(''); setDescription('')
-      setStory(PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)])
-      setFills([])
+      let success = false
+      if (hash) {
+        success = await waitForReceipt(hash, 35000)
+      }
+
+      if (!success) {
+        setVerifying(true)
+        setTxStatus('Verifying on-chain…')
+        const ok = await verifyMintedOnChain({
+          author: address,
+          contractAddr: NFT_ADDRESS,
+        })
+        success = ok
+      }
+
+      if (success) {
+        addToast({ type: 'success', title: 'Template Minted!', message: 'Your template NFT is live.' })
+        setTxStatus('Minted ✓')
+        setShowConfetti(true)
+        setTimeout(() => setShowConfetti(false), 1600)
+
+        // reset (keep background)
+        setTitle(''); setTheme(''); setDescription('')
+        setStory(PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)])
+        setFills([])
+
+        clearStatusSoon()
+      } else {
+        setTxError('We could not confirm the mint. Please check your wallet activity or Basescan.')
+        setTxStatus('Not confirmed')
+      }
     } catch (e) {
       console.error(e)
       const msg =
@@ -323,6 +404,32 @@ export default function MYOPage() {
         e?.reason ||
         e?.message ||
         'Transaction failed.'
+
+      if (isSoftError(msg)) {
+        setVerifying(true)
+        setTxStatus('Network hiccup. Verifying on-chain…')
+        const ok = await verifyMintedOnChain({
+          author: address,
+          contractAddr: NFT_ADDRESS,
+        })
+        if (ok) {
+          addToast({ type: 'success', title: 'Template Minted!', message: 'Your template NFT is live.' })
+          setTxStatus('Minted ✓')
+          setShowConfetti(true)
+          setTimeout(() => setShowConfetti(false), 1600)
+          setTxError('')
+          clearStatusSoon()
+          setLoading(false)
+          setVerifying(false)
+
+          setTitle(''); setTheme(''); setDescription('')
+          setStory(PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)])
+          setFills([])
+
+          return
+        }
+      }
+
       if (/insufficient funds|underpriced|max fee/i.test(msg)) {
         addToast({ type: 'error', title: 'Fee Too Low', message: 'ETH balance or buffer too low. Increase NEXT_PUBLIC_MYO_FEE_BUFFER_BPS and retry.' })
       } else if (/execution reverted|no data/i.test(msg)) {
@@ -334,11 +441,18 @@ export default function MYOPage() {
       } else {
         addToast({ type: 'error', title: 'Mint Failed', message: msg })
       }
+      setTxError(msg)
+      setTxStatus('Mint failed')
       setShowConfetti(false)
     } finally {
       setLoading(false)
+      setVerifying(false)
     }
-  }, [validate, readFeeWithBuffer, mintTemplateNFT, title, description, theme, partsForContract, addToast])
+  }, [
+    validate, readFeeWithBuffer, mintTemplateNFT,
+    title, description, theme, partsForContract,
+    addToast, address, NFT_ADDRESS
+  ])
 
   const wordsForPreview = useMemo(() => {
     const w = {}
@@ -381,78 +495,113 @@ export default function MYOPage() {
 
       {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
-      <main className="max-w-6xl mx-auto p-4 md:p-6 text-white space-y-6">
-        {/* Explainer */}
-        <div className="rounded-2xl bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-700 p-6">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h1 className="text-3xl md:text-4xl font-extrabold">🎨 Make Your Own</h1>
-              <p className="text-slate-300">
-                Drop <code className="px-1 py-0.5 bg-slate-800 rounded">[BLANK]</code> anywhere words should be filled.
-                Pick a vibe, then mint a Template NFT on <span className="font-semibold">Base</span>.
-              </p>
-              <ul className="mt-3 grid gap-2 text-slate-300 text-sm md:grid-cols-3">
-                <li className="rounded-xl bg-slate-800/60 border border-slate-700 p-3">✍️ <b>Write</b> a prompt with blanks.</li>
-                <li className="rounded-xl bg-slate-800/60 border border-slate-700 p-3">🧩 <b>Set</b> a theme & background.</li>
-                <li className="rounded-xl bg-slate-800/60 border border-slate-700 p-3">🪄 <b>Mint</b> the template as an NFT.</li>
-              </ul>
+      {/* Inline TX status bar (prominent, with Basescan link) */}
+      {(txStatus || txError) && (
+        <div className="mx-auto mt-3 max-w-6xl px-4">
+          <div
+            className={[
+              'rounded-lg border px-3 py-2 text-sm flex items-center gap-2',
+              txError ? 'bg-rose-900/40 border-rose-500/40 text-rose-100' : 'bg-emerald-900/30 border-emerald-500/30 text-emerald-100'
+            ].join(' ')}
+          >
+            {verifying || (loading && !txError) ? <Spinner /> : <span>✅</span>}
+            <div className="flex-1">
+              <div className="font-medium">{txStatus || (txError ? 'Error' : '')}</div>
+              {txError && <div className="text-rose-100/80">{txError}</div>}
             </div>
-            <div className="flex items-center gap-2">
-              {!isConnected ? (
-                <Button onClick={connect} className="bg-amber-500 hover:bg-amber-400 text-black">
-                  Connect Wallet
-                </Button>
-              ) : !isOnBase ? (
-                <div className="text-amber-300 bg-amber-900/30 border border-amber-700 rounded-md px-3 py-2 text-sm">
-                  ⚠️ Wrong network. Switch wallet to <b>Base (8453)</b>.
-                </div>
-              ) : null}
-            </div>
+            {txHash && (
+              <a
+                className="underline decoration-dotted"
+                href={`https://basescan.org/tx/${txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                View Tx
+              </a>
+            )}
           </div>
-
-          {/* Fee / limits */}
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
-              <div className="flex items-center gap-2 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
-                <span className="shrink-0">Mint fee:</span>
-                <b className="shrink-0">{DISPLAY_FEE_ETH} ETH</b>
-                <span className="opacity-70 shrink-0">+ gas</span>
-              </div>
-            </div>
-
-            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
-              <div className="flex items-center justify-between">
-                <span>Parts</span>
-                <span className="font-semibold">{Math.max(1, partsForPreview.length)} / {maxParts}</span>
-              </div>
-              <div className="mt-1 h-1.5 rounded bg-slate-700">
-                <div
-                  className="h-1.5 rounded bg-indigo-400"
-                  style={{ width: `${Math.min(100, (Math.max(1, partsForPreview.length) / maxParts) * 100)}%` }}
-                />
-              </div>
-            </div>
-
-            <div className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2">
-              <div className="flex items-center justify-between">
-                <span>Total bytes</span>
-                <span className="font-semibold">{totalBytes} / {maxTotalBytes}</span>
-              </div>
-              <div className="mt-1 h-1.5 rounded bg-slate-700">
-                <div
-                  className="h-1.5 rounded bg-emerald-400"
-                  style={{ width: `${Math.min(100, (totalBytes / maxTotalBytes) * 100)}%` }}
-                />
-              </div>
-            </div>
-          </div>
-
-          {paused && (
-            <div className="mt-3 text-sm rounded-lg bg-rose-900/40 border border-rose-700 px-3 py-2 text-rose-100">
-              ⏸️ Minting is currently paused.
-            </div>
-          )}
         </div>
+      )}
+
+      {/* Hero */}
+      <section className="mx-auto max-w-6xl px-4 pt-8 md:pt-12">
+        <div className="rounded-2xl bg-gradient-to-br from-slate-900 via-indigo-900/70 to-purple-900/70 border border-indigo-700 p-6 md:p-8 shadow-xl">
+          <div className="grid gap-6 md:grid-cols-3">
+            <div className="md:col-span-2">
+              <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight">🎨 Make Your Own</h1>
+              <p className="text-indigo-100 mt-4">
+                Drop <code className="px-1 py-0.5 bg-slate-800 rounded">[BLANK]</code> where players will fill in words.
+                Pick a vibe, then mint your Template as an NFT on <span className="font-semibold">Base</span>.
+              </p>
+            </div>
+            <div className="rounded-xl bg-slate-900/50 border border-slate-700 p-4">
+              <h3 className="font-semibold mb-2">Quick Steps</h3>
+              <ol className="space-y-2 text-sm text-slate-200 list-decimal list-inside">
+                <li>Write a story with [BLANK]</li>
+                <li>Set Title, Theme & Background</li>
+                <li>Review limits</li>
+                <li>Mint Template NFT</li>
+              </ol>
+              <div className="mt-3">
+                {!isConnected ? (
+                  <Button onClick={connect} className="bg-amber-500 hover:bg-amber-400 text-black w-full">
+                    Connect Wallet
+                  </Button>
+                ) : !isOnBase ? (
+                  <div className="text-amber-300 bg-amber-900/30 border border-amber-700 rounded-md px-3 py-2 text-sm">
+                    ⚠️ Wrong network. Switch to <b>Base (8453)</b>.
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Main content */}
+      <main className="max-w-6xl mx-auto px-4 py-8 text-white space-y-6">
+        {/* Limits strip */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="rounded-lg bg-slate-900/70 border border-slate-700 px-3 py-2">
+            <div className="flex items-center gap-2 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
+              <span className="shrink-0">Mint fee:</span>
+              <b className="shrink-0">{DISPLAY_FEE_ETH} ETH</b>
+              <span className="opacity-70 shrink-0">+ gas</span>
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-slate-900/70 border border-slate-700 px-3 py-2">
+            <div className="flex items-center justify-between">
+              <span>Parts</span>
+              <span className="font-semibold">{Math.max(1, partsForPreview.length)} / {maxParts}</span>
+            </div>
+            <div className="mt-1 h-1.5 rounded bg-slate-700">
+              <div
+                className="h-1.5 rounded bg-indigo-400"
+                style={{ width: `${Math.min(100, (Math.max(1, partsForPreview.length) / maxParts) * 100)}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-slate-900/70 border border-slate-700 px-3 py-2">
+            <div className="flex items-center justify-between">
+              <span>Total bytes</span>
+              <span className="font-semibold">{totalBytes} / {maxTotalBytes}</span>
+            </div>
+            <div className="mt-1 h-1.5 rounded bg-slate-700">
+              <div
+                className="h-1.5 rounded bg-emerald-400"
+                style={{ width: `${Math.min(100, (totalBytes / maxTotalBytes) * 100)}%` }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {paused && (
+          <div className="text-sm rounded-lg bg-rose-900/40 border border-rose-700 px-3 py-2 text-rose-100">
+            ⏸️ Minting is currently paused.
+          </div>
+        )}
 
         {/* Main grid */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -624,9 +773,17 @@ export default function MYOPage() {
       </main>
 
       {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
+
+      {/* Footer */}
+      <footer className="mt-12 border-t border-slate-800 pt-6 pb-10 text-center text-slate-400 text-sm">
+        <p>✨ Built with MadFill — Fill, laugh, and share ✨</p>
+        <p className="mt-1">
+          <a href="/" className="hover:text-white transition">Home</a> ·{' '}
+          <a href="/active" className="hover:text-white transition">Active Rounds</a> ·{' '}
+          <a href="/challenge" className="hover:text-white transition">Challenge</a> ·{' '}
+          <a href="/vote" className="hover:text-white transition">Vote</a>
+        </p>
+      </footer>
     </Layout>
   )
 }
-
-/* keep words object shape StyledCard expects */
-function wordsForPreview() { return {} }
