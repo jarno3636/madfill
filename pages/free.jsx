@@ -379,6 +379,17 @@ export default function FreeGame() {
           </CardContent>
         </Card>
       </main>
+
+      {/* Footer */}
+      <footer className="mt-12 border-t border-slate-800 pt-6 pb-10 text-center text-slate-400 text-sm">
+        <p>✨ Built with MadFill — Fill, laugh, and share ✨</p>
+        <p className="mt-1">
+          <a href="/" className="hover:text-white transition">Home</a> ·{' '}
+          <a href="/active" className="hover:text-white transition">Active Rounds</a> ·{' '}
+          <a href="/challenge" className="hover:text-white transition">Challenge</a> ·{' '}
+          <a href="/vote" className="hover:text-white transition">Vote</a>
+        </p>
+      </footer>
     </Layout>
   )
 }
