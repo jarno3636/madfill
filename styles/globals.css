@@ -32,12 +32,17 @@
 * {
   border-color: hsl(var(--border));
   box-sizing: border-box; /* Tailwind preflight sets this; kept for clarity */
+  min-width: 0; /* prevents flex children from pushing parent width */
 }
 
 /* HARD CLAMP: nothing is allowed to create horizontal scroll */
 html, body, #__next {
   max-width: 100%;
   overflow-x: hidden;
+}
+
+:root {
+  overflow-x: clip; /* modern browsers prefer clip over hidden */
 }
 
 /* Helpful default: prefer wrapping over overflow on long strings */
@@ -62,6 +67,7 @@ body {
 img, video, canvas, svg {
   max-width: 100%;
   height: auto;
+  display: block;
 }
 
 /* Focus styles for accessibility (works alongside Tailwind's ring utilities) */
@@ -110,7 +116,7 @@ img, video, canvas, svg {
   }
 }
 
-/* Print styles (fixes autoprefixer deprecation: use print-color-adjust) */
+/* Print styles */
 @media print {
   * {
     -webkit-print-color-adjust: exact;
