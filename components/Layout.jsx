@@ -1,3 +1,4 @@
+// components/Layout.jsx
 'use client'
 
 import Head from 'next/head'
@@ -6,11 +7,11 @@ import { useEffect, useMemo, useState, useCallback } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter } from 'next/router'
 
-// Wallet buttons loaded client-side only
+// Wallet buttons (client only)
 const MiniConnectButton = dynamic(() => import('./MiniConnectButton'), { ssr: false })
 const WalletConnectButton = dynamic(() => import('./WalletConnectButton'), { ssr: false })
 
-// Mini App SDK "ready" ping (client-only)
+// Farcaster Mini App ready ping
 const AppReady = dynamic(() => import('./AppReady'), { ssr: false })
 
 function NavLink({ href, children, onClick }) {
@@ -19,7 +20,7 @@ function NavLink({ href, children, onClick }) {
   return (
     <Link
       href={href}
-      className={`px-2 py-1 rounded-lg transition-colors
+      className={`px-2 py-1 rounded-lg transition-colors truncate
         ${isActive
           ? 'text-indigo-300 bg-slate-800/60'
           : 'text-slate-200 hover:text-indigo-300 hover:bg-slate-800/40'
@@ -36,7 +37,7 @@ export default function Layout({ children }) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
 
-  // close on route change (so sheet collapses after nav)
+  // close on route change
   useEffect(() => {
     const handle = () => setOpen(false)
     router.events?.on?.('routeChangeStart', handle)
@@ -45,11 +46,10 @@ export default function Layout({ children }) {
 
   // lock body scroll when sheet open
   useEffect(() => {
-    if (open) {
-      const prev = document.body.style.overflow
-      document.body.style.overflow = 'hidden'
-      return () => { document.body.style.overflow = prev }
-    }
+    if (!open) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
   }, [open])
 
   // close on ESC
@@ -72,7 +72,7 @@ export default function Layout({ children }) {
     []
   )
 
-  // split nav into two columns for the mobile sheet
+  // split for mobile sheet
   const splitNav = useCallback((arr) => {
     const mid = Math.ceil(arr.length / 2)
     return [arr.slice(0, mid), arr.slice(mid)]
@@ -80,8 +80,7 @@ export default function Layout({ children }) {
   const [colA, colB] = splitNav(navItems)
 
   return (
-    <div className="bg-gradient-to-br from-slate-950 via-indigo-950 to-purple-950 min-h-screen text-white flex flex-col">
-      {/* Farcaster Mini App: signal UI is ready (no-op on web) */}
+    <div className="bg-gradient-to-br from-slate-950 via-indigo-950 to-purple-950 min-h-screen text-white flex flex-col overflow-x-clip">
       <AppReady />
 
       <Head>
@@ -93,25 +92,23 @@ export default function Layout({ children }) {
         <meta name="twitter:card" content="summary_large_image" />
         <link rel="icon" href="/favicon.ico" />
         <link rel="canonical" href="https://madfill.vercel.app" />
-
-        {/* Helpful mobile / mini-app meta tweaks */}
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <meta name="theme-color" content="#0b1020" />
       </Head>
 
       {/* Top Nav */}
       <nav className="sticky top-0 z-40 backdrop-blur supports-[backdrop-filter]:bg-slate-950/70 bg-slate-950/90 border-b border-indigo-800/50">
-        <div className="mx-auto max-w-6xl px-4 py-3.5 flex items-center justify-between gap-3">
+        <div className="mx-auto max-w-6xl px-4 py-3.5 flex items-center justify-between gap-3 min-w-0">
           {/* Brand */}
-          <Link href="/" className="group inline-flex items-center gap-2">
-            <span className="text-2xl leading-none">🧠</span>
-            <span className="text-xl font-extrabold tracking-tight group-hover:text-indigo-300 transition-colors">
+          <Link href="/" className="group inline-flex items-center gap-2 min-w-0">
+            <span className="text-2xl leading-none shrink-0">🧠</span>
+            <span className="text-xl font-extrabold tracking-tight group-hover:text-indigo-300 transition-colors truncate">
               MadFill
             </span>
           </Link>
 
           {/* Desktop links */}
-          <div className="hidden md:flex items-center gap-2 text-sm">
+          <div className="hidden md:flex items-center gap-2 text-sm min-w-0">
             {navItems.map(({ href, label }) => (
               <NavLink key={href} href={href}>
                 {label}
@@ -120,7 +117,7 @@ export default function Layout({ children }) {
           </div>
 
           {/* Desktop wallet */}
-          <div className="hidden md:flex items-center gap-2">
+          <div className="hidden md:flex items-center gap-2 shrink-0">
             <MiniConnectButton />
             <WalletConnectButton />
           </div>
@@ -139,14 +136,9 @@ export default function Layout({ children }) {
         </div>
       </nav>
 
-      {/* Mobile Sheet (split layout, shorter, buttons centered at bottom) */}
+      {/* Mobile Sheet */}
       {open && (
-        <div
-          className="fixed inset-0 z-50"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Navigation menu"
-        >
+        <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Navigation menu">
           {/* Backdrop */}
           <button
             aria-label="Close menu"
@@ -154,37 +146,35 @@ export default function Layout({ children }) {
             onClick={() => setOpen(false)}
           />
           {/* Panel */}
-          <div className="absolute inset-x-0 top-0 mx-auto max-w-lg rounded-b-3xl overflow-hidden shadow-2xl ring-1 ring-indigo-500/20">
-            <div className="bg-gradient-to-b from-slate-950/95 to-slate-900/95">
+          <div className="absolute inset-x-0 top-0 mx-auto w-full max-w-lg rounded-b-3xl overflow-hidden shadow-2xl ring-1 ring-indigo-500/20">
+            <div className="bg-gradient-to-b from-slate-950/95 to-slate-900/95 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
               {/* Header row */}
-              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
-                <div className="inline-flex items-center gap-2">
-                  <span className="text-xl">🧠</span>
-                  <span className="font-bold">MadFill</span>
+              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 min-w-0">
+                <div className="inline-flex items-center gap-2 min-w-0">
+                  <span className="text-xl shrink-0">🧠</span>
+                  <span className="font-bold truncate">MadFill</span>
                 </div>
                 <button
                   onClick={() => setOpen(false)}
                   className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-slate-200"
                 >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                   </svg>
                 </button>
               </div>
 
-              {/* Split grid of links */}
+              {/* Split grid */}
               <div className="px-4 py-3">
                 <div className="grid grid-cols-2 gap-2">
-                  {/* Column A */}
-                  <div className="flex flex-col gap-1.5">
+                  <div className="flex flex-col gap-1.5 min-w-0">
                     {colA.map(({ href, label }) => (
                       <NavLink key={href} href={href} onClick={() => setOpen(false)}>
                         {label}
                       </NavLink>
                     ))}
                   </div>
-                  {/* Column B */}
-                  <div className="flex flex-col gap-1.5">
+                  <div className="flex flex-col gap-1.5 min-w-0">
                     {colB.map(({ href, label }) => (
                       <NavLink key={href} href={href} onClick={() => setOpen(false)}>
                         {label}
@@ -212,15 +202,17 @@ export default function Layout({ children }) {
       )}
 
       {/* Page content */}
-      <main className="mx-auto max-w-6xl px-4 py-8 flex-grow">{children}</main>
+      <main className="mx-auto w-full max-w-6xl px-4 py-8 flex-grow overflow-x-hidden min-w-0">
+        {children}
+      </main>
 
       {/* Footer */}
       <footer className="mt-auto border-t border-slate-800/60">
-        <div className="mx-auto max-w-6xl px-4 py-6 text-xs text-slate-400 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <Link href="/challenge" className="underline decoration-dotted hover:text-indigo-300">Start a Challenge</Link>
-            <Link href="/active" className="underline decoration-dotted hover:text-indigo-300">Active Rounds</Link>
-            <Link href="/vote" className="underline decoration-dotted hover:text-indigo-300">Community Vote</Link>
+        <div className="mx-auto max-w-6xl px-4 py-6 text-xs text-slate-400 flex flex-wrap items-center justify-between gap-3 min-w-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <Link href="/challenge" className="underline decoration-dotted hover:text-indigo-300 truncate">Start a Challenge</Link>
+            <Link href="/active" className="underline decoration-dotted hover:text-indigo-300 truncate">Active Rounds</Link>
+            <Link href="/vote" className="underline decoration-dotted hover:text-indigo-300 truncate">Community Vote</Link>
           </div>
           <div className="opacity-80">© {new Date().getFullYear()} MadFill</div>
         </div>
