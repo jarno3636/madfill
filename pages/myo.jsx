@@ -22,6 +22,7 @@ const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 /* ---------- utils ---------- */
 const stripWeird = (s) => String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '') // zero-width etc
 const bytes = (s) => new TextEncoder().encode(stripWeird(s)).length
+const isNonEmpty = (s) => !!String(s || '').trim()
 
 const PROMPT_STARTERS = [
   'My day started with [BLANK], then I found a [BLANK] under the couch.',
@@ -162,6 +163,9 @@ export default function MYOPage() {
   const [theme, setTheme] = useState('')
   const [description, setDescription] = useState('')
 
+  // debug
+  const [showDebug, setShowDebug] = useState(false)
+
   // story + fills
   const storyRef = useRef(null)
   const [story, setStory] = useState(PROMPT_STARTERS[0])
@@ -274,33 +278,33 @@ export default function MYOPage() {
     setBgKey(BG_CHOICES[next].key)
   }
 
-  // validation — use CONTRACT parts + bytes
-  const validate = () => {
-    if (!NFT_ADDRESS) {
-      addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS.' })
-      return false
-    }
-    if (!isConnected) { addToast({ type: 'error', title: 'Wallet Required', message: 'Please connect your wallet.' }); return false }
-    if (!isOnBase) { addToast({ type: 'error', title: 'Wrong Network', message: 'Please switch your wallet to Base and try again.' }); return false }
-    if (paused) { addToast({ type: 'error', title: 'Paused', message: 'Minting is currently paused.' }); return false }
-    if (!title.trim() || !theme.trim() || !description.trim()) {
-      addToast({ type: 'error', title: 'Missing Fields', message: 'Title, Theme, and Description are required.' })
-      return false
-    }
-    if (partsForContract.length > maxParts) {
-      addToast({ type: 'error', title: 'Too Many Parts', message: `Max ${maxParts} parts.` }); return false
-    }
-    if (textPartsForContract.some((p) => bytes(p) > maxPartBytes)) {
-      addToast({ type: 'error', title: 'Part Too Long', message: `Each part must be ≤ ${maxPartBytes} bytes.` }); return false
-    }
-    if (totalContractBytes > maxTotalBytes) {
-      addToast({ type: 'error', title: 'Too Large', message: `Total bytes must be ≤ ${maxTotalBytes}.` }); return false
-    }
-    if (blankCount < 1) {
-      addToast({ type: 'error', title: 'Add a Blank', message: 'Leave at least one [BLANK] unfilled.' }); return false
-    }
-    return true
-  }
+  // PRE-FLIGHT CHECKS (explicit reasons)
+  const reasonsCantMint = useMemo(() => {
+    const reasons = []
+    if (!NFT_ADDRESS) reasons.push('Missing NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS')
+    if (!isConnected) reasons.push('Wallet not connected')
+    if (!isOnBase) reasons.push('Wrong network: switch to Base (8453)')
+    if (paused) reasons.push('Minting is paused')
+    if (!isNonEmpty(title)) reasons.push('Title is required')
+    if (!isNonEmpty(theme)) reasons.push('Theme is required')
+    if (!isNonEmpty(description)) reasons.push('Description is required')
+    if (partsForContract.length > maxParts) reasons.push(`Too many parts (${partsForContract.length}/${maxParts})`)
+    if (textPartsForContract.some((p) => bytes(p) > maxPartBytes)) reasons.push(`A text part exceeds ${maxPartBytes} bytes`)
+    if (totalContractBytes > maxTotalBytes) reasons.push(`Total bytes exceed ${maxTotalBytes}`)
+    if (blankCount < 1) reasons.push('Leave at least one [BLANK] unfilled')
+    if (typeof mintTemplateNFT !== 'function') reasons.push('mintTemplateNFT is not available from useTx()')
+    return reasons
+  }, [
+    NFT_ADDRESS, isConnected, isOnBase, paused,
+    title, theme, description,
+    partsForContract.length, maxParts,
+    textPartsForContract, maxPartBytes,
+    totalContractBytes, maxTotalBytes,
+    blankCount, mintTemplateNFT
+  ])
+
+  const canMint =
+    reasonsCantMint.length === 0 && !loading
 
   // exact on-chain mint fee (contract expects exact value)
   const readMintFeeExact = useCallback(async () => {
@@ -325,7 +329,6 @@ export default function MYOPage() {
     } catch { return false }
   }
 
-  // Relaxed verification: just look for Minted events on the contract in the recent window
   async function verifyMintedOnChain({ contractAddr, lookback = 3000 }) {
     try {
       const latest = await provider.getBlockNumber()
@@ -344,9 +347,49 @@ export default function MYOPage() {
     setTimeout(() => { setTxStatus(''); setTxError('') }, 3000)
   }
 
+  // ENSURE WALLET PROMPT (requests accounts if connected flag lies / embeds)
+  const ensureWalletPrompt = useCallback(async () => {
+    const eth = globalThis?.ethereum || (globalThis?.window && window.ethereum)
+    if (!eth) {
+      addToast({ type: 'error', title: 'No Wallet', message: 'No injected wallet found (window.ethereum).' })
+      return false
+    }
+    try {
+      // request accounts to force UI prompt if needed
+      await eth.request({ method: 'eth_requestAccounts' })
+      // optionally check chain and suggest switch
+      const ch = await eth.request({ method: 'eth_chainId' })
+      if (ch !== '0x2105') { // 8453
+        try {
+          await eth.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: '0x2105' }],
+          })
+        } catch (e) {
+          addToast({ type: 'error', title: 'Wrong Network', message: 'Please switch to Base (8453).' })
+          return false
+        }
+      }
+      return true
+    } catch (e) {
+      addToast({ type: 'error', title: 'Wallet Error', message: e?.message || 'Could not access wallet.' })
+      return false
+    }
+  }, [addToast])
+
   // mint (with soft error + verification + tiny fee-bump retry)
   const handleMint = useCallback(async () => {
-    if (!validate()) return
+    // if disabled, surface the first reason immediately
+    if (!canMint) {
+      if (reasonsCantMint.length) {
+        addToast({ type: 'error', title: 'Can’t Mint', message: reasonsCantMint[0] })
+      }
+      return
+    }
+
+    // double-check wallet prompt (helps if embedded)
+    const walletOk = await ensureWalletPrompt()
+    if (!walletOk) return
 
     setTxError('')
     setTxStatus('')
@@ -358,6 +401,10 @@ export default function MYOPage() {
       setTxStatus('Waiting for wallet confirmation…')
 
       const valueWei = await readMintFeeExact()
+
+      if (typeof mintTemplateNFT !== 'function') {
+        throw new Error('mintTemplateNFT function is missing from useTx().')
+      }
 
       let res = await mintTemplateNFT(
         String(title).slice(0, 128),
@@ -383,9 +430,7 @@ export default function MYOPage() {
       if (!success) {
         setVerifying(true)
         setTxStatus('Verifying on-chain…')
-        const ok = await verifyMintedOnChain({
-          contractAddr: NFT_ADDRESS,
-        })
+        const ok = await verifyMintedOnChain({ contractAddr: NFT_ADDRESS })
         success = ok
       }
 
@@ -417,9 +462,7 @@ export default function MYOPage() {
       if (isSoftError(msg)) {
         setVerifying(true)
         setTxStatus('Network hiccup. Verifying on-chain…')
-        const ok = await verifyMintedOnChain({
-          contractAddr: NFT_ADDRESS,
-        })
+        const ok = await verifyMintedOnChain({ contractAddr: NFT_ADDRESS })
         if (ok) {
           addToast({ type: 'success', title: 'Template Minted!', message: 'Your template NFT is live.' })
           setTxStatus('Minted ✓')
@@ -433,12 +476,10 @@ export default function MYOPage() {
           setTitle(''); setTheme(''); setDescription('')
           setStory(PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)])
           setFills([])
-
           return
         }
       }
 
-      // one-shot retry with +1% value if the error smells like price/fee race
       if (/insufficient funds|underpriced|fee|price/i.test(msg)) {
         try {
           setTxStatus('Retrying with adjusted value…')
@@ -486,7 +527,8 @@ export default function MYOPage() {
       setVerifying(false)
     }
   }, [
-    validate, readMintFeeExact, mintTemplateNFT,
+    canMint, reasonsCantMint, ensureWalletPrompt,
+    readMintFeeExact, mintTemplateNFT,
     title, description, theme, partsForContract,
     addToast, NFT_ADDRESS
   ])
@@ -499,16 +541,6 @@ export default function MYOPage() {
 
   const pageUrl = absoluteUrl('/myo')
   const ogImage = buildOgUrl({ screen: 'myo', title: 'Make Your Own' })
-
-  const canMint =
-    !loading &&
-    isConnected &&
-    isOnBase &&
-    !paused &&
-    title.trim() &&
-    theme.trim() &&
-    description.trim() &&
-    blankCount >= 1
 
   return (
     <Layout>
@@ -579,7 +611,8 @@ export default function MYOPage() {
                 <li>Review limits</li>
                 <li>Mint Template NFT</li>
               </ol>
-              <div className="mt-3">
+
+              <div className="mt-3 space-y-2">
                 {!isConnected ? (
                   <Button onClick={connect} className="bg-amber-500 hover:bg-amber-400 text-black w-full">
                     Connect Wallet
@@ -589,6 +622,11 @@ export default function MYOPage() {
                     ⚠️ Wrong network. Switch to <b>Base (8453)</b>.
                   </div>
                 ) : null}
+
+                {/* Quick toggle for debug */}
+                <Button variant="outline" onClick={() => setShowDebug((v) => !v)} className="w-full border-slate-600 text-slate-200">
+                  {showDebug ? 'Hide Debug' : 'Show Debug'}
+                </Button>
               </div>
             </div>
           </div>
@@ -637,6 +675,36 @@ export default function MYOPage() {
         {paused && (
           <div className="text-sm rounded-lg bg-rose-900/40 border border-rose-700 px-3 py-2 text-rose-100">
             ⏸️ Minting is currently paused.
+          </div>
+        )}
+
+        {/* Debug panel */}
+        {showDebug && (
+          <div className="rounded-lg bg-slate-900/70 border border-amber-500/40 p-4 text-xs">
+            <div className="font-semibold mb-2 text-amber-300">Debug</div>
+            <div className="grid sm:grid-cols-2 gap-y-1">
+              <div>isConnected: {String(isConnected)}</div>
+              <div>isOnBase: {String(isOnBase)}</div>
+              <div>NFT_ADDRESS: {String(NFT_ADDRESS || '(missing)')}</div>
+              <div>BASE_RPC: {String(BASE_RPC || '(missing)')}</div>
+              <div>paused: {String(paused)}</div>
+              <div>blankCount: {blankCount}</div>
+              <div>partsForContract.length: {partsForContract.length}</div>
+              <div>maxParts: {maxParts}</div>
+              <div>maxPartBytes: {maxPartBytes}</div>
+              <div>totalContractBytes: {totalContractBytes}</div>
+              <div>maxTotalBytes: {maxTotalBytes}</div>
+              <div>mintTemplateNFT typeof: {typeof mintTemplateNFT}</div>
+              <div>address: {String(address || '(none)')}</div>
+            </div>
+            {reasonsCantMint.length > 0 && (
+              <div className="mt-3 text-rose-200">
+                <div className="font-semibold">Why can’t I mint?</div>
+                <ul className="list-disc list-inside">
+                  {reasonsCantMint.map((r, i) => <li key={i}>{r}</li>)}
+                </ul>
+              </div>
+            )}
           </div>
         )}
 
@@ -764,7 +832,7 @@ export default function MYOPage() {
                 </div>
               </div>
 
-              {/* Fee line */}
+              {/* Fee + reasons */}
               <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
                 <div className="flex items-center gap-3 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
                   <div className="shrink-0">
@@ -774,18 +842,28 @@ export default function MYOPage() {
                   <div className="opacity-80 shrink-0">•</div>
                   <div className="shrink-0">Blanks to fill by players: <b>{blankCount}</b></div>
                 </div>
+                {!canMint && reasonsCantMint.length > 0 && (
+                  <div className="mt-2 text-xs text-amber-200">
+                    <span className="font-semibold">Why can’t I mint?</span>
+                    <ul className="list-disc list-inside">
+                      {reasonsCantMint.map((r, i) => <li key={i}>{r}</li>)}
+                    </ul>
+                  </div>
+                )}
               </div>
 
               <div className="flex flex-col sm:flex-row gap-3">
                 <Button
+                  type="button"
                   onClick={handleMint}
                   disabled={!canMint}
                   className={`w-full ${paused ? 'bg-slate-700' : 'bg-purple-600 hover:bg-purple-500'}`}
-                  title={!isConnected ? 'Connect wallet' : (!isOnBase ? 'Switch to Base' : (paused ? 'Minting paused' : ''))}
+                  title={!canMint && reasonsCantMint.length ? reasonsCantMint[0] : ''}
                 >
                   {loading ? 'Minting…' : paused ? 'Paused' : 'Mint Template NFT'}
                 </Button>
                 <Button
+                  type="button"
                   variant="outline"
                   onClick={() => {
                     setTitle('')
