@@ -34,7 +34,7 @@ const POOLS_ABI = [
 ]
 
 /* ===== Helpers ===== */
-const sanitizeOneWord = (raw: string) =>
+const sanitizeOneWord = (raw, string) =>
   String(raw || '')
     .trim()
     .split(' ')[0]
