@@ -24,7 +24,8 @@ const CONTRACT_ADDRESS =
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
 
 /* ------------------ Tiny utils ------------------ */
-const needsSpaceBefore = (str) => !!str && !(/\s/.test(str[0]) || /[.,!?;:)"'\]]/.test(str[0]))
+const needsSpaceBefore = (str) =>
+  !!str && !(/\s/.test(str[0]) || /[.,!?;:)"'\]]/.test(str[0]))
 
 const buildPreviewSingle = (parts, word, idx) => {
   const n = parts?.length || 0
@@ -51,14 +52,27 @@ const buildPreviewSingle = (parts, word, idx) => {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const withRetry = async (fn, { tries = 3, delay = 200 } = {}) => {
+const withTimeout = async (p, ms = 2500) =>
+  Promise.race([
+    p,
+    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
+  ])
+
+const withRetry = async (fn, { tries = 3, delay = 200, signal, timeoutMs = 2500 } = {}) => {
   let last
   for (let i = 0; i < tries; i++) {
-    try { return await fn() } catch (e) { last = e; if (i < tries - 1) await sleep(delay * (i + 1)) }
+    if (signal?.aborted) throw new Error('aborted')
+    try {
+      return await withTimeout(fn(), timeoutMs)
+    } catch (e) {
+      last = e
+      if (String(e?.message).toLowerCase().includes('aborted')) throw e
+      if (i < tries - 1) await sleep(delay * (i + 1))
+    }
   }
   throw last
 }
-const chunk = (arr, size) => arr.length ? [arr.slice(0, size), ...chunk(arr.slice(size), size)] : []
+const chunk = (arr, size) => (arr.length ? [arr.slice(0, size), ...chunk(arr.slice(size), size)] : [])
 
 /* --------- Tiny error boundary for Share ------- */
 function ShareBoundary({ children }) {
@@ -120,7 +134,10 @@ export default function ActivePools() {
     return {}
   })
 
-  /* ------------------ Provider/Contract ------------------ */
+  // cancel any in-flight when user taps Refresh repeatedly
+  const abortRef = useRef(null)
+
+  /* ---------------- Provider/Contract ------------------ */
   const provider = useMemo(
     () => new ethers.JsonRpcProvider(BASE_RPC, undefined, { staticNetwork: true }),
     []
@@ -153,9 +170,15 @@ export default function ActivePools() {
     return fallback
   }, [])
 
-  /* ---------------- Core loader (minimal first; lazy submissions) --------------- */
-  const loadActiveRounds = useCallback(async (signal) => {
+  /* ---------------- Core loader (manual only) --------------- */
+  const loadActiveRounds = useCallback(async () => {
     if (!contract) { setRounds([]); return }
+
+    // cancel previous run
+    if (abortRef.current) abortRef.current.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+    const { signal } = controller
 
     setLoading(true)
     setStatus('')
@@ -165,23 +188,22 @@ export default function ActivePools() {
     try {
       const price = await loadPrice(signal).catch(() => baseUsd || 3800)
 
-      const total = Number(await withRetry(() => contract.pool1Count()))
+      const total = Number(await withRetry(() => contract.pool1Count(), { signal }))
       if (!total) { setRounds([]); setStatus(''); return }
 
-      // Pull newest first, bounded to last N (smaller for speed)
       const N = 60
       const start = Math.max(1, total - N + 1)
       const ids = Array.from({ length: total - start + 1 }, (_, i) => BigInt(start + i)).reverse()
 
-      // Chunk calls to avoid RPC rate-limits (smaller groups)
-      const chunks = chunk(ids, 12)
+      // compact groups + per-call timeout to reduce stalls
+      const chunks = chunk(ids, 8)
       const out = []
 
       for (const group of chunks) {
         if (signal?.aborted) return
 
         const infos = await Promise.allSettled(
-          group.map((idBI) => withRetry(() => contract.getPool1Info(idBI)))
+          group.map((idBI) => withRetry(() => contract.getPool1Info(idBI), { signal, timeoutMs: 2200 }))
         )
 
         for (let i = 0; i < infos.length; i++) {
@@ -198,7 +220,6 @@ export default function ActivePools() {
             const participants = info.participants_ ?? info[6] ?? []
             const claimed = Boolean(info.claimed_ ?? info[8])
 
-            // Only show active rounds
             if (claimed || deadline <= nowSec) continue
 
             const feeBase = Number(ethers.formatEther(feeBaseWei))
@@ -214,8 +235,6 @@ export default function ActivePools() {
               count: participants?.length || 0,
               usd: (estimatedUsd || 0).toFixed(2),
               usdApprox: usdIsApprox,
-              // submissions loaded lazily on expand
-              hasSubs: false,
               badge: deadline - nowSec < 3600 ? '🔥 Ends Soon' : (estimatedUsd > 5 ? '💰 Top Pool' : null),
               emoji: ['🐸', '🦊', '🦄', '🐢', '🐙'][Number(idBI) % 5],
             })
@@ -226,6 +245,7 @@ export default function ActivePools() {
       setRounds(out.sort((a, b) => (b?.id || 0) - (a?.id || 0)))
       setStatus(out.length ? '' : 'No active rounds found.')
     } catch (e) {
+      if (String(e?.message || '').includes('aborted')) return
       console.error('Active load failed:', e)
       setRounds([])
       setStatus('Failed to load active rounds. Tap Refresh.')
@@ -239,10 +259,9 @@ export default function ActivePools() {
     if (!contract) return
     const id = round.id
     if (submissionCache[id]) return
-
     try {
       const idBI = BigInt(id)
-      const packed = await withRetry(() => contract.getPool1SubmissionsPacked(idBI))
+      const packed = await withRetry(() => contract.getPool1SubmissionsPacked(idBI), { tries: 3, timeoutMs: 2200 })
       const addrs = packed.addrs || packed[0] || []
       const usernames = packed.usernames || packed[1] || []
       const words = packed.words || packed[2] || []
@@ -261,15 +280,12 @@ export default function ActivePools() {
     }
   }, [contract, submissionCache])
 
-  /* -------------- Initial + polling -------------- */
+  /* -------------- Initial load ONLY (no automatic refresh) -------------- */
   useEffect(() => {
     if (!CONTRACT_ADDRESS) return
-    const controller = new AbortController()
-    const tick = () => loadActiveRounds(controller.signal)
-    tick()
-    const interval = setInterval(tick, 30_000)
-    return () => { controller.abort(); clearInterval(interval) }
-  }, [loadActiveRounds])
+    loadActiveRounds()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contract])
 
   useEffect(() => { setPage(1) }, [search, sortBy, filter])
 
@@ -307,8 +323,7 @@ export default function ActivePools() {
   const paginated = sorted.slice((pageSafe - 1) * roundsPerPage, pageSafe * roundsPerPage)
 
   const refreshNow = () => {
-    const ac = new AbortController()
-    loadActiveRounds(ac.signal)
+    loadActiveRounds()
   }
 
   // SEO / Frame
@@ -333,9 +348,9 @@ export default function ActivePools() {
         image={ogImage}
       />
 
-      {/* --- CONTAINER + CENTERING + OVERFLOW FIXES --- */}
-      <main className="w-full mx-auto max-w-6xl px-4 sm:px-6 md:px-8 py-4 md:py-6 text-white overflow-x-hidden">
-        {/* Hero */}
+      {/* --- CENTERED LAYOUT + OVERFLOW GUARDS --- */}
+      <main className="mx-auto w-full max-w-6xl px-4 sm:px-6 md:px-8 py-4 md:py-6 text-white overflow-x-hidden">
+        {/* Header */}
         <div className="w-full min-w-0 rounded-2xl bg-slate-900/70 border border-slate-700 p-5 md:p-6 mb-6">
           <div className="flex items-center justify-between gap-3 min-w-0">
             <h1 className="text-2xl sm:text-3xl font-extrabold leading-tight bg-gradient-to-r from-amber-300 via-pink-300 to-indigo-300 bg-clip-text text-transparent break-words min-w-0">
@@ -457,9 +472,10 @@ export default function ActivePools() {
                     <p><strong>Participants:</strong> {r.count}</p>
                     <p className="break-words"><strong>Total Pool:</strong> {r.usdApprox ? '~' : ''}${r.usd}</p>
 
+                    {/* Share area is fully constrained to avoid overflow */}
                     <div className="pt-1 min-w-0 w-full overflow-hidden">
                       <ShareBoundary>
-                        <div className="min-w-0 w-full overflow-hidden">
+                        <div className="min-w-0 w-full overflow-hidden break-words break-all hyphens-auto">
                           <ShareBar
                             url={rUrl}
                             title={`🧠 Join MadFill Round #${r.id}!`}
