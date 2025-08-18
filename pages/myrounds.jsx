@@ -20,11 +20,9 @@ import fillAbi from '@/abi/FillInStoryV3_ABI.json'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
-/** ---------- small helpers ---------- */
+/** ---------- tiny utils ---------- */
 const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
-const toEth = (wei) => {
-  try { return Number(ethers.formatEther(wei ?? 0n)) } catch { return 0 }
-}
+const toEth = (wei) => { try { return Number(ethers.formatEther(wei ?? 0n)) } catch { return 0 } }
 const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(Number(n || 0))
 const needsSpaceBefore = (str) => !!str && !/\s|[.,!?;:)"'\]]/.test(str[0])
 const buildPreviewSingle = (parts, word, blankIndex) => {
@@ -58,6 +56,47 @@ const NFT_READ_ABI = [
   'function totalSupply() view returns (uint256)'
 ]
 
+/** ---------- concurrency + retry helpers ---------- */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+async function withRetry(fn, { tries = 4, minDelay = 150, maxDelay = 800, signal } = {}) {
+  let lastErr
+  for (let i = 0; i < tries; i++) {
+    if (signal?.aborted) throw new Error('aborted')
+    try {
+      return await fn()
+    } catch (e) {
+      lastErr = e
+      // bail fast on aborts/reverts
+      const msg = String(e?.message || e)
+      if (/aborted|revert|CALL_EXCEPTION/i.test(msg)) break
+      const backoff = Math.min(maxDelay, minDelay * Math.pow(2, i))
+      const jitter = Math.floor(Math.random() * 80)
+      await sleep(backoff + jitter)
+    }
+  }
+  throw lastErr
+}
+function mapLimit(items, limit, worker) {
+  let i = 0
+  const results = new Array(items.length)
+  let active = 0
+  return new Promise((resolve, reject) => {
+    const next = () => {
+      if (i >= items.length && active === 0) return resolve(results)
+      while (active < limit && i < items.length) {
+        const idx = i++
+        active++
+        Promise.resolve(worker(items[idx], idx))
+          .then((res) => { results[idx] = res })
+          .catch((err) => { results[idx] = { __error: err } })
+          .finally(() => { active--; next() })
+      }
+    }
+    next()
+  })
+}
+const CONCURRENCY = 8
+
 /** ---------- UI bits ---------- */
 function StatCard({ label, value, className = '' }) {
   return (
@@ -87,10 +126,9 @@ function MyRoundsPage() {
   useMiniAppReady()
   const { width, height } = useWindowSize()
 
-  // ✅ unified wallet/tx context
   const {
     address, isConnected, isOnBase, connect, switchToBase,
-    getContracts, claimPool1,
+    claimPool1,
     BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS,
   } = useTx()
 
@@ -115,6 +153,9 @@ function MyRoundsPage() {
   const [sortBy, setSortBy] = useState('newest')
   const [activeTab, setActiveTab] = useState('stats')
 
+  // Abort controller for all loads
+  const abortRef = useRef(null)
+
   // price (display only)
   useEffect(() => {
     let dead = false
@@ -128,104 +169,151 @@ function MyRoundsPage() {
     return () => { dead = true }
   }, [])
 
-  // load rounds for user
+  // provider/contract (read-only)
+  const getRead = useCallback(() => {
+    const provider = new ethers.JsonRpcProvider(BASE_RPC, undefined, { staticNetwork: true })
+    const ct = new ethers.Contract(FILLIN_ADDRESS, fillAbi, provider)
+    return { provider, ct }
+  }, [BASE_RPC, FILLIN_ADDRESS])
+
+  // load rounds for user (robust)
   const loadMyRounds = useCallback(async () => {
     if (!address) return
+    // cancel previous
+    if (abortRef.current) abortRef.current.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+    const { signal } = controller
+
     setLoading(true); setStatus('')
     try {
-      const readProv = new ethers.JsonRpcProvider(BASE_RPC)
-      const ct = new ethers.Contract(FILLIN_ADDRESS, fillAbi, readProv)
+      const { ct } = getRead()
 
-      const [ids1, ids2] = await ct.getUserEntries(address)
-      const pool1Ids = (ids1 || []).map(Number)
-      const voteIds = (ids2 || []).map(Number)
+      // getUserEntries can flake; retry
+      const userEntries = await withRetry(() => ct.getUserEntries(address), { signal })
+      const ids1 = Array.from(userEntries?.[0] || []).map(Number)
+      const ids2 = Array.from(userEntries?.[1] || []).map(Number)
 
-      const p1Cards = await Promise.all(pool1Ids.map(async (id) => {
-        const info = await ct.getPool1Info(BigInt(id))
-        const name = info.name_ ?? info[0]
-        const theme = info.theme_ ?? info[1]
-        const parts = info.parts_ ?? info[2]
-        const feeBase = info.feeBase_ ?? info[3]
-        const deadline = Number(info.deadline_ ?? info[4])
-        const creator = info.creator_ ?? info[5]
-        const participants = info.participants_ ?? info[6]
-        const winner = info.winner_ ?? info[7]
-        const claimed = Boolean(info.claimed_ ?? info[8])
-        const poolBalance = info.poolBalance_ ?? info[9]
+      // ---- Load Pool1 cards with bounded concurrency
+      const p1Cards = (await mapLimit(ids1, CONCURRENCY, async (id) => {
+        if (signal.aborted) return null
+        try {
+          const info = await withRetry(() => ct.getPool1Info(BigInt(id)), { signal })
+          const name = info.name_ ?? info[0]
+          const theme = info.theme_ ?? info[1]
+          const parts = info.parts_ ?? info[2] ?? []
+          const feeBase = info.feeBase_ ?? info[3] ?? 0n
+          const deadline = Number(info.deadline_ ?? info[4] ?? 0)
+          const creator = (info.creator_ ?? info[5] ?? '').toString()
+          const participants = info.participants_ ?? info[6] ?? []
+          const winner = info.winner_ ?? info[7] ?? '0x0000000000000000000000000000000000000000'
+          const claimed = Boolean(info.claimed_ ?? info[8])
+          const poolBalance = info.poolBalance_ ?? info[9] ?? 0n
 
-        const your = await ct.getPool1Submission(BigInt(id), address).catch(() => null)
-        const yourUsername = your?.username ?? your?.[0] ?? ''
-        const yourWord = your?.word ?? your?.[1] ?? ''
-        const yourBlank = Number(your?.blankIndex ?? your?.[3] ?? 0)
+          // Your submission (may revert/not exist)
+          const your = await withRetry(
+            () => ct.getPool1Submission(BigInt(id), address),
+            { tries: 2, minDelay: 120, maxDelay: 300, signal }
+          ).catch(() => null)
 
-        const ended = Math.floor(Date.now() / 1000) >= deadline
-        const youWon = (winner && winner.toLowerCase() === address.toLowerCase())
+          const yourUsername = your?.username ?? your?.[0] ?? ''
+          const yourWord = your?.word ?? your?.[1] ?? ''
+          const yourBlank = Number(your?.blankIndex ?? your?.[3] ?? 0)
 
-        return {
-          kind: 'pool1',
-          id, name, theme, parts,
-          preview: buildPreviewSingle(parts, yourWord, yourBlank),
-          word: yourWord, username: yourUsername, blankIndex: yourBlank,
-          feeEth: toEth(feeBase),
-          feeUsd: toEth(feeBase) * priceUsd,
-          poolEth: toEth(poolBalance),
-          poolUsd: toEth(poolBalance) * priceUsd,
-          deadline, creator,
-          participantsCount: participants?.length || 0,
-          winner, claimed, ended, youWon,
-          isCreator: creator && creator.toLowerCase() === address.toLowerCase(),
+          const now = Math.floor(Date.now() / 1000)
+          const ended = now >= deadline
+          const youWon = String(winner).toLowerCase() === String(address).toLowerCase()
+
+          return {
+            kind: 'pool1',
+            id: Number(id),
+            name, theme,
+            parts: Array.isArray(parts) ? parts : [],
+            preview: buildPreviewSingle(parts, yourWord, yourBlank),
+            word: yourWord, username: yourUsername, blankIndex: yourBlank,
+            feeEth: toEth(feeBase),
+            feeUsd: toEth(feeBase) * priceUsd,
+            poolEth: toEth(poolBalance),
+            poolUsd: toEth(poolBalance) * priceUsd,
+            deadline, creator,
+            participantsCount: participants?.length || 0,
+            winner, claimed, ended, youWon,
+            isCreator: creator && creator.toLowerCase() === address.toLowerCase(),
+          }
+        } catch (e) {
+          // keep going; mark as null
+          return null
         }
-      }))
+      })).filter(Boolean)
 
+      // Derive lists
       const startedCards = p1Cards.filter((c) => c.isCreator)
       const winCards = p1Cards.filter((c) => c.youWon)
       const unclaimed = winCards.filter((c) => !c.claimed)
 
-      const p2Cards = await Promise.all(voteIds.map(async (id) => {
-        const p2 = await ct.getPool2InfoFull(BigInt(id))
-        const originalId = Number(p2.originalPool1Id ?? p2[0])
-        const chWord = p2.challengerWord ?? p2[1]
-        const chUsername = p2.challengerUsername ?? p2[2]
-        const votersOriginalCount = Number(p2.votersOriginalCount ?? p2[4])
-        const votersChallengerCount = Number(p2.votersChallengerCount ?? p2[5])
-        const claimed = Boolean(p2.claimed ?? p2[6])
-        const challengerWon = Boolean(p2.challengerWon ?? p2[7])
-        const poolEth = toEth(p2.poolBalance ?? p2[8])
-        const poolUsd = poolEth * priceUsd
-        const feeBase = toEth(p2.feeBase ?? p2[9])
-        const deadline = Number(p2.deadline ?? p2[10])
+      // ---- Load Pool2 vote cards with bounded concurrency
+      const p2Cards = (await mapLimit(ids2, CONCURRENCY, async (id) => {
+        if (signal.aborted) return null
+        try {
+          const p2 = await withRetry(() => ct.getPool2InfoFull(BigInt(id)), { signal })
+          const originalId = Number(p2.originalPool1Id ?? p2[0])
+          const chWord = p2.challengerWord ?? p2[1]
+          const chUsername = p2.challengerUsername ?? p2[2]
+          const votersOriginalCount = Number(p2.votersOriginalCount ?? p2[4] ?? 0)
+          const votersChallengerCount = Number(p2.votersChallengerCount ?? p2[5] ?? 0)
+          const claimed = Boolean(p2.claimed ?? p2[6])
+          const challengerWon = Boolean(p2.challengerWon ?? p2[7])
+          const poolEth = toEth(p2.poolBalance ?? p2[8] ?? 0n)
+          const feeBase = toEth(p2.feeBase ?? p2[9] ?? 0n)
+          const deadline = Number(p2.deadline ?? p2[10] ?? 0)
 
-        const info = await ct.getPool1Info(BigInt(originalId))
-        const parts = info.parts_ ?? info[2]
-        const creatorSub = await ct.getPool1Submission(BigInt(originalId), info.creator_ ?? info[5]).catch(() => null)
-        const creatorBlank = Number(creatorSub?.blankIndex ?? creatorSub?.[3] ?? 0)
+          // Fetch parts & creator blank for preview
+          const info = await withRetry(() => ct.getPool1Info(BigInt(originalId)), { signal })
+          const parts = info.parts_ ?? info[2] ?? []
+          const creatorAddr = (info.creator_ ?? info[5] ?? '').toString()
 
-        return {
-          kind: 'pool2',
-          id,
-          originalPool1Id: originalId,
-          chUsername, chWord,
-          chPreview: buildPreviewSingle(parts, chWord, creatorBlank),
-          votersOriginal: votersOriginalCount,
-          votersChallenger: votersChallengerCount,
-          claimed, challengerWon,
-          poolEth, poolUsd, feeBase, deadline,
+          const creatorSub = await withRetry(
+            () => ct.getPool1Submission(BigInt(originalId), creatorAddr),
+            { tries: 2, minDelay: 120, maxDelay: 300, signal }
+          ).catch(() => null)
+          const creatorBlank = Number(creatorSub?.blankIndex ?? creatorSub?.[3] ?? 0)
+
+          return {
+            kind: 'pool2',
+            id: Number(id),
+            originalPool1Id: originalId,
+            chUsername, chWord,
+            chPreview: buildPreviewSingle(parts, chWord, creatorBlank),
+            votersOriginal: votersOriginalCount,
+            votersChallenger: votersChallengerCount,
+            claimed, challengerWon,
+            poolEth, poolUsd: poolEth * priceUsd, feeBase, deadline,
+          }
+        } catch {
+          return null
         }
-      }))
+      })).filter(Boolean)
+
+      if (signal.aborted) return
 
       setJoined(p1Cards)
       setStarted(startedCards)
       setWins(winCards)
       setUnclaimedWins(unclaimed)
       setVoted(p2Cards)
+
+      // Surface partial failure hint
+      const missed = (ids1.length - p1Cards.length) + (ids2.length - p2Cards.length)
+      if (missed > 0) setStatus(`Loaded ${ids1.length + ids2.length - missed} items (${missed} skipped due to RPC timeouts).`)
     } catch (e) {
+      if (String(e?.message).includes('aborted')) return
       console.error(e)
-      setStatus('Failed to load your rounds.')
+      setStatus('Failed to load your rounds. Try Refresh.')
       setJoined([]); setStarted([]); setWins([]); setUnclaimedWins([]); setVoted([])
     } finally {
-      setLoading(false)
+      if (!abortRef.current?.signal?.aborted) setLoading(false)
     }
-  }, [address, BASE_RPC, FILLIN_ADDRESS, priceUsd])
+  }, [address, getRead, priceUsd])
 
   useEffect(() => { if (address) loadMyRounds() }, [address, loadMyRounds])
 
@@ -233,7 +321,7 @@ function MyRoundsPage() {
   const finalizePool1 = useCallback(async (id) => {
     try {
       setStatus('Finalizing round…')
-      await claimPool1(id) // does staticCall preflight inside your helper
+      await claimPool1(id) // your helper does the preflight
       setStatus('Finalized')
       setShowConfetti(true)
       setJoined((rs) => rs.map((r) => (r.id === id ? { ...r, claimed: true } : r)))
@@ -248,15 +336,20 @@ function MyRoundsPage() {
     }
   }, [claimPool1])
 
-  // NFTs owned (contract-local)
+  // NFTs owned (contract-local), also robust + bounded
   const loadMyNfts = useCallback(async () => {
     if (!address || !NFT_ADDRESS) { setNfts([]); return }
+    if (abortRef.current) abortRef.current.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+    const { signal } = controller
+
     setNftLoading(true)
     try {
-      const readProv = new ethers.JsonRpcProvider(BASE_RPC)
-      const nft = new ethers.Contract(NFT_ADDRESS, NFT_READ_ABI, readProv)
+      const provider = new ethers.JsonRpcProvider(BASE_RPC, undefined, { staticNetwork: true })
+      const nft = new ethers.Contract(NFT_ADDRESS, NFT_READ_ABI, provider)
 
-      const bal = Number(await nft.balanceOf(address).catch(() => 0n))
+      const bal = Number(await withRetry(() => nft.balanceOf(address), { signal }).catch(() => 0n))
       if (!bal) { setNfts([]); return }
 
       const tokens = []
@@ -265,7 +358,7 @@ function MyRoundsPage() {
       for (let i = 0; i < bal; i++) {
         try {
           // eslint-disable-next-line no-await-in-loop
-          const tid = await nft.tokenOfOwnerByIndex(address, i)
+          const tid = await withRetry(() => nft.tokenOfOwnerByIndex(address, i), { tries: 2, signal })
           tokens.push(Number(tid))
         } catch {
           enumerableWorked = false
@@ -274,27 +367,30 @@ function MyRoundsPage() {
       }
       // Fallback brute-force scan (bounded)
       if (!enumerableWorked) {
-        const total = Number(await nft.totalSupply().catch(() => 0n))
-        const cap = Math.min(total || 0, 500) // safety cap
+        const total = Number(await withRetry(() => nft.totalSupply(), { signal }).catch(() => 0n))
+        const cap = Math.min(total || 0, 400) // safety cap
         for (let tid = 1; tokens.length < bal && tid <= cap; tid++) {
           // eslint-disable-next-line no-await-in-loop
-          const who = await nft.ownerOf(tid).catch(() => null)
+          const who = await withRetry(() => nft.ownerOf(tid), { tries: 2, signal }).catch(() => null)
+          if (signal.aborted) return
           if (who && who.toLowerCase() === address.toLowerCase()) tokens.push(tid)
         }
       }
 
-      const withUris = await Promise.all(tokens.map(async (id) => {
+      const withUris = await mapLimit(tokens, 6, async (id) => {
+        if (signal.aborted) return { id, tokenURI: null }
         try {
-          const uri = await nft.tokenURI(id)
+          const uri = await withRetry(() => nft.tokenURI(id), { tries: 2, signal })
           return { id, tokenURI: uri }
         } catch { return { id, tokenURI: null } }
-      }))
+      })
+      if (signal.aborted) return
       setNfts(withUris)
     } catch (e) {
-      console.error(e)
+      if (!String(e?.message).includes('aborted')) console.error(e)
       setNfts([])
     } finally {
-      setNftLoading(false)
+      if (!abortRef.current?.signal?.aborted) setNftLoading(false)
     }
   }, [address, BASE_RPC, NFT_ADDRESS])
 
