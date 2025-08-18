@@ -358,9 +358,9 @@ export default function ActivePools() {
     })
   }, [filtered, sortBy])
 
-  const totalPages = Math.ceil(sorted.length / 6) || 1
+  const totalPages = Math.ceil(sorted.length / roundsPerPage) || 1
   const pageSafe = Math.min(page, totalPages)
-  const paginated = sorted.slice((pageSafe - 1) * 6, pageSafe * 6)
+  const paginated = sorted.slice((pageSafe - 1) * roundsPerPage, pageSafe * roundsPerPage)
 
   // SEO / Frame
   const pageUrl = absoluteUrl('/active')
@@ -374,6 +374,7 @@ export default function ActivePools() {
         <meta property="fc:frame:button:1" content="View Rounds" />
         <meta property="fc:frame:button:1:action" content="link" />
         <meta property="fc:frame:button:1:target" content={pageUrl} />
+        <link rel="canonical" href={pageUrl} />
       </Head>
 
       <SEO
@@ -383,20 +384,37 @@ export default function ActivePools() {
         image={ogImage}
       />
 
-      {/* ---- CONTAINER FIXES ---- */}
-      <main className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-6 text-white overflow-x-hidden">
-        <h1 className="text-3xl sm:text-4xl font-extrabold drop-shadow mb-4 whitespace-nowrap">
-          🧠 Active Rounds
-        </h1>
+      {/* --- CONTAINER + CENTERING + OVERFLOW FIXES --- */}
+      <main className="mx-auto max-w-6xl px-4 sm:px-6 md:px-8 py-4 md:py-6 text-white overflow-x-hidden">
+        {/* Hero (matches Vote/Community) */}
+        <div className="rounded-2xl bg-slate-900/70 border border-slate-700 p-5 md:p-6 mb-6">
+          <div className="flex items-center justify-between gap-3 min-w-0">
+            <h1 className="text-2xl sm:text-3xl font-extrabold leading-tight bg-gradient-to-r from-amber-300 via-pink-300 to-indigo-300 bg-clip-text text-transparent break-words min-w-0">
+              🧠 Active Rounds
+            </h1>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="text-xs px-2 py-1 bg-slate-700 hover:bg-slate-600"
+              onClick={() => window.location.reload()}
+              title="Refresh rounds"
+            >
+              Refresh
+            </Button>
+          </div>
+          <p className="mt-2 text-slate-300 max-w-3xl break-words">
+            Browse live rounds happening right now. Enter with a word, cast votes, and win the prize pool.
+          </p>
+        </div>
 
         {!CONTRACT_ADDRESS && (
-          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 p-3">
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 p-3 mb-4">
             NEXT_PUBLIC_FILLIN_ADDRESS is not set. Add it in your environment to load rounds.
           </div>
         )}
 
-        {/* controls */}
-        <div className="flex flex-wrap justify-between gap-3 mb-4">
+        {/* Controls */}
+        <div className="flex flex-wrap justify-between gap-3 mb-6">
           <input
             type="text"
             placeholder="🔍 Search by name..."
@@ -427,6 +445,7 @@ export default function ActivePools() {
           </div>
         </div>
 
+        {/* Body */}
         {paginated.length === 0 ? (
           <div className="mt-8 text-lg text-center space-y-3">
             <p>No active rounds right now. Be the first to start one! 🚀</p>
@@ -442,7 +461,7 @@ export default function ActivePools() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4 }}
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"
+            className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5"
           >
             {paginated.map((r) => {
               const rUrl = absoluteUrl(`/round/${r.id}`)
@@ -451,7 +470,7 @@ export default function ActivePools() {
               return (
                 <Card
                   key={r.id}
-                  className="relative min-w-0 bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-xl hover:shadow-xl transition-all duration-300"
+                  className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700 min-w-0 overflow-hidden"
                 >
                   <CardHeader className="flex justify-between items-start gap-3 min-w-0">
                     <div className="flex items-start gap-3 min-w-0">
@@ -556,6 +575,23 @@ export default function ActivePools() {
             ))}
           </div>
         )}
+
+        {/* Footer (matches Vote/Community) */}
+        <footer className="mt-10 text-xs text-slate-400 flex flex-wrap items-center gap-3 justify-between border-t border-slate-800 pt-4">
+          <div className="flex items-center gap-3">
+            <Link href="/challenge" className="underline text-indigo-300">Start a Challenge</Link>
+            <a
+              href={`https://basescan.org/address/${CONTRACT_ADDRESS}`}
+              target="_blank"
+              rel="noreferrer"
+              className="underline text-indigo-300"
+              title="View contract on BaseScan"
+            >
+              Contract
+            </a>
+          </div>
+          <div className="opacity-80">Built on Base • MadFill</div>
+        </footer>
       </main>
     </Layout>
   )
