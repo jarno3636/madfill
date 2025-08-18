@@ -47,7 +47,7 @@ const isSoftError = (msg = '') => SOFT_ERROR_TEXTS.some(s => (msg || '').toLower
 
 /* Best-effort event topic for verification without ABI (creator is indexed param #2). */
 const TOPIC_POOL1_CREATED = ethers.id('Pool1Created(uint256,address,uint256,uint256)')
-const pad32 = (addr: string) => ethers.zeroPadValue(addr, 32)
+const pad32 = (addr, string) => ethers.zeroPadValue(addr, 32)
 
 /* A tiny spinner */
 const Spinner = () => (
