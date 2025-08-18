@@ -20,7 +20,7 @@ import { useTx } from '@/components/TxProvider'
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 /* ---------- utils ---------- */
-const stripWeird = (s) => String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '') // zero-width etc
+const stripWeird = (s) => String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '')
 const bytes = (s) => new TextEncoder().encode(stripWeird(s)).length
 const isNonEmpty = (s) => !!String(s || '').trim()
 
@@ -92,7 +92,7 @@ function computeParts(rawStory, rawFills, blankToken) {
   }
   if (parts[parts.length - 1] === blankToken) parts.pop()
 
-  // Ensure at least one BLANK remains for the template contract
+  // Ensure at least one BLANK remains
   if (!parts.includes(blankToken)) {
     if (parts.length === 1) parts.push(blankToken, ' ')
     else parts.splice(1, 0, blankToken)
@@ -127,7 +127,7 @@ export default function MYOPage() {
   const { width, height } = useWindowSize()
 
   const {
-    isConnected, connect, isOnBase,
+    isConnected, connect, isOnBase, isWarpcast,
     BASE_RPC, NFT_ADDRESS,
     mintTemplateNFT,
     address,
@@ -153,10 +153,10 @@ export default function MYOPage() {
   const [showConfetti, setShowConfetti] = useState(false)
 
   // tx status bar
-  const [txStatus, setTxStatus] = useState('')       // human text
-  const [txError, setTxError] = useState('')         // error text if any
-  const [txHash, setTxHash] = useState(null)         // last tx hash
-  const [verifying, setVerifying] = useState(false)  // soft-error verification toggle
+  const [txStatus, setTxStatus] = useState('')
+  const [txError, setTxError] = useState('')
+  const [txHash, setTxHash] = useState(null)
+  const [verifying, setVerifying] = useState(false)
 
   // meta
   const [title, setTitle] = useState('')
@@ -219,7 +219,6 @@ export default function MYOPage() {
     const id = setInterval(pull, 60_000)
     const onVis = () => { if (document.visibilityState === 'visible') pull() }
     document.addEventListener('visibilitychange', onVis)
-
     return () => { alive = false; clearInterval(id); document.removeEventListener('visibilitychange', onVis) }
   }, [BASE_RPC, NFT_ADDRESS])
 
@@ -234,14 +233,13 @@ export default function MYOPage() {
     [story, fills, blankToken]
   )
 
-  // Bytes that matter to the contract: ONLY text parts (no BLANK tokens)
   const contractTextBytes = useMemo(
     () => textPartsForContract.reduce((sum, p) => sum + bytes(p), 0),
     [textPartsForContract]
   )
 
-  // Total metadata bytes enforced by contract (title/desc/theme + text bytes)
-  const totalContractBytes = bytes(title) + bytes(description) + bytes(theme) + contractTextBytes
+  const totalContractBytes =
+    bytes(title) + bytes(description) + bytes(theme) + contractTextBytes
 
   // bg class
   const bgCls = useMemo(
@@ -270,7 +268,7 @@ export default function MYOPage() {
   const randomizeStarter = () => {
     const pick = PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)]
     setStory(pick)
-    setFills([]) // resizes via effect
+    setFills([])
   }
   const randomizeBackground = () => {
     const idx = BG_CHOICES.findIndex((b) => b.key === bgKey)
@@ -278,12 +276,13 @@ export default function MYOPage() {
     setBgKey(BG_CHOICES[next].key)
   }
 
-  // PRE-FLIGHT CHECKS (explicit reasons)
+  // PRE-FLIGHT CHECKS
   const reasonsCantMint = useMemo(() => {
     const reasons = []
     if (!NFT_ADDRESS) reasons.push('Missing NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS')
     if (!isConnected) reasons.push('Wallet not connected')
-    if (!isOnBase) reasons.push('Wrong network: switch to Base (8453)')
+    // Don’t block on network when embedded in Warpcast (TxProvider handles it)
+    if (!isWarpcast && !isOnBase) reasons.push('Wrong network: switch to Base (8453)')
     if (paused) reasons.push('Minting is paused')
     if (!isNonEmpty(title)) reasons.push('Title is required')
     if (!isNonEmpty(theme)) reasons.push('Theme is required')
@@ -295,7 +294,7 @@ export default function MYOPage() {
     if (typeof mintTemplateNFT !== 'function') reasons.push('mintTemplateNFT is not available from useTx()')
     return reasons
   }, [
-    NFT_ADDRESS, isConnected, isOnBase, paused,
+    NFT_ADDRESS, isConnected, isOnBase, isWarpcast, paused,
     title, theme, description,
     partsForContract.length, maxParts,
     textPartsForContract, maxPartBytes,
@@ -303,10 +302,9 @@ export default function MYOPage() {
     blankCount, mintTemplateNFT
   ])
 
-  const canMint =
-    reasonsCantMint.length === 0 && !loading
+  const canMint = reasonsCantMint.length === 0 && !loading
 
-  // exact on-chain mint fee (contract expects exact value)
+  // exact on-chain mint fee
   const readMintFeeExact = useCallback(async () => {
     if (!NFT_ADDRESS) return DISPLAY_FEE_WEI
     try {
@@ -319,7 +317,7 @@ export default function MYOPage() {
     }
   }, [BASE_RPC, NFT_ADDRESS])
 
-  /* ---------- helpers: provider + wait + verification ---------- */
+  /* ---------- provider + wait + verification ---------- */
   const provider = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [BASE_RPC])
 
   async function waitForReceipt(hash, timeoutMs = 35000) {
@@ -347,39 +345,15 @@ export default function MYOPage() {
     setTimeout(() => { setTxStatus(''); setTxError('') }, 3000)
   }
 
-  // ENSURE WALLET PROMPT (requests accounts if connected flag lies / embeds)
-  const ensureWalletPrompt = useCallback(async () => {
-    const eth = globalThis?.ethereum || (globalThis?.window && window.ethereum)
-    if (!eth) {
-      addToast({ type: 'error', title: 'No Wallet', message: 'No injected wallet found (window.ethereum).' })
-      return false
+  // Auto-connect inside Warpcast so the first click can sign
+  useEffect(() => {
+    if (isWarpcast && !isConnected) {
+      connect().catch(() => {})
     }
-    try {
-      // request accounts to force UI prompt if needed
-      await eth.request({ method: 'eth_requestAccounts' })
-      // optionally check chain and suggest switch
-      const ch = await eth.request({ method: 'eth_chainId' })
-      if (ch !== '0x2105') { // 8453
-        try {
-          await eth.request({
-            method: 'wallet_switchEthereumChain',
-            params: [{ chainId: '0x2105' }],
-          })
-        } catch (e) {
-          addToast({ type: 'error', title: 'Wrong Network', message: 'Please switch to Base (8453).' })
-          return false
-        }
-      }
-      return true
-    } catch (e) {
-      addToast({ type: 'error', title: 'Wallet Error', message: e?.message || 'Could not access wallet.' })
-      return false
-    }
-  }, [addToast])
+  }, [isWarpcast, isConnected, connect])
 
   // mint (with soft error + verification + tiny fee-bump retry)
   const handleMint = useCallback(async () => {
-    // if disabled, surface the first reason immediately
     if (!canMint) {
       if (reasonsCantMint.length) {
         addToast({ type: 'error', title: 'Can’t Mint', message: reasonsCantMint[0] })
@@ -387,9 +361,13 @@ export default function MYOPage() {
       return
     }
 
-    // double-check wallet prompt (helps if embedded)
-    const walletOk = await ensureWalletPrompt()
-    if (!walletOk) return
+    // ensure wallet session via useTx (WalletConnect in Warpcast)
+    if (!isConnected) {
+      try { await connect() } catch {
+        addToast({ type: 'error', title: 'Wallet', message: 'Could not connect to wallet.' })
+        return
+      }
+    }
 
     setTxError('')
     setTxStatus('')
@@ -401,10 +379,7 @@ export default function MYOPage() {
       setTxStatus('Waiting for wallet confirmation…')
 
       const valueWei = await readMintFeeExact()
-
-      if (typeof mintTemplateNFT !== 'function') {
-        throw new Error('mintTemplateNFT function is missing from useTx().')
-      }
+      if (typeof mintTemplateNFT !== 'function') throw new Error('mintTemplateNFT function is missing from useTx().')
 
       let res = await mintTemplateNFT(
         String(title).slice(0, 128),
@@ -423,9 +398,7 @@ export default function MYOPage() {
       setTxStatus('Submitting transaction…')
 
       let success = false
-      if (hash) {
-        success = await waitForReceipt(hash, 35000)
-      }
+      if (hash) success = await waitForReceipt(hash, 35000)
 
       if (!success) {
         setVerifying(true)
@@ -527,7 +500,7 @@ export default function MYOPage() {
       setVerifying(false)
     }
   }, [
-    canMint, reasonsCantMint, ensureWalletPrompt,
+    canMint, reasonsCantMint, isConnected, connect,
     readMintFeeExact, mintTemplateNFT,
     title, description, theme, partsForContract,
     addToast, NFT_ADDRESS
@@ -564,7 +537,6 @@ export default function MYOPage() {
 
       {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
-      {/* Inline TX status bar (prominent, with Basescan link) */}
       {(txStatus || txError) && (
         <div className="mx-auto mt-3 max-w-6xl px-4">
           <div
@@ -592,7 +564,6 @@ export default function MYOPage() {
         </div>
       )}
 
-      {/* Hero (matches other pages) */}
       <section className="mx-auto max-w-6xl px-4 pt-8 md:pt-12">
         <div className="rounded-2xl bg-gradient-to-br from-pink-700 via-indigo-700 to-cyan-700 p-6 md:p-8 shadow-xl ring-1 ring-white/10">
           <div className="grid gap-6 md:grid-cols-3">
@@ -617,13 +588,12 @@ export default function MYOPage() {
                   <Button onClick={connect} className="bg-amber-500 hover:bg-amber-400 text-black w-full">
                     Connect Wallet
                   </Button>
-                ) : !isOnBase ? (
+                ) : (!isWarpcast && !isOnBase) ? (
                   <div className="text-amber-300 bg-amber-900/30 border border-amber-700 rounded-md px-3 py-2 text-sm">
                     ⚠️ Wrong network. Switch to <b>Base (8453)</b>.
                   </div>
                 ) : null}
 
-                {/* Quick toggle for debug */}
                 <Button variant="outline" onClick={() => setShowDebug((v) => !v)} className="w-full border-slate-600 text-slate-200">
                   {showDebug ? 'Hide Debug' : 'Show Debug'}
                 </Button>
@@ -633,9 +603,7 @@ export default function MYOPage() {
         </div>
       </section>
 
-      {/* Main content */}
       <main className="max-w-6xl mx-auto px-4 py-8 text-white space-y-6">
-        {/* Limits strip */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div className="rounded-lg bg-slate-900/70 border border-slate-700 px-3 py-2">
             <div className="flex items-center gap-2 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
@@ -678,13 +646,13 @@ export default function MYOPage() {
           </div>
         )}
 
-        {/* Debug panel */}
         {showDebug && (
           <div className="rounded-lg bg-slate-900/70 border border-amber-500/40 p-4 text-xs">
             <div className="font-semibold mb-2 text-amber-300">Debug</div>
             <div className="grid sm:grid-cols-2 gap-y-1">
               <div>isConnected: {String(isConnected)}</div>
               <div>isOnBase: {String(isOnBase)}</div>
+              <div>isWarpcast: {String(isWarpcast)}</div>
               <div>NFT_ADDRESS: {String(NFT_ADDRESS || '(missing)')}</div>
               <div>BASE_RPC: {String(BASE_RPC || '(missing)')}</div>
               <div>paused: {String(paused)}</div>
@@ -708,9 +676,7 @@ export default function MYOPage() {
           </div>
         )}
 
-        {/* Main grid */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left: Builder */}
           <Card className="bg-slate-900/70 border border-slate-700">
             <CardHeader className="border-b border-slate-700">
               <h2 className="text-xl font-bold">Story Builder</h2>
@@ -795,7 +761,6 @@ export default function MYOPage() {
                 </div>
               )}
 
-              {/* Background selector */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="text-sm text-slate-300">Card Background</div>
@@ -816,7 +781,6 @@ export default function MYOPage() {
             </CardContent>
           </Card>
 
-          {/* Right: Preview + Mint */}
           <Card className="bg-slate-900/70 border border-slate-700">
             <CardHeader className="border-b border-slate-700">
               <h2 className="text-xl font-bold">Preview & Mint</h2>
@@ -832,7 +796,6 @@ export default function MYOPage() {
                 </div>
               </div>
 
-              {/* Fee + reasons */}
               <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
                 <div className="flex items-center gap-3 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
                   <div className="shrink-0">
@@ -888,7 +851,6 @@ export default function MYOPage() {
 
       {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
-      {/* Footer */}
       <footer className="mt-12 border-t border-slate-800 pt-6 pb-10 text-center text-slate-400 text-sm">
         <p>✨ Built with MadFill — Fill, laugh, and share ✨</p>
         <p className="mt-1">
