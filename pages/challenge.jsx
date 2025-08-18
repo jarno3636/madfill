@@ -329,16 +329,14 @@ export default function ChallengePage() {
 
       {showConfetti && <Confetti width={width} height={height} />}
 
-      <main className="max-w-5xl mx-auto p-4 md:p-6 text-white">
+      {/* ---- CENTERED, NO-HORIZONTAL-SCROLL CONTAINER ---- */}
+      <main className="mx-auto max-w-5xl px-4 sm:px-6 md:px-8 py-4 md:py-6 text-white overflow-x-hidden">
         {/* Hero */}
         <div className="rounded-2xl bg-slate-900/70 border border-slate-700 p-6 md:p-8 mb-6">
-          <div className="flex items-center justify-between gap-3">
-            {/* prevent wrapping; allow sideways scroll on tiny screens */}
-            <div className="overflow-x-auto max-w-full">
-              <h1 className="whitespace-nowrap text-3xl md:text-4xl font-extrabold bg-gradient-to-r from-fuchsia-300 via-amber-300 to-cyan-300 bg-clip-text text-transparent">
-                😆 Submit a Challenger Card
-              </h1>
-            </div>
+          <div className="flex items-center justify-between gap-3 min-w-0">
+            <h1 className="text-3xl md:text-4xl font-extrabold leading-tight bg-gradient-to-r from-fuchsia-300 via-amber-300 to-cyan-300 bg-clip-text text-transparent">
+              😆 Submit a Challenger
+            </h1>
             <div className="flex items-center gap-2 shrink-0">
               {!isOnBase && (
                 <Button
@@ -361,7 +359,7 @@ export default function ChallengePage() {
               </Button>
             </div>
           </div>
-          <p className="mt-2 text-slate-300 max-w-3xl">
+          <p className="mt-2 text-slate-300 max-w-3xl break-words">
             Think you can out-funny the Original? Pick the blank, drop your one-word zinger, and start a head-to-head showdown.
           </p>
         </div>
@@ -418,26 +416,26 @@ export default function ChallengePage() {
             ) : (
               <>
                 <div className="grid md:grid-cols-2 gap-4 items-start">
-                  <div>
+                  <div className="min-w-0">
                     <div className="text-sm text-slate-300 mb-1">
                       Original Card{roundName ? ` — ${roundName}` : ''}
                     </div>
-                    <div className="p-4 bg-slate-800/60 border border-slate-700 rounded-xl shadow-md text-sm leading-relaxed">
+                    <div className="p-4 bg-slate-800/60 border border-slate-700 rounded-xl shadow-md text-sm leading-relaxed break-words">
                       {originalPreview}
                     </div>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <div className="text-sm text-slate-300 mb-1">Your Challenger Card</div>
-                    <div className="p-4 bg-slate-800/60 border border-slate-700 rounded-xl shadow-md text-sm leading-relaxed">
+                    <div className="p-4 bg-slate-800/60 border border-slate-700 rounded-xl shadow-md text-sm leading-relaxed break-words">
                       {challengerPreview}
                     </div>
                   </div>
                 </div>
 
                 {/* Pick Blank */}
-                <div>
+                <div className="min-w-0">
                   <div className="text-sm text-slate-300 mb-1">Pick a blank</div>
-                  <div className="bg-slate-800/60 border border-slate-700 rounded p-3 text-sm">
+                  <div className="bg-slate-800/60 border border-slate-700 rounded p-3 text-sm break-words">
                     {parts.map((p, i) => (
                       <Fragment key={i}>
                         <span>{p}</span>
@@ -543,7 +541,7 @@ export default function ChallengePage() {
 
             {/* Status + Tx link */}
             {status && (
-              <div className="text-sm text-amber-200 flex items-center gap-2">
+              <div className="text-sm text-amber-200 flex items-center gap-2 break-words">
                 <span>{status}</span>
                 {lastTxHash && (
                   <a
@@ -599,7 +597,7 @@ export default function ChallengePage() {
           ) : challengeable.length === 0 ? (
             <div className="text-slate-400 text-sm">No completed rounds found yet.</div>
           ) : (
-            <div className="grid md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {challengeable.map((r) => (
                 <div key={r.id} className="bg-slate-800/60 border border-slate-700 rounded p-3">
                   <div className="flex items-center justify-between">
@@ -614,7 +612,7 @@ export default function ChallengePage() {
                       Use this Round
                     </Button>
                   </div>
-                  <div className="italic text-slate-100 mt-2">
+                  <div className="italic text-slate-100 mt-2 break-words">
                     {buildPreviewFromStored(r.parts, r.originalWordRaw)}
                   </div>
                 </div>
