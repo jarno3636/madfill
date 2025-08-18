@@ -202,48 +202,23 @@ export default function ActivePools() {
 
     const nowSec = Math.floor(Date.now() / 1000)
 
-    // widen window (and chunk it) so we don't miss older still-active rounds
     const latest = await withRetry(() => provider.getBlockNumber())
-    const DEFAULT_WINDOW = 2_000_000 // ~weeks on Base; widen if needed
+    const DEFAULT_WINDOW = 2_000_000
     const fromBlock = FILLIN_DEPLOY_BLOCK ?? Math.max(0, latest - DEFAULT_WINDOW)
 
-    // 1) Logs (created & claimed) in chunks
     const [createdLogs, claimedLogs] = await Promise.all([
-      getLogsChunked({
-        address: CONTRACT_ADDRESS,
-        topics: [TOPIC_POOL1_CREATED],
-        fromBlock,
-        toBlock: latest,
-      }, signal),
-      getLogsChunked({
-        address: CONTRACT_ADDRESS,
-        topics: [TOPIC_POOL1_CLAIMED],
-        fromBlock,
-        toBlock: latest,
-      }, signal),
+      getLogsChunked({ address: CONTRACT_ADDRESS, topics: [TOPIC_POOL1_CREATED], fromBlock, toBlock: latest }, signal),
+      getLogsChunked({ address: CONTRACT_ADDRESS, topics: [TOPIC_POOL1_CLAIMED], fromBlock, toBlock: latest }, signal),
     ])
     if (signal?.aborted) return
 
-    // 2) Parse IDs
-    const createdIds = Array.from(
-      new Set(
-        createdLogs
-          .map((lg) => {
-            try { return BigInt(lg.topics?.[1]).toString() } catch { return null }
-          })
-          .filter(Boolean)
-      )
-    )
-
+    const createdIds = Array.from(new Set(
+      createdLogs.map((lg) => { try { return BigInt(lg.topics?.[1]).toString() } catch { return null } }).filter(Boolean)
+    ))
     const claimedSet = new Set(
-      claimedLogs
-        .map((lg) => {
-          try { return BigInt(lg.topics?.[1]).toString() } catch { return null }
-        })
-        .filter(Boolean)
+      claimedLogs.map((lg) => { try { return BigInt(lg.topics?.[1]).toString() } catch { return null } }).filter(Boolean)
     )
 
-    // helper to build a UI round from on-chain info
     const roundFromInfo = async (idBI, info) => {
       const name = info.name_ ?? info[0]
       const theme = info.theme_ ?? info[1]
@@ -252,7 +227,6 @@ export default function ActivePools() {
       const deadline = Number(info.deadline_ ?? info[4])
       const participants = info.participants_ ?? info[6] ?? []
       const claimed = Boolean(info.claimed_ ?? info[8])
-
       if (claimed || deadline <= nowSec) return null
 
       let submissions = []
@@ -268,7 +242,7 @@ export default function ActivePools() {
           const idx = Number(blankIdxs[i] ?? 0)
           return { address: addr, username, word, blankIndex: idx, preview: buildPreviewSingle(parts, word, idx) }
         })
-      } catch { /* non-fatal */ }
+      } catch {}
 
       const feeBase = Number(ethers.formatEther(feeBaseWei))
       const estimatedUsd = price * (participants?.length || 0) * feeBase
@@ -289,12 +263,11 @@ export default function ActivePools() {
       }
     }
 
-    // 3) Build from logs
     let roundsFromLogs = []
     if (createdIds.length > 0) {
       const details = await limitMap(
         createdIds,
-        6, // concurrency
+        6,
         async (idStr) => {
           if (signal?.aborted) return null
           if (claimedSet.has(idStr)) return null
@@ -309,17 +282,15 @@ export default function ActivePools() {
       roundsFromLogs = details.filter(Boolean)
     }
 
-    // 4) Fallback if logs empty (scan the last N ids)
     if (roundsFromLogs.length === 0) {
       try {
         const count = Number(await withRetry(() => contract.pool1Count()))
         if (count > 0) {
-          const N = 120 // scan last N ids; adjust to your appetite
+          const N = 120
           const start = Math.max(1, count - N + 1)
           const ids = Array.from({ length: count - start + 1 }, (_, i) => BigInt(start + i))
-
           const details = await limitMap(
-            ids.reverse(), // newest first
+            ids.reverse(),
             6,
             async (idBI) => {
               if (signal?.aborted) return null
@@ -332,12 +303,9 @@ export default function ActivePools() {
           )
           roundsFromLogs = details.filter(Boolean)
         }
-      } catch {
-        // leave empty if fallback also fails
-      }
+      } catch {}
     }
 
-    // 5) Commit
     setRounds(roundsFromLogs.sort((a, b) => (b?.id || 0) - (a?.id || 0)))
   }
 
@@ -355,10 +323,7 @@ export default function ActivePools() {
 
     tick()
     const interval = setInterval(tick, 30_000)
-    return () => {
-      controller.abort()
-      clearInterval(interval)
-    }
+    return () => { controller.abort(); clearInterval(interval) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contract])
 
@@ -378,7 +343,7 @@ export default function ActivePools() {
       const matchesSearch = r.name.toLowerCase().includes(search.toLowerCase())
       const matchesFilter =
         filter === 'all' ||
-        filter === 'unclaimed' || // kept for compatibility; all are unclaimed by construction
+        filter === 'unclaimed' ||
         (filter === 'high' && parseFloat(r.usd) >= 5)
       return matchesSearch && matchesFilter
     })
@@ -393,9 +358,9 @@ export default function ActivePools() {
     })
   }, [filtered, sortBy])
 
-  const totalPages = Math.ceil(sorted.length / roundsPerPage) || 1
+  const totalPages = Math.ceil(sorted.length / 6) || 1
   const pageSafe = Math.min(page, totalPages)
-  const paginated = sorted.slice((pageSafe - 1) * roundsPerPage, pageSafe * roundsPerPage)
+  const paginated = sorted.slice((pageSafe - 1) * 6, pageSafe * 6)
 
   // SEO / Frame
   const pageUrl = absoluteUrl('/active')
@@ -418,8 +383,11 @@ export default function ActivePools() {
         image={ogImage}
       />
 
-      <main className="max-w-6xl mx-auto p-6 space-y-6 text-white">
-        <h1 className="text-4xl font-extrabold drop-shadow">🧠 Active Rounds</h1>
+      {/* ---- CONTAINER FIXES ---- */}
+      <main className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-6 text-white overflow-x-hidden">
+        <h1 className="text-3xl sm:text-4xl font-extrabold drop-shadow mb-4 whitespace-nowrap">
+          🧠 Active Rounds
+        </h1>
 
         {!CONTRACT_ADDRESS && (
           <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 p-3">
@@ -428,33 +396,35 @@ export default function ActivePools() {
         )}
 
         {/* controls */}
-        <div className="flex flex-wrap justify-between gap-4">
+        <div className="flex flex-wrap justify-between gap-3 mb-4">
           <input
             type="text"
             placeholder="🔍 Search by name..."
-            className="w-full sm:w-1/3 p-2 bg-slate-900 border border-slate-700 rounded"
+            className="min-w-0 flex-1 sm:flex-none sm:w-1/3 p-2 bg-slate-900 border border-slate-700 rounded"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <select
-            className="p-2 bg-slate-900 border border-slate-700 rounded"
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value)}
-          >
-            <option value="newest">📅 Newest</option>
-            <option value="deadline">⏳ Ending Soon</option>
-            <option value="participants">👥 Most Participants</option>
-            <option value="prize">💰 Prize Pool</option>
-          </select>
-          <select
-            className="p-2 bg-slate-900 border border-slate-700 rounded"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-          >
-            <option value="all">🌐 All</option>
-            <option value="unclaimed">🪙 Unclaimed Only</option>
-            <option value="high">💰 High Pools ($5+)</option>
-          </select>
+          <div className="flex gap-2 w-full sm:w-auto">
+            <select
+              className="p-2 bg-slate-900 border border-slate-700 rounded flex-1 sm:flex-none"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+            >
+              <option value="newest">📅 Newest</option>
+              <option value="deadline">⏳ Ending Soon</option>
+              <option value="participants">👥 Most Participants</option>
+              <option value="prize">💰 Prize Pool</option>
+            </select>
+            <select
+              className="p-2 bg-slate-900 border border-slate-700 rounded flex-1 sm:flex-none"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+            >
+              <option value="all">🌐 All</option>
+              <option value="unclaimed">🪙 Unclaimed Only</option>
+              <option value="high">💰 High Pools ($5+)</option>
+            </select>
+          </div>
         </div>
 
         {paginated.length === 0 ? (
@@ -472,7 +442,7 @@ export default function ActivePools() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4 }}
-            className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6"
+            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"
           >
             {paginated.map((r) => {
               const rUrl = absoluteUrl(`/round/${r.id}`)
@@ -481,39 +451,41 @@ export default function ActivePools() {
               return (
                 <Card
                   key={r.id}
-                  className="relative bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-xl hover:shadow-xl transition-all duration-300"
+                  className="relative min-w-0 bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-xl hover:shadow-xl transition-all duration-300"
                 >
-                  <CardHeader className="flex justify-between items-start">
-                    <div className="flex items-start gap-3">
-                      <div className="text-3xl">{r.emoji}</div>
-                      <div>
-                        <h2 className="text-lg font-bold">#{r.id} — {r.name}</h2>
-                        {r.badge && <span className="text-sm text-yellow-400 animate-pulse font-semibold">{r.badge}</span>}
-                        <p className="text-xs text-slate-400 mt-1">Theme: {r.theme}</p>
+                  <CardHeader className="flex justify-between items-start gap-3 min-w-0">
+                    <div className="flex items-start gap-3 min-w-0">
+                      <div className="text-3xl shrink-0">{r.emoji}</div>
+                      <div className="min-w-0">
+                        <h2 className="text-lg font-bold truncate">#{r.id} — {r.name}</h2>
+                        {r.badge && <span className="text-sm text-yellow-400">{r.badge}</span>}
+                        <p className="text-xs text-slate-400 mt-1 break-words">Theme: {r.theme}</p>
                       </div>
                     </div>
-                    <div className="text-sm font-mono mt-1">
+                    <div className="text-sm font-mono mt-1 shrink-0">
                       <Countdown targetTimestamp={r.deadline} />
                     </div>
                   </CardHeader>
 
-                  <CardContent className="space-y-2 text-sm font-medium">
-                    <p><strong>Entry Fee:</strong> {r.feeBase} ETH</p>
+                  <CardContent className="space-y-2 text-sm font-medium min-w-0">
+                    <p className="break-words"><strong>Entry Fee:</strong> {r.feeBase} ETH</p>
                     <p><strong>Participants:</strong> {r.count}</p>
                     <p><strong>Total Pool:</strong> {r.usdApprox ? '~' : ''}${r.usd}</p>
 
-                    <div className="pt-1">
+                    <div className="pt-1 min-w-0">
                       <ShareBoundary>
-                        <ShareBar
-                          url={rUrl}
-                          title={`🧠 Join MadFill Round #${r.id}!`}
-                          theme={r.theme || 'MadFill'}
-                          templateName={r.name || `Round #${r.id}`}
-                          feeEth={r.feeBase}
-                          durationMins={minsLeft}
-                          hashtags={['MadFill', 'Base', 'Farcaster']}
-                          embed="/og/cover.PNG"
-                        />
+                        <div className="min-w-0">
+                          <ShareBar
+                            url={rUrl}
+                            title={`🧠 Join MadFill Round #${r.id}!`}
+                            theme={r.theme || 'MadFill'}
+                            templateName={r.name || `Round #${r.id}`}
+                            feeEth={r.feeBase}
+                            durationMins={minsLeft}
+                            hashtags={['MadFill', 'Base', 'Farcaster']}
+                            embed="/og/cover.PNG"
+                          />
+                        </div>
                       </ShareBoundary>
                     </div>
 
@@ -539,16 +511,16 @@ export default function ActivePools() {
                                     alt={displayName}
                                     width={24}
                                     height={24}
-                                    className="rounded-full border border-white mt-1"
+                                    className="w-6 h-6 rounded-full border border-white mt-1 shrink-0"
                                     onError={(e) => { e.currentTarget.src = '/Capitalize.PNG' }}
                                   />
-                                  <div className="flex-1">
-                                    <p className="text-slate-300 font-semibold">@{displayName}</p>
-                                    <p className="italic leading-relaxed">{s.preview}</p>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-slate-300 font-semibold truncate">@{displayName}</p>
+                                    <p className="italic leading-relaxed break-words">{s.preview}</p>
                                   </div>
                                   <button
                                     onClick={() => handleLike(r.id, idx)}
-                                    className="text-pink-400 text-sm ml-1"
+                                    className="text-pink-400 text-sm ml-1 shrink-0"
                                     title="Like"
                                   >
                                     {likes[likeKey] ? '❤️' : '🤍'}
@@ -561,7 +533,7 @@ export default function ActivePools() {
                       </>
                     )}
 
-                    <Link href={`/round/${r.id}`}>
+                    <Link href={`/round/${r.id}`} className="block">
                       <Button className="mt-3 bg-indigo-600 hover:bg-indigo-500 w-full">✏️ Enter Round</Button>
                     </Link>
                   </CardContent>
