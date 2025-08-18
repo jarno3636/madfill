@@ -135,17 +135,11 @@ export default function MYOPage() {
   // BLANK token from contract (default placeholder)
   const [blankToken, setBlankToken] = useState('[BLANK]')
 
-  // Display-only fee; actual fee pulled on mint (with buffer)
+  // Display-only fee text; actual fee pulled on mint
   const DISPLAY_FEE_WEI = (() => {
     try { return ethers.parseEther('0.0005') } catch { return 500000000000000n }
   })()
   const DISPLAY_FEE_ETH = Number(ethers.formatEther(DISPLAY_FEE_WEI)).toFixed(6)
-
-  // Buffer for price drift
-  const BUFFER_BPS = (() => {
-    const v = Number(process.env.NEXT_PUBLIC_MYO_FEE_BUFFER_BPS)
-    return Number.isFinite(v) && v >= 0 && v <= 5000 ? Math.floor(v) : 200
-  })()
 
   // ui
   const [loading, setLoading] = useState(false)
@@ -239,7 +233,7 @@ export default function MYOPage() {
     const token = '[BLANK]'
     if (!el) { setStory((s) => `${s}${s.endsWith(' ') ? '' : ' '}${token} `); return }
     const start = el.selectionStart ?? el.value.length
-    const end = el.selectionEnd ?? el.value.length
+       const end = el.selectionEnd ?? el.value.length
     const before = story.slice(0, start)
     const after = story.slice(end)
     const next = `${before}${token}${after}`
@@ -290,21 +284,18 @@ export default function MYOPage() {
     return true
   }
 
-  // onchain price + buffer
-  const readFeeWithBuffer = useCallback(async () => {
+  // exact on-chain mint fee (contract expects exact value)
+  const readMintFeeExact = useCallback(async () => {
     if (!NFT_ADDRESS) return DISPLAY_FEE_WEI
     try {
       const provider = new ethers.JsonRpcProvider(BASE_RPC)
       const ct = new ethers.Contract(NFT_ADDRESS, TEMPLATE_READ_ABI, provider)
       const onchain = await ct.getMintPriceWei().catch(() => 0n)
-      const basePrice = (onchain && onchain > 0n) ? onchain : DISPLAY_FEE_WEI
-      const extra = (basePrice * BigInt(BUFFER_BPS)) / 10000n
-      return basePrice + extra
+      return (onchain && onchain > 0n) ? onchain : DISPLAY_FEE_WEI
     } catch {
-      const extra = (DISPLAY_FEE_WEI * BigInt(BUFFER_BPS)) / 10000n
-      return DISPLAY_FEE_WEI + extra
+      return DISPLAY_FEE_WEI
     }
-  }, [BASE_RPC, NFT_ADDRESS, BUFFER_BPS])
+  }, [BASE_RPC, NFT_ADDRESS])
 
   /* ---------- helpers: provider + wait + verification ---------- */
   const provider = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [BASE_RPC])
@@ -334,7 +325,7 @@ export default function MYOPage() {
     setTimeout(() => { setTxStatus(''); setTxError('') }, 3000)
   }
 
-  // mint (with soft error + verification)
+  // mint (with soft error + verification + tiny fee-bump retry)
   const handleMint = useCallback(async () => {
     if (!validate()) return
 
@@ -347,9 +338,9 @@ export default function MYOPage() {
       setLoading(true)
       setTxStatus('Waiting for wallet confirmation…')
 
-      const valueWei = await readFeeWithBuffer()
+      const valueWei = await readMintFeeExact()
 
-      const res = await mintTemplateNFT(
+      let res = await mintTemplateNFT(
         String(title).slice(0, 128),
         String(description).slice(0, 2048),
         String(theme).slice(0, 128),
@@ -430,9 +421,38 @@ export default function MYOPage() {
         }
       }
 
-      if (/insufficient funds|underpriced|max fee/i.test(msg)) {
-        addToast({ type: 'error', title: 'Fee Too Low', message: 'ETH balance or buffer too low. Increase NEXT_PUBLIC_MYO_FEE_BUFFER_BPS and retry.' })
-      } else if (/execution reverted|no data/i.test(msg)) {
+      // one-shot retry with +1% value if the error smells like price/fee race
+      if (/insufficient funds|underpriced|fee|price/i.test(msg)) {
+        try {
+          setTxStatus('Retrying with adjusted value…')
+          const exact = await readMintFeeExact()
+          const bump = exact + (exact / 100n) // +1%
+          const retry = await mintTemplateNFT(
+            String(title).slice(0, 128),
+            String(description).slice(0, 2048),
+            String(theme).slice(0, 128),
+            partsForContract,
+            { value: bump }
+          )
+          const retryHash = retry?.hash || retry?.transactionHash
+          if (retryHash) setTxHash(retryHash)
+          const ok = retryHash ? await waitForReceipt(retryHash, 35000) : false
+          if (ok) {
+            addToast({ type: 'success', title: 'Template Minted!', message: 'Your template NFT is live.' })
+            setTxStatus('Minted ✓')
+            setTxError('')
+            setShowConfetti(true)
+            setTimeout(() => setShowConfetti(false), 1600)
+            setTitle(''); setTheme(''); setDescription('')
+            setStory(PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)])
+            setFills([])
+            clearStatusSoon()
+            return
+          }
+        } catch {}
+      }
+
+      if (/execution reverted|no data/i.test(msg)) {
         addToast({
           type: 'error',
           title: 'Mint Reverted',
@@ -449,7 +469,7 @@ export default function MYOPage() {
       setVerifying(false)
     }
   }, [
-    validate, readFeeWithBuffer, mintTemplateNFT,
+    validate, readMintFeeExact, mintTemplateNFT,
     title, description, theme, partsForContract,
     addToast, address, NFT_ADDRESS
   ])
@@ -523,20 +543,20 @@ export default function MYOPage() {
         </div>
       )}
 
-      {/* Hero */}
+      {/* Hero (matches other pages) */}
       <section className="mx-auto max-w-6xl px-4 pt-8 md:pt-12">
-        <div className="rounded-2xl bg-gradient-to-br from-slate-900 via-indigo-900/70 to-purple-900/70 border border-indigo-700 p-6 md:p-8 shadow-xl">
+        <div className="rounded-2xl bg-gradient-to-br from-pink-700 via-indigo-700 to-cyan-700 p-6 md:p-8 shadow-xl ring-1 ring-white/10">
           <div className="grid gap-6 md:grid-cols-3">
             <div className="md:col-span-2">
-              <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight">🎨 Make Your Own</h1>
-              <p className="text-indigo-100 mt-4">
-                Drop <code className="px-1 py-0.5 bg-slate-800 rounded">[BLANK]</code> where players will fill in words.
-                Pick a vibe, then mint your Template as an NFT on <span className="font-semibold">Base</span>.
+              <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">🎨 Make Your Own</h1>
+              <p className="text-indigo-100 mt-2 max-w-2xl">
+                Drop <code className="px-1 py-0.5 bg-slate-900/40 rounded">[BLANK]</code> where players will fill words.
+                Pick a vibe, then mint your Template NFT on <span className="font-semibold">Base</span>.
               </p>
             </div>
-            <div className="rounded-xl bg-slate-900/50 border border-slate-700 p-4">
+            <div className="rounded-xl bg-slate-900/40 ring-1 ring-white/10 p-4">
               <h3 className="font-semibold mb-2">Quick Steps</h3>
-              <ol className="space-y-2 text-sm text-slate-200 list-decimal list-inside">
+              <ol className="space-y-2 text-sm text-slate-100/90 list-decimal list-inside">
                 <li>Write a story with [BLANK]</li>
                 <li>Set Title, Theme & Background</li>
                 <li>Review limits</li>
@@ -764,8 +784,7 @@ export default function MYOPage() {
               </div>
 
               <div className="text-xs text-slate-400">
-                Seeing <i>“execution reverted / no data”</i>? Ensure at least one <code>[BLANK]</code> remains,
-                parts/bytes are within limits, you’re on Base, and consider raising <code>NEXT_PUBLIC_MYO_FEE_BUFFER_BPS</code>.
+                Seeing <i>“execution reverted / no data”</i>? Ensure at least one <code>[BLANK]</code> remains and parts/bytes are within limits, and verify you’re on <b>Base</b>.
               </div>
             </CardContent>
           </Card>
