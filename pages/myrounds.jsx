@@ -13,6 +13,7 @@ import SEO from '@/components/SEO'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import ShareBar from '@/components/ShareBar'
+import Countdown from '@/components/Countdown'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useTx } from '@/components/TxProvider'
@@ -80,7 +81,7 @@ function mapLimit(items, limit, worker) {
   let i = 0
   const results = new Array(items.length)
   let active = 0
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const next = () => {
       if (i >= items.length && active === 0) return resolve(results)
       while (active < limit && i < items.length) {
@@ -156,14 +157,27 @@ function MyRoundsPage() {
   // Abort controller for all loads
   const abortRef = useRef(null)
 
-  // price (display only)
+  // price (display only) with fallback + retry
   useEffect(() => {
     let dead = false
     ;(async () => {
       try {
-        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
-        const j = await r.json()
-        if (!dead) setPriceUsd(Number(j?.ethereum?.usd || 0))
+        const tryOnce = async (url) => {
+          const r = await fetch(url)
+          return await r.json()
+        }
+        let usd = 0
+        try {
+          const j = await tryOnce('https://api.coinbase.com/v2/prices/ETH-USD/spot')
+          usd = Number(j?.data?.amount || 0)
+        } catch {}
+        if (!usd) {
+          try {
+            const j = await tryOnce('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
+            usd = Number(j?.ethereum?.usd || 0)
+          } catch {}
+        }
+        if (!dead) setPriceUsd(usd || 0)
       } catch { if (!dead) setPriceUsd(0) }
     })()
     return () => { dead = true }
@@ -189,13 +203,19 @@ function MyRoundsPage() {
     try {
       const { ct } = getRead()
 
-      // getUserEntries can flake; retry
-      const userEntries = await withRetry(() => ct.getUserEntries(address), { signal })
+      // getUserEntries can flake; retry and allow partial fallback
+      let userEntries
+      try {
+        userEntries = await withRetry(() => ct.getUserEntries(address), { signal })
+      } catch (e) {
+        // If the helper fails, produce empty arrays (page still loads)
+        userEntries = [[], []]
+      }
       const ids1 = Array.from(userEntries?.[0] || []).map(Number)
       const ids2 = Array.from(userEntries?.[1] || []).map(Number)
 
-      // ---- Load Pool1 cards with bounded concurrency
-      const p1Cards = (await mapLimit(ids1, CONCURRENCY, async (id) => {
+      // ---- Load Pool1 cards with bounded concurrency + allSettled behavior
+      const p1CardsRaw = await mapLimit(ids1, CONCURRENCY, async (id) => {
         if (signal.aborted) return null
         try {
           const info = await withRetry(() => ct.getPool1Info(BigInt(id)), { signal })
@@ -240,11 +260,11 @@ function MyRoundsPage() {
             winner, claimed, ended, youWon,
             isCreator: creator && creator.toLowerCase() === address.toLowerCase(),
           }
-        } catch (e) {
-          // keep going; mark as null
+        } catch {
           return null
         }
-      })).filter(Boolean)
+      })
+      const p1Cards = p1CardsRaw.filter(Boolean)
 
       // Derive lists
       const startedCards = p1Cards.filter((c) => c.isCreator)
@@ -252,7 +272,7 @@ function MyRoundsPage() {
       const unclaimed = winCards.filter((c) => !c.claimed)
 
       // ---- Load Pool2 vote cards with bounded concurrency
-      const p2Cards = (await mapLimit(ids2, CONCURRENCY, async (id) => {
+      const p2CardsRaw = await mapLimit(ids2, CONCURRENCY, async (id) => {
         if (signal.aborted) return null
         try {
           const p2 = await withRetry(() => ct.getPool2InfoFull(BigInt(id)), { signal })
@@ -292,7 +312,8 @@ function MyRoundsPage() {
         } catch {
           return null
         }
-      })).filter(Boolean)
+      })
+      const p2Cards = p2CardsRaw.filter(Boolean)
 
       if (signal.aborted) return
 
@@ -317,11 +338,18 @@ function MyRoundsPage() {
 
   useEffect(() => { if (address) loadMyRounds() }, [address, loadMyRounds])
 
+  // background refresh every 60s (doesn't block UI)
+  useEffect(() => {
+    if (!address) return
+    const t = setInterval(() => { loadMyRounds() }, 60000)
+    return () => clearInterval(t)
+  }, [address, loadMyRounds])
+
   // claim / finalize (uses TxProvider helper)
   const finalizePool1 = useCallback(async (id) => {
     try {
       setStatus('Finalizing round…')
-      await claimPool1(id) // your helper does the preflight
+      await claimPool1(id)
       setStatus('Finalized')
       setShowConfetti(true)
       setJoined((rs) => rs.map((r) => (r.id === id ? { ...r, claimed: true } : r)))
@@ -462,13 +490,15 @@ function MyRoundsPage() {
 
       {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
-      <main className="max-w-6xl mx-auto p-4 md:p-6 text-white space-y-6">
-        {/* Header */}
+      <main className="w-full mx-auto max-w-6xl px-4 sm:px-6 md:px-8 py-4 md:py-6 text-white space-y-6 overflow-x-hidden">
+        {/* Header (matches Vote/Challenge styling) */}
         <div className="rounded-2xl bg-slate-900/70 border border-slate-700 p-6">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h1 className="text-3xl md:text-4xl font-extrabold">🗂️ My Rounds</h1>
-              <p className="text-slate-300">
+          <div className="flex flex-wrap items-center justify-between gap-4 min-w-0">
+            <div className="min-w-0">
+              <h1 className="text-3xl md:text-4xl font-extrabold leading-tight bg-gradient-to-r from-amber-300 via-pink-300 to-indigo-300 bg-clip-text text-transparent break-words">
+                🗂️ My Rounds
+              </h1>
+              <p className="text-slate-300 mt-1 break-words">
                 {isConnected ? (
                   <>Signed in as <span className="font-mono">{shortAddr(address)}</span></>
                 ) : (
@@ -476,7 +506,7 @@ function MyRoundsPage() {
                 )}
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               {!isConnected ? (
                 <Button onClick={connect} className="bg-amber-500 hover:bg-amber-400 text-black">Connect Wallet</Button>
               ) : !isOnBase ? (
@@ -551,7 +581,7 @@ function MyRoundsPage() {
               ) : (
                 <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
                   {nfts.map((t) => (
-                    <div key={t.id} className="rounded-xl bg-slate-900/60 border border-slate-700 p-4">
+                    <div key={t.id} className="rounded-xl bg-slate-900/60 border border-slate-700 p-4 overflow-hidden">
                       <div className="text-sm font-semibold">Token #{t.id}</div>
                       <div className="text-xs text-slate-400 break-all mt-1">
                         {t.tokenURI ? <a className="underline" href={t.tokenURI} target="_blank" rel="noopener noreferrer">tokenURI</a> : 'No tokenURI'}
@@ -637,42 +667,45 @@ function MyRoundsPage() {
               const endsLabel = formatTimeLeft(card.deadline)
 
               return (
-                <Card key={`${card.kind}-${card.id}`} className="relative bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-xl hover:shadow-xl transition-all duration-300">
-                  <CardHeader className="flex justify-between items-start gap-3">
-                    <div className="flex items-start gap-3">
-                      <div className="text-2xl">{isPool1 ? '🧩' : '⚔️'}</div>
-                      <div>
-                        <h2 className="text-lg font-bold">
+                <Card key={`${card.kind}-${card.id}`} className="relative bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-xl hover:shadow-xl transition-all duration-300 min-w-0 overflow-hidden">
+                  <CardHeader className="flex justify-between items-start gap-3 min-w-0">
+                    <div className="flex items-start gap-3 min-w-0">
+                      <div className="text-2xl shrink-0">{isPool1 ? '🧩' : '⚔️'}</div>
+                      <div className="min-w-0">
+                        <h2 className="text-lg font-bold truncate">
                           {isPool1 ? <>#{card.id} — {card.name}</> : <>Vote #{card.id} — Round #{card.originalPool1Id}</>}
                         </h2>
                         <div className="mt-1">{statusBadge(card)}</div>
-                        {isPool1 && card.theme && <p className="text-xs text-slate-400 mt-1">Theme: {card.theme}</p>}
+                        {isPool1 && card.theme && <p className="text-xs text-slate-400 mt-1 break-words">Theme: {card.theme}</p>}
                       </div>
                     </div>
-                    <div className="text-xs text-right text-slate-300">
-                      {endsLabel === 'Ended' ? 'Ended' : <>Ends in {endsLabel}</>}
+                    <div className="flex flex-col items-end shrink-0">
+                      <div className="text-xs text-slate-300">{endsLabel === 'Ended' ? 'Ended' : <>Ends in {endsLabel}</>}</div>
+                      <div className="mt-1">
+                        <Countdown targetTimestamp={card.deadline} />
+                      </div>
                     </div>
                   </CardHeader>
 
-                  <CardContent className="space-y-3 text-sm">
-                    <div className="p-3 rounded bg-slate-800/60 border border-slate-700 leading-relaxed">
+                  <CardContent className="space-y-3 text-sm min-w-0">
+                    <div className="p-3 rounded bg-slate-800/60 border border-slate-700 leading-relaxed break-words">
                       {isPool1 ? card.preview : card.chPreview}
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 text-xs text-slate-300">
                       {isPool1 ? (
                         <>
-                          <div><span className="text-slate-400">Entry Fee:</span> {fmt(card.feeEth, 4)} ETH (${fmt(card.feeUsd)})</div>
-                          <div><span className="text-slate-400">Pool:</span> {fmt(card.poolEth, 4)} ETH (${fmt(card.poolUsd)})</div>
-                          <div><span className="text-slate-400">Participants:</span> {card.participantsCount}</div>
-                          <div><span className="text-slate-400">Creator:</span> <span className="font-mono">{shortAddr(card.creator)}</span></div>
+                          <div className="min-w-0"><span className="text-slate-400">Entry Fee:</span> {fmt(card.feeEth, 4)} ETH (${fmt(card.feeUsd)})</div>
+                          <div className="min-w-0"><span className="text-slate-400">Pool:</span> {fmt(card.poolEth, 4)} ETH (${fmt(card.poolUsd)})</div>
+                          <div className="min-w-0"><span className="text-slate-400">Participants:</span> {card.participantsCount}</div>
+                          <div className="min-w-0"><span className="text-slate-400">Creator:</span> <span className="font-mono">{shortAddr(card.creator)}</span></div>
                         </>
                       ) : (
                         <>
-                          <div><span className="text-slate-400">Votes (OG):</span> {card.votersOriginal}</div>
-                          <div><span className="text-slate-400">Votes (Ch):</span> {card.votersChallenger}</div>
-                          <div><span className="text-slate-400">Fee / vote:</span> {fmt(card.feeBase, 4)} ETH</div>
-                          <div><span className="text-slate-400">Pool:</span> {fmt(card.poolEth, 4)} ETH (${fmt(card.poolUsd)})</div>
+                          <div className="min-w-0"><span className="text-slate-400">Votes (OG):</span> {card.votersOriginal}</div>
+                          <div className="min-w-0"><span className="text-slate-400">Votes (Ch):</span> {card.votersChallenger}</div>
+                          <div className="min-w-0"><span className="text-slate-400">Fee / vote:</span> {fmt(card.feeBase, 4)} ETH</div>
+                          <div className="min-w-0"><span className="text-slate-400">Pool:</span> {fmt(card.poolEth, 4)} ETH (${fmt(card.poolUsd)})</div>
                         </>
                       )}
                     </div>
@@ -718,9 +751,39 @@ function MyRoundsPage() {
           </div>
         )}
 
-        <div className="text-xs text-slate-400 text-center">
-          Contracts: <span className="font-mono">{FILLIN_ADDRESS}</span> (FillIn) • <span className="font-mono">{NFT_ADDRESS}</span> (NFT).
-          Prices use a public ETH/USD spot (approx).
+        {/* Footer (matches Vote/Active) */}
+        <footer className="mt-10 text-xs text-slate-400 flex flex-wrap items-center gap-3 justify-between border-t border-slate-800 pt-4">
+          <div className="flex items-center gap-3">
+            <Link href="/challenge" className="underline text-indigo-300">Start a Challenge</Link>
+            {FILLIN_ADDRESS && (
+              <a
+                href={`https://basescan.org/address/${FILLIN_ADDRESS}`}
+                target="_blank"
+                rel="noreferrer"
+                className="underline text-indigo-300"
+                title="View FillIn contract on BaseScan"
+              >
+                FillIn Contract
+              </a>
+            )}
+            {NFT_ADDRESS && (
+              <a
+                href={`https://basescan.org/token/${NFT_ADDRESS}`}
+                target="_blank"
+                rel="noreferrer"
+                className="underline text-indigo-300"
+                title="View NFT contract on BaseScan"
+              >
+                NFT Contract
+              </a>
+            )}
+          </div>
+          <div className="opacity-80">Built on Base • MadFill</div>
+        </footer>
+
+        {/* Tiny note */}
+        <div className="text-[11px] text-slate-500 text-center mt-2">
+          Prices use public ETH/USD spot (approx). Some items may be skipped if an RPC call times out; use Refresh.
         </div>
       </main>
     </Layout>
