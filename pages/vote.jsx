@@ -423,6 +423,7 @@ export default function VotePage() {
       />
 
       <Head>
+        {/* Farcaster Mini App / Frame meta */}
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
         <meta property="fc:frame:button:1" content="Open Vote" />
@@ -438,7 +439,7 @@ export default function VotePage() {
         {/* Hero */}
         <div className="rounded-2xl bg-slate-900/70 border border-slate-700 p-5 md:p-6 mb-6">
           <div className="flex items-center justify-between gap-3 min-w-0">
-            <h1 className="whitespace-nowrap text-2xl sm:text-3xl font-extrabold leading-tight bg-gradient-to-r from-amber-300 via-pink-300 to-indigo-300 bg-clip-text text-transparent">
+            <h1 className="text-2xl sm:text-3xl font-extrabold leading-tight bg-gradient-to-r from-amber-300 via-pink-300 to-indigo-300 bg-clip-text text-transparent break-words min-w-0">
               🗳️ Community Vote
             </h1>
             <div className="flex items-center gap-2 shrink-0">
@@ -473,7 +474,7 @@ export default function VotePage() {
               )}
             </div>
           </div>
-          <p className="mt-2 text-slate-300 max-w-3xl">
+          <p className="mt-2 text-slate-300 max-w-3xl break-words">
             Pick the punchline! Each challenge pits the <span className="font-semibold">Original</span> card against a <span className="font-semibold">Challenger</span>.
             Pay a tiny fee to vote; when voting ends, the winning side <span className="font-semibold">splits the prize pool</span>. Feeling spicy?{' '}
             <Link href="/challenge" className="underline text-purple-300">Submit a Challenger</Link>.
@@ -531,7 +532,7 @@ export default function VotePage() {
               const shareUrl = absoluteUrl(`/round/${r.originalPool1Id}`)
               const shareText = `Vote on MadFill Challenge #${r.id} → Round #${r.originalPool1Id}!`
               return (
-                <Card key={r.id} className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700 min-w-0">
+                <Card key={r.id} className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700 min-w-0 overflow-hidden">
                   <CardHeader className="flex items-start justify-between gap-2 bg-slate-800/60 border-b border-slate-700 min-w-0">
                     <div className="space-y-0.5 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -557,7 +558,7 @@ export default function VotePage() {
                     </a>
                   </CardHeader>
 
-                  <CardContent className="p-5 space-y-3 min-w-0">
+                  <CardContent className="p-5 space-y-3 min-w-0 overflow-hidden">
                     {/* Compare */}
                     <div className="grid grid-cols-1 gap-3">
                       <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
