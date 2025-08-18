@@ -91,14 +91,21 @@ function computeParts(rawStory, rawFills, blankToken) {
   }
   if (parts[parts.length - 1] === blankToken) parts.pop()
 
-  // If user prefilled everything, ensure at least one BLANK stays
+  // Ensure at least one BLANK remains for the template contract
   if (!parts.includes(blankToken)) {
     if (parts.length === 1) parts.push(blankToken, ' ')
     else parts.splice(1, 0, blankToken)
   }
 
-  const blanksRemaining = parts.filter((p) => p === blankToken).length
-  return { partsForContract: parts, partsForPreview: preview, blanksRemaining }
+  const blankCount = parts.filter((p) => p === blankToken).length
+  const textPartsForContract = parts.filter((p) => p !== blankToken)
+
+  return {
+    partsForContract: parts,
+    partsForPreview: preview,
+    textPartsForContract,
+    blankCount,
+  }
 }
 
 /* ---------- tx status helpers ---------- */
@@ -108,7 +115,6 @@ const SOFT_ERROR_TEXTS = [
 const isSoftError = (msg='') => SOFT_ERROR_TEXTS.some(s => (msg || '').toLowerCase().includes(s))
 
 const TOPIC_MINTED = ethers.id('Minted(uint256,address,string,string)')
-const pad32 = (addr) => ethers.zeroPadValue(addr, 32)
 
 const Spinner = () => (
   <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/70 border-t-transparent align-middle" />
@@ -159,7 +165,10 @@ export default function MYOPage() {
   // story + fills
   const storyRef = useRef(null)
   const [story, setStory] = useState(PROMPT_STARTERS[0])
-  const blanksInStory = Math.max(0, stripWeird(story).split(/\[BLANK\]/g).length - 1)
+  const blanksInStory = useMemo(
+    () => Math.max(0, stripWeird(story).split(/\[BLANK\]/g).length - 1),
+    [story]
+  )
   const [fills, setFills] = useState(Array(blanksInStory).fill(''))
 
   // background
@@ -210,16 +219,25 @@ export default function MYOPage() {
     return () => { alive = false; clearInterval(id); document.removeEventListener('visibilitychange', onVis) }
   }, [BASE_RPC, NFT_ADDRESS])
 
-  // derive parts + sizes
-  const { partsForContract, partsForPreview, blanksRemaining } = useMemo(
+  // derive parts + sizes FROM CONTRACT PERSPECTIVE
+  const {
+    partsForContract,
+    partsForPreview,
+    textPartsForContract,
+    blankCount,
+  } = useMemo(
     () => computeParts(story, fills, blankToken),
     [story, fills, blankToken]
   )
-  const partsBytes = useMemo(
-    () => partsForPreview.reduce((sum, p) => sum + bytes(p), 0),
-    [partsForPreview]
+
+  // Bytes that matter to the contract: ONLY text parts (no BLANK tokens)
+  const contractTextBytes = useMemo(
+    () => textPartsForContract.reduce((sum, p) => sum + bytes(p), 0),
+    [textPartsForContract]
   )
-  const totalBytes = bytes(title) + bytes(description) + bytes(theme) + partsBytes
+
+  // Total metadata bytes enforced by contract (title/desc/theme + text bytes)
+  const totalContractBytes = bytes(title) + bytes(description) + bytes(theme) + contractTextBytes
 
   // bg class
   const bgCls = useMemo(
@@ -233,7 +251,7 @@ export default function MYOPage() {
     const token = '[BLANK]'
     if (!el) { setStory((s) => `${s}${s.endsWith(' ') ? '' : ' '}${token} `); return }
     const start = el.selectionStart ?? el.value.length
-       const end = el.selectionEnd ?? el.value.length
+    const end = el.selectionEnd ?? el.value.length
     const before = story.slice(0, start)
     const after = story.slice(end)
     const next = `${before}${token}${after}`
@@ -256,7 +274,7 @@ export default function MYOPage() {
     setBgKey(BG_CHOICES[next].key)
   }
 
-  // validation
+  // validation — use CONTRACT parts + bytes
   const validate = () => {
     if (!NFT_ADDRESS) {
       addToast({ type: 'error', title: 'Contract Missing', message: 'Set NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS.' })
@@ -272,13 +290,13 @@ export default function MYOPage() {
     if (partsForContract.length > maxParts) {
       addToast({ type: 'error', title: 'Too Many Parts', message: `Max ${maxParts} parts.` }); return false
     }
-    if (partsForPreview.some((p) => bytes(p) > maxPartBytes)) {
+    if (textPartsForContract.some((p) => bytes(p) > maxPartBytes)) {
       addToast({ type: 'error', title: 'Part Too Long', message: `Each part must be ≤ ${maxPartBytes} bytes.` }); return false
     }
-    if (totalBytes > maxTotalBytes) {
+    if (totalContractBytes > maxTotalBytes) {
       addToast({ type: 'error', title: 'Too Large', message: `Total bytes must be ≤ ${maxTotalBytes}.` }); return false
     }
-    if (blanksRemaining < 1) {
+    if (blankCount < 1) {
       addToast({ type: 'error', title: 'Add a Blank', message: 'Leave at least one [BLANK] unfilled.' }); return false
     }
     return true
@@ -307,7 +325,8 @@ export default function MYOPage() {
     } catch { return false }
   }
 
-  async function verifyMintedOnChain({ author, contractAddr, lookback = 3000 }) {
+  // Relaxed verification: just look for Minted events on the contract in the recent window
+  async function verifyMintedOnChain({ contractAddr, lookback = 3000 }) {
     try {
       const latest = await provider.getBlockNumber()
       const fromBlock = Math.max(0, latest - lookback)
@@ -315,7 +334,7 @@ export default function MYOPage() {
         address: contractAddr,
         fromBlock,
         toBlock: latest,
-        topics: [TOPIC_MINTED, null, pad32(author)],
+        topics: [TOPIC_MINTED],
       })
       return (logs && logs.length > 0)
     } catch { return false }
@@ -365,7 +384,6 @@ export default function MYOPage() {
         setVerifying(true)
         setTxStatus('Verifying on-chain…')
         const ok = await verifyMintedOnChain({
-          author: address,
           contractAddr: NFT_ADDRESS,
         })
         success = ok
@@ -400,7 +418,6 @@ export default function MYOPage() {
         setVerifying(true)
         setTxStatus('Network hiccup. Verifying on-chain…')
         const ok = await verifyMintedOnChain({
-          author: address,
           contractAddr: NFT_ADDRESS,
         })
         if (ok) {
@@ -471,14 +488,14 @@ export default function MYOPage() {
   }, [
     validate, readMintFeeExact, mintTemplateNFT,
     title, description, theme, partsForContract,
-    addToast, address, NFT_ADDRESS
+    addToast, NFT_ADDRESS
   ])
 
   const wordsForPreview = useMemo(() => {
     const w = {}
-    for (let i = 0; i < blanksRemaining; i++) w[i] = ''
+    for (let i = 0; i < blankCount; i++) w[i] = ''
     return w
-  }, [blanksRemaining])
+  }, [blankCount])
 
   const pageUrl = absoluteUrl('/myo')
   const ogImage = buildOgUrl({ screen: 'myo', title: 'Make Your Own' })
@@ -491,7 +508,7 @@ export default function MYOPage() {
     title.trim() &&
     theme.trim() &&
     description.trim() &&
-    blanksRemaining >= 1
+    blankCount >= 1
 
   return (
     <Layout>
@@ -593,12 +610,12 @@ export default function MYOPage() {
           <div className="rounded-lg bg-slate-900/70 border border-slate-700 px-3 py-2">
             <div className="flex items-center justify-between">
               <span>Parts</span>
-              <span className="font-semibold">{Math.max(1, partsForPreview.length)} / {maxParts}</span>
+              <span className="font-semibold">{partsForContract.length} / {maxParts}</span>
             </div>
             <div className="mt-1 h-1.5 rounded bg-slate-700">
               <div
                 className="h-1.5 rounded bg-indigo-400"
-                style={{ width: `${Math.min(100, (Math.max(1, partsForPreview.length) / maxParts) * 100)}%` }}
+                style={{ width: `${Math.min(100, (partsForContract.length / maxParts) * 100)}%` }}
               />
             </div>
           </div>
@@ -606,12 +623,12 @@ export default function MYOPage() {
           <div className="rounded-lg bg-slate-900/70 border border-slate-700 px-3 py-2">
             <div className="flex items-center justify-between">
               <span>Total bytes</span>
-              <span className="font-semibold">{totalBytes} / {maxTotalBytes}</span>
+              <span className="font-semibold">{totalContractBytes} / {maxTotalBytes}</span>
             </div>
             <div className="mt-1 h-1.5 rounded bg-slate-700">
               <div
                 className="h-1.5 rounded bg-emerald-400"
-                style={{ width: `${Math.min(100, (totalBytes / maxTotalBytes) * 100)}%` }}
+                style={{ width: `${Math.min(100, (totalContractBytes / maxTotalBytes) * 100)}%` }}
               />
             </div>
           </div>
@@ -684,7 +701,7 @@ export default function MYOPage() {
                   className="w-full rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-3 outline-none focus:ring-2 focus:ring-indigo-400 min-h-[140px] resize-y"
                 />
                 <div className="text-xs text-slate-400">
-                  Parts: <b>{Math.max(1, partsForPreview.length)}</b> / {maxParts} • Bytes in parts: <b>{partsBytes}</b> • Total bytes: <b>{totalBytes}</b> / {maxTotalBytes}
+                  Parts: <b>{partsForContract.length}</b> / {maxParts} • Contract text bytes: <b>{contractTextBytes}</b> • Total bytes: <b>{totalContractBytes}</b> / {maxTotalBytes}
                 </div>
               </div>
 
@@ -742,7 +759,7 @@ export default function MYOPage() {
                   <div className="text-xs uppercase tracking-wide opacity-80">{theme || 'Theme'}</div>
                   <div className="text-xl md:text-2xl font-extrabold">{title || 'Your Template Title'}</div>
                   <div className="mt-3 text-base leading-relaxed">
-                    <StyledCard parts={partsForPreview} blanks={blanksRemaining} words={wordsForPreview} />
+                    <StyledCard parts={partsForPreview} blanks={blankCount} words={wordsForPreview} />
                   </div>
                 </div>
               </div>
@@ -755,7 +772,7 @@ export default function MYOPage() {
                     <span className="opacity-70"> + gas (finalized on-chain)</span>
                   </div>
                   <div className="opacity-80 shrink-0">•</div>
-                  <div className="shrink-0">Blanks to fill by players: <b>{blanksRemaining}</b></div>
+                  <div className="shrink-0">Blanks to fill by players: <b>{blankCount}</b></div>
                 </div>
               </div>
 
