@@ -423,7 +423,6 @@ export default function VotePage() {
       />
 
       <Head>
-        {/* Farcaster Mini App / Frame meta */}
         <meta property="fc:frame" content="vNext" />
         <meta property="fc:frame:image" content={ogImage} />
         <meta property="fc:frame:button:1" content="Open Vote" />
@@ -434,15 +433,15 @@ export default function VotePage() {
 
       {(success || claimedId) && <Confetti width={width} height={height} />}
 
-      <main className="max-w-6xl mx-auto p-4 md:p-6 text-white">
+      {/* --- CONTAINER + OVERFLOW FIXES --- */}
+      <main className="mx-auto max-w-6xl px-4 sm:px-6 md:px-8 py-4 md:py-6 text-white overflow-x-hidden">
         {/* Hero */}
         <div className="rounded-2xl bg-slate-900/70 border border-slate-700 p-5 md:p-6 mb-6">
-          <div className="flex items-center justify-between gap-3">
-            {/* no-wrap + smaller so it never breaks lines */}
+          <div className="flex items-center justify-between gap-3 min-w-0">
             <h1 className="whitespace-nowrap text-2xl sm:text-3xl font-extrabold leading-tight bg-gradient-to-r from-amber-300 via-pink-300 to-indigo-300 bg-clip-text text-transparent">
               🗳️ Community Vote
             </h1>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <Button
                 size="sm"
                 variant="outline"
@@ -527,14 +526,14 @@ export default function VotePage() {
             </div>
           </div>
         ) : (
-          <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
             {sorted.map((r) => {
               const shareUrl = absoluteUrl(`/round/${r.originalPool1Id}`)
               const shareText = `Vote on MadFill Challenge #${r.id} → Round #${r.originalPool1Id}!`
               return (
-                <Card key={r.id} className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700">
-                  <CardHeader className="flex items-start justify-between gap-2 bg-slate-800/60 border-b border-slate-700">
-                    <div className="space-y-0.5">
+                <Card key={r.id} className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700 min-w-0">
+                  <CardHeader className="flex items-start justify-between gap-2 bg-slate-800/60 border-b border-slate-700 min-w-0">
+                    <div className="space-y-0.5 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs"><StatusPill claimed={r.claimed} challengerWon={r.challengerWon} /></span>
                         {!r.claimed && r.deadline > 0 && <TimeLeft deadline={r.deadline} />}
@@ -545,10 +544,10 @@ export default function VotePage() {
                           View Round #{r.originalPool1Id}
                         </Link>
                       </div>
-                      <div className="text-lg font-bold">Original vs Challenger</div>
+                      <div className="text-lg font-bold truncate">Original vs Challenger</div>
                     </div>
                     <a
-                      className="text-indigo-300 underline text-sm"
+                      className="text-indigo-300 underline text-sm shrink-0"
                       href={explorer(`address/${CONTRACT_ADDRESS}`)}
                       target="_blank"
                       rel="noreferrer"
@@ -558,18 +557,18 @@ export default function VotePage() {
                     </a>
                   </CardHeader>
 
-                  <CardContent className="p-5 space-y-3">
+                  <CardContent className="p-5 space-y-3 min-w-0">
                     {/* Compare */}
                     <div className="grid grid-cols-1 gap-3">
                       <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
                         <div className="text-slate-300 text-sm">😂 Original</div>
-                        <div className="mt-1 italic leading-relaxed">{r.originalPreview}</div>
+                        <div className="mt-1 italic leading-relaxed break-words">{r.originalPreview}</div>
                       </div>
                       <div id={`ch-${r.id}`} className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
                         <div className="text-slate-300 text-sm">
                           😆 Challenger {r.challengerUsername ? <span className="text-slate-400">by @{r.challengerUsername}</span> : null}
                         </div>
-                        <div className="mt-1 italic leading-relaxed">{r.challengerPreview}</div>
+                        <div className="mt-1 italic leading-relaxed break-words">{r.challengerPreview}</div>
                       </div>
                     </div>
 
@@ -587,7 +586,7 @@ export default function VotePage() {
                     </div>
 
                     {/* Actions */}
-                    <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3 min-w-0">
                       {!r.claimed ? (
                         <>
                           <Button onClick={() => doVote(r.id, true, r.feeBaseWei)} className="bg-blue-600 hover:bg-blue-500">
@@ -614,13 +613,15 @@ export default function VotePage() {
                       )}
 
                       {/* Social */}
-                      <ShareBar
-                        url={shareUrl}
-                        text={shareText}
-                        small
-                        className="ml-auto"
-                        og={{ screen: 'round', roundId: String(r.originalPool1Id) }}
-                      />
+                      <div className="ml-auto min-w-0">
+                        <ShareBar
+                          url={shareUrl}
+                          text={shareText}
+                          small
+                          className="min-w-0"
+                          og={{ screen: 'round', roundId: String(r.originalPool1Id) }}
+                        />
+                      </div>
                     </div>
 
                     <div className="text-[11px] text-slate-500">
@@ -636,7 +637,7 @@ export default function VotePage() {
         {status && <div className="mt-6 text-center text-yellow-300" aria-live="polite">{status}</div>}
 
         {/* Footer */}
-        <footer className="mt-10 text-xs text-slate-400 flex flex-wrap items-center gap-3 justify-between border-top border-slate-800 pt-4">
+        <footer className="mt-10 text-xs text-slate-400 flex flex-wrap items-center gap-3 justify-between border-t border-slate-800 pt-4">
           <div className="flex items-center gap-3">
             <Link href="/challenge" className="underline text-indigo-300">Start a Challenge</Link>
             <a
