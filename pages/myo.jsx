@@ -20,7 +20,7 @@ import { useTx } from '@/components/TxProvider'
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
 /* ---------- utils ---------- */
-const stripWeird = (s) => String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '')
+const stripWeird = (s) => String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '') // zero-width etc
 const bytes = (s) => new TextEncoder().encode(stripWeird(s)).length
 const isNonEmpty = (s) => !!String(s || '').trim()
 
@@ -92,7 +92,7 @@ function computeParts(rawStory, rawFills, blankToken) {
   }
   if (parts[parts.length - 1] === blankToken) parts.pop()
 
-  // Ensure at least one BLANK remains
+  // Ensure at least one BLANK stays for the template contract
   if (!parts.includes(blankToken)) {
     if (parts.length === 1) parts.push(blankToken, ' ')
     else parts.splice(1, 0, blankToken)
@@ -127,7 +127,7 @@ export default function MYOPage() {
   const { width, height } = useWindowSize()
 
   const {
-    isConnected, connect, isOnBase, isWarpcast,
+    isConnected, connect, isOnBase,
     BASE_RPC, NFT_ADDRESS,
     mintTemplateNFT,
     address,
@@ -142,11 +142,9 @@ export default function MYOPage() {
   // BLANK token from contract (default placeholder)
   const [blankToken, setBlankToken] = useState('[BLANK]')
 
-  // Display-only fee text; actual fee pulled on mint
-  const DISPLAY_FEE_WEI = (() => {
-    try { return ethers.parseEther('0.0005') } catch { return 500000000000000n }
-  })()
-  const DISPLAY_FEE_ETH = Number(ethers.formatEther(DISPLAY_FEE_WEI)).toFixed(6)
+  // on-chain fee + oracle state
+  const [mintFeeWei, setMintFeeWei] = useState(null)      // bigint | null
+  const [feeErr, setFeeErr] = useState('')                // string
 
   // ui
   const [loading, setLoading] = useState(false)
@@ -187,7 +185,7 @@ export default function MYOPage() {
     })
   }, [blanksInStory])
 
-  // safe reads for limits + BLANK + paused
+  // safe reads for limits + BLANK + paused + price
   useEffect(() => {
     if (!NFT_ADDRESS) return
     const provider = new ethers.JsonRpcProvider(BASE_RPC)
@@ -209,16 +207,25 @@ export default function MYOPage() {
         if (mpb && mpb > 0n) setMaxPartBytes(Number(mpb))
         if (mtb && mtb > 0n) setMaxTotalBytes(Number(mtb))
         setPaused(Boolean(isPaused))
-      } catch {
+      } catch {/* ignore */}
+      // fee (do NOT silently fallback — surface oracle errors)
+      try {
+        const fee = await ct.getMintPriceWei()
         if (!alive) return
-        setBlankToken('[BLANK]')
+        setMintFeeWei(fee)
+        setFeeErr('')
+      } catch (e) {
+        if (!alive) return
+        setMintFeeWei(null)
+        setFeeErr('Mint price unavailable (oracle). Try again shortly.')
       }
     }
 
     pull()
-    const id = setInterval(pull, 60_000)
+    const id = setInterval(pull, 30_000) // refresh fee/oracle/limits periodically
     const onVis = () => { if (document.visibilityState === 'visible') pull() }
     document.addEventListener('visibilitychange', onVis)
+
     return () => { alive = false; clearInterval(id); document.removeEventListener('visibilitychange', onVis) }
   }, [BASE_RPC, NFT_ADDRESS])
 
@@ -233,13 +240,14 @@ export default function MYOPage() {
     [story, fills, blankToken]
   )
 
+  // Bytes that matter to the contract: ONLY text parts (no BLANK tokens)
   const contractTextBytes = useMemo(
     () => textPartsForContract.reduce((sum, p) => sum + bytes(p), 0),
     [textPartsForContract]
   )
 
-  const totalContractBytes =
-    bytes(title) + bytes(description) + bytes(theme) + contractTextBytes
+  // Total metadata bytes enforced by contract (title/desc/theme + text bytes)
+  const totalContractBytes = bytes(title) + bytes(description) + bytes(theme) + contractTextBytes
 
   // bg class
   const bgCls = useMemo(
@@ -268,7 +276,7 @@ export default function MYOPage() {
   const randomizeStarter = () => {
     const pick = PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)]
     setStory(pick)
-    setFills([])
+    setFills([]) // resizes via effect
   }
   const randomizeBackground = () => {
     const idx = BG_CHOICES.findIndex((b) => b.key === bgKey)
@@ -276,14 +284,15 @@ export default function MYOPage() {
     setBgKey(BG_CHOICES[next].key)
   }
 
-  // PRE-FLIGHT CHECKS
+  // PRE-FLIGHT CHECKS (explicit reasons)
   const reasonsCantMint = useMemo(() => {
     const reasons = []
     if (!NFT_ADDRESS) reasons.push('Missing NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS')
     if (!isConnected) reasons.push('Wallet not connected')
-    // Don’t block on network when embedded in Warpcast (TxProvider handles it)
-    if (!isWarpcast && !isOnBase) reasons.push('Wrong network: switch to Base (8453)')
+    if (!isOnBase) reasons.push('Wrong network: switch to Base (8453)')
     if (paused) reasons.push('Minting is paused')
+    if (feeErr) reasons.push(feeErr)
+    if (mintFeeWei == null) reasons.push('Mint price not ready')
     if (!isNonEmpty(title)) reasons.push('Title is required')
     if (!isNonEmpty(theme)) reasons.push('Theme is required')
     if (!isNonEmpty(description)) reasons.push('Description is required')
@@ -294,7 +303,7 @@ export default function MYOPage() {
     if (typeof mintTemplateNFT !== 'function') reasons.push('mintTemplateNFT is not available from useTx()')
     return reasons
   }, [
-    NFT_ADDRESS, isConnected, isOnBase, isWarpcast, paused,
+    NFT_ADDRESS, isConnected, isOnBase, paused, feeErr, mintFeeWei,
     title, theme, description,
     partsForContract.length, maxParts,
     textPartsForContract, maxPartBytes,
@@ -304,20 +313,7 @@ export default function MYOPage() {
 
   const canMint = reasonsCantMint.length === 0 && !loading
 
-  // exact on-chain mint fee
-  const readMintFeeExact = useCallback(async () => {
-    if (!NFT_ADDRESS) return DISPLAY_FEE_WEI
-    try {
-      const provider = new ethers.JsonRpcProvider(BASE_RPC)
-      const ct = new ethers.Contract(NFT_ADDRESS, TEMPLATE_READ_ABI, provider)
-      const onchain = await ct.getMintPriceWei().catch(() => 0n)
-      return (onchain && onchain > 0n) ? onchain : DISPLAY_FEE_WEI
-    } catch {
-      return DISPLAY_FEE_WEI
-    }
-  }, [BASE_RPC, NFT_ADDRESS])
-
-  /* ---------- provider + wait + verification ---------- */
+  /* ---------- helpers: provider + wait + verification ---------- */
   const provider = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [BASE_RPC])
 
   async function waitForReceipt(hash, timeoutMs = 35000) {
@@ -345,12 +341,30 @@ export default function MYOPage() {
     setTimeout(() => { setTxStatus(''); setTxError('') }, 3000)
   }
 
-  // Auto-connect inside Warpcast so the first click can sign
-  useEffect(() => {
-    if (isWarpcast && !isConnected) {
-      connect().catch(() => {})
+  // ENSURE WALLET PROMPT (requests accounts if embedded / lying flags)
+  const ensureWalletPrompt = useCallback(async () => {
+    const eth = globalThis?.ethereum || (globalThis?.window && window.ethereum)
+    if (!eth) {
+      addToast({ type: 'error', title: 'No Wallet', message: 'No injected wallet found (window.ethereum).' })
+      return false
     }
-  }, [isWarpcast, isConnected, connect])
+    try {
+      await eth.request({ method: 'eth_requestAccounts' })
+      const ch = await eth.request({ method: 'eth_chainId' })
+      if (ch !== '0x2105') {
+        try {
+          await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x2105' }] })
+        } catch {
+          addToast({ type: 'error', title: 'Wrong Network', message: 'Please switch to Base (8453).' })
+          return false
+        }
+      }
+      return true
+    } catch (e) {
+      addToast({ type: 'error', title: 'Wallet Error', message: e?.message || 'Could not access wallet.' })
+      return false
+    }
+  }, [addToast])
 
   // mint (with soft error + verification + tiny fee-bump retry)
   const handleMint = useCallback(async () => {
@@ -361,13 +375,8 @@ export default function MYOPage() {
       return
     }
 
-    // ensure wallet session via useTx (WalletConnect in Warpcast)
-    if (!isConnected) {
-      try { await connect() } catch {
-        addToast({ type: 'error', title: 'Wallet', message: 'Could not connect to wallet.' })
-        return
-      }
-    }
+    const walletOk = await ensureWalletPrompt()
+    if (!walletOk) return
 
     setTxError('')
     setTxStatus('')
@@ -378,8 +387,7 @@ export default function MYOPage() {
       setLoading(true)
       setTxStatus('Waiting for wallet confirmation…')
 
-      const valueWei = await readMintFeeExact()
-      if (typeof mintTemplateNFT !== 'function') throw new Error('mintTemplateNFT function is missing from useTx().')
+      const valueWei = mintFeeWei // exact on-chain price we already read
 
       let res = await mintTemplateNFT(
         String(title).slice(0, 128),
@@ -398,7 +406,9 @@ export default function MYOPage() {
       setTxStatus('Submitting transaction…')
 
       let success = false
-      if (hash) success = await waitForReceipt(hash, 35000)
+      if (hash) {
+        success = await waitForReceipt(hash, 35000)
+      }
 
       if (!success) {
         setVerifying(true)
@@ -453,42 +463,9 @@ export default function MYOPage() {
         }
       }
 
-      if (/insufficient funds|underpriced|fee|price/i.test(msg)) {
-        try {
-          setTxStatus('Retrying with adjusted value…')
-          const exact = await readMintFeeExact()
-          const bump = exact + (exact / 100n) // +1%
-          const retry = await mintTemplateNFT(
-            String(title).slice(0, 128),
-            String(description).slice(0, 2048),
-            String(theme).slice(0, 128),
-            partsForContract,
-            { value: bump }
-          )
-          const retryHash = retry?.hash || retry?.transactionHash
-          if (retryHash) setTxHash(retryHash)
-          const ok = retryHash ? await waitForReceipt(retryHash, 35000) : false
-          if (ok) {
-            addToast({ type: 'success', title: 'Template Minted!', message: 'Your template NFT is live.' })
-            setTxStatus('Minted ✓')
-            setTxError('')
-            setShowConfetti(true)
-            setTimeout(() => setShowConfetti(false), 1600)
-            setTitle(''); setTheme(''); setDescription('')
-            setStory(PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)])
-            setFills([])
-            clearStatusSoon()
-            return
-          }
-        } catch {}
-      }
-
-      if (/execution reverted|no data/i.test(msg)) {
-        addToast({
-          type: 'error',
-          title: 'Mint Reverted',
-          message: 'Likely over a limit, wrong parts shape, or no BLANK left. Check bytes/parts and ensure at least one BLANK.',
-        })
+      if (/execution reverted/i.test(msg)) {
+        // Show the real revert back to the user for diagnosis (oracle / price / limits)
+        addToast({ type: 'error', title: 'Mint Reverted', message: msg })
       } else {
         addToast({ type: 'error', title: 'Mint Failed', message: msg })
       }
@@ -500,8 +477,8 @@ export default function MYOPage() {
       setVerifying(false)
     }
   }, [
-    canMint, reasonsCantMint, isConnected, connect,
-    readMintFeeExact, mintTemplateNFT,
+    canMint, reasonsCantMint, ensureWalletPrompt,
+    mintFeeWei, mintTemplateNFT,
     title, description, theme, partsForContract,
     addToast, NFT_ADDRESS
   ])
@@ -514,6 +491,8 @@ export default function MYOPage() {
 
   const pageUrl = absoluteUrl('/myo')
   const ogImage = buildOgUrl({ screen: 'myo', title: 'Make Your Own' })
+
+  const feeText = mintFeeWei != null ? Number(ethers.formatEther(mintFeeWei)).toFixed(6) : '—'
 
   return (
     <Layout>
@@ -588,7 +567,7 @@ export default function MYOPage() {
                   <Button onClick={connect} className="bg-amber-500 hover:bg-amber-400 text-black w-full">
                     Connect Wallet
                   </Button>
-                ) : (!isWarpcast && !isOnBase) ? (
+                ) : !isOnBase ? (
                   <div className="text-amber-300 bg-amber-900/30 border border-amber-700 rounded-md px-3 py-2 text-sm">
                     ⚠️ Wrong network. Switch to <b>Base (8453)</b>.
                   </div>
@@ -604,13 +583,15 @@ export default function MYOPage() {
       </section>
 
       <main className="max-w-6xl mx-auto px-4 py-8 text-white space-y-6">
+        {/* Limits strip */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div className="rounded-lg bg-slate-900/70 border border-slate-700 px-3 py-2">
             <div className="flex items-center gap-2 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
               <span className="shrink-0">Mint fee:</span>
-              <b className="shrink-0">{DISPLAY_FEE_ETH} ETH</b>
+              <b className="shrink-0">{feeText} ETH</b>
               <span className="opacity-70 shrink-0">+ gas</span>
             </div>
+            {feeErr && <div className="mt-1 text-xs text-amber-300">{feeErr}</div>}
           </div>
 
           <div className="rounded-lg bg-slate-900/70 border border-slate-700 px-3 py-2">
@@ -646,13 +627,13 @@ export default function MYOPage() {
           </div>
         )}
 
+        {/* Debug panel */}
         {showDebug && (
           <div className="rounded-lg bg-slate-900/70 border border-amber-500/40 p-4 text-xs">
             <div className="font-semibold mb-2 text-amber-300">Debug</div>
             <div className="grid sm:grid-cols-2 gap-y-1">
               <div>isConnected: {String(isConnected)}</div>
               <div>isOnBase: {String(isOnBase)}</div>
-              <div>isWarpcast: {String(isWarpcast)}</div>
               <div>NFT_ADDRESS: {String(NFT_ADDRESS || '(missing)')}</div>
               <div>BASE_RPC: {String(BASE_RPC || '(missing)')}</div>
               <div>paused: {String(paused)}</div>
@@ -661,9 +642,11 @@ export default function MYOPage() {
               <div>maxParts: {maxParts}</div>
               <div>maxPartBytes: {maxPartBytes}</div>
               <div>totalContractBytes: {totalContractBytes}</div>
-              <div>maxTotalBytes: {maxTotalBytes}</div>
               <div>mintTemplateNFT typeof: {typeof mintTemplateNFT}</div>
               <div>address: {String(address || '(none)')}</div>
+              <div>mintFeeWei: {String(mintFeeWei ?? '(null)')}</div>
+              <div>feeErr: {feeErr || '(none)'}</div>
+              <div>BLANK token: {blankToken}</div>
             </div>
             {reasonsCantMint.length > 0 && (
               <div className="mt-3 text-rose-200">
@@ -676,7 +659,9 @@ export default function MYOPage() {
           </div>
         )}
 
+        {/* Main grid */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Left: Builder */}
           <Card className="bg-slate-900/70 border border-slate-700">
             <CardHeader className="border-b border-slate-700">
               <h2 className="text-xl font-bold">Story Builder</h2>
@@ -761,6 +746,7 @@ export default function MYOPage() {
                 </div>
               )}
 
+              {/* Background selector */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="text-sm text-slate-300">Card Background</div>
@@ -781,6 +767,7 @@ export default function MYOPage() {
             </CardContent>
           </Card>
 
+          {/* Right: Preview + Mint */}
           <Card className="bg-slate-900/70 border border-slate-700">
             <CardHeader className="border-b border-slate-700">
               <h2 className="text-xl font-bold">Preview & Mint</h2>
@@ -796,11 +783,12 @@ export default function MYOPage() {
                 </div>
               </div>
 
+              {/* Fee + reasons */}
               <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
                 <div className="flex items-center gap-3 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
                   <div className="shrink-0">
-                    Mint fee: <b>{DISPLAY_FEE_ETH} ETH</b>
-                    <span className="opacity-70"> + gas (finalized on-chain)</span>
+                    Mint fee: <b>{feeText} ETH</b>
+                    <span className="opacity-70"> + gas</span>
                   </div>
                   <div className="opacity-80 shrink-0">•</div>
                   <div className="shrink-0">Blanks to fill by players: <b>{blankCount}</b></div>
@@ -842,7 +830,8 @@ export default function MYOPage() {
               </div>
 
               <div className="text-xs text-slate-400">
-                Seeing <i>“execution reverted / no data”</i>? Ensure at least one <code>[BLANK]</code> remains and parts/bytes are within limits, and verify you’re on <b>Base</b>.
+                Seeing <i>“execution reverted / no data”</i>? If the reason mentions price/oracle,
+                the Chainlink feed may be stale — try again shortly.
               </div>
             </CardContent>
           </Card>
