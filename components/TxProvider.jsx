@@ -12,13 +12,15 @@ const BASE_CHAIN_ID = 8453n
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 
 /** ---------- Contracts ---------- */
+// FillIn (unchanged; replace default if you want)
 const FILLIN_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
 
+// MadFill Template NFT — defaulted to the address you gave me
 const NFT_ADDRESS =
   process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS ||
-  '0x0F22124A86F8893990fA4763393E46d97F429442'
+  '0xCA699Fb766E3FaF36AC31196fb4bd7184769DD20'
 
 /** ---------- Context ---------- */
 const TxContext = createContext(null)
@@ -75,7 +77,6 @@ export function TxProvider({ children }) {
   const estimateWithRead = useCallback(
     async (contractAddress, abi, fnName, args, { from, value } = {}) => {
       const ctRead = new ethers.Contract(contractAddress, abi, read)
-      // Preflight revert reason
       try {
         await ctRead[fnName].staticCall(...args, { from, value })
       } catch (e) {
@@ -90,7 +91,6 @@ export function TxProvider({ children }) {
       const overrides = {}
       if (value !== undefined && value !== null) overrides.value = ethers.toBigInt(value)
       if (from) overrides.from = from
-      // Estimate gas (best-effort)
       try {
         const est = await ctRead[fnName].estimateGas(...args, { from, value })
         overrides.gasLimit = (est * 12n) / 10n + 50_000n
