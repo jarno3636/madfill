@@ -18,7 +18,7 @@ import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useTx } from '@/components/TxProvider'
 import fillAbi from '@/abi/FillInStoryV3_ABI.json'
-import { openCast } from '@/lib/cast'
+import { openCast } from '@/lib/share'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
