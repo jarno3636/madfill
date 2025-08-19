@@ -12,7 +12,7 @@ import Layout from '@/components/Layout'
 import SEO from '@/components/SEO'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import ShareBar from '@/components/ShareBar'
+// import ShareBar from '@/components/ShareBar' // removed
 import Countdown from '@/components/Countdown'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
@@ -181,7 +181,7 @@ function MyRoundsPage() {
     claimPool1,
     BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS,
 
-    // New reliable read helpers from TxProvider
+    // TxProvider read helpers (be sure TxProvider exports these)
     readTemplateOf, readTokenURI,
   } = useTx()
 
@@ -471,7 +471,6 @@ function MyRoundsPage() {
       // 1) Enumerable lookup
       for (let i = 0; i < bal; i++) {
         try {
-          // eslint-disable-next-line no-await-nofor-of-loop
           const tid = await withRetry(() => nft.tokenOfOwnerByIndex(address, i), { tries: 2, signal })
           tokens.push(Number(tid))
         } catch { enumerableWorked = false; break }
@@ -502,8 +501,8 @@ function MyRoundsPage() {
         if (signal.aborted) return { id }
         try {
           const [uri, tpl] = await Promise.all([
-            withRetry(() => readTokenURI(id), { tries: 3, signal }).catch(() => null),
-            withRetry(() => readTemplateOf(id), { tries: 3, signal }).catch(() => null),
+            withRetry(() => readTokenURI(BigInt(id)), { tries: 3, signal }).catch(() => null),
+            withRetry(() => readTemplateOf(BigInt(id)), { tries: 3, signal }).catch(() => null),
           ])
 
           const meta = await fetchJson(uri)
@@ -521,7 +520,6 @@ function MyRoundsPage() {
             id,
             tokenURI: uri,
             meta, image, name, desc, external,
-            // extra for fun casting
             theme: tpl?.theme || '',
             author: tpl?.author || '',
           }
@@ -535,13 +533,23 @@ function MyRoundsPage() {
       persistNftCache(enriched)
     } catch (e) {
       if (!String(e?.message).includes('aborted')) console.error(e)
-      // keep cached list
     } finally {
       if (!abortRef.current?.signal?.aborted) setNftLoading(false)
     }
   }, [address, BASE_RPC, NFT_ADDRESS, persistNftCache, readTemplateOf, readTokenURI])
 
   useEffect(() => { if (address) loadMyNfts() }, [address, loadMyNfts])
+
+  // ---- Cast my gallery ----
+  const castGallery = useCallback(() => {
+    if (!nfts?.length) return
+    const top = nfts.slice(0, 4)
+    const urls = top.map((t) => t.external || (t.id ? absoluteUrl(`/template/${t.id}`) : null)).filter(Boolean)
+    const lines = top.map((t) => `• ${t.name || `Template #${t.id}`}${t.theme ? ` — ${t.theme}` : ''} ${t.external ?? absoluteUrl(`/template/${t.id}`)}`)
+    const text = `🎨 My MadFill gallery (${nfts.length}):\n${lines.join('\n')}`
+    // Warpcast shows one rich embed; include the first template (rest are in text)
+    openCast({ text, embeds: urls.length ? [urls[0]] : [] })
+  }, [nfts])
 
   /* ------------- derived ------------- */
   const allCards = useMemo(() => {
@@ -698,56 +706,67 @@ function MyRoundsPage() {
                   No MadFill NFTs found for <span className="font-mono">{shortAddr(address)}</span>.
                 </div>
               ) : (
-                <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
-                  {nfts.map((t) => {
-                    const tplUrl = t.external || (t.id ? absoluteUrl(`/template/${t.id}`) : null)
-                    const castTxt = t.name
-                      ? `🎨 I minted “${t.name}” on MadFill! ${tplUrl ?? ''}`
-                      : `🎨 I minted a MadFill Template! ${tplUrl ?? ''}`
-                    return (
-                      <div key={t.id} className="rounded-xl bg-slate-900/60 border border-slate-700 overflow-hidden">
-                        {t.image ? (
-                          <div className="aspect-video bg-slate-800 border-b border-slate-700">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={t.image} alt={t.name || `Token #${t.id}`} className="w-full h-full object-cover" />
-                          </div>
-                        ) : <div className="aspect-video bg-slate-800 border-b border-slate-700" />}
-                        <div className="p-4">
-                          <div className="text-sm font-semibold truncate">{t.name || `Template #${t.id}`}</div>
-                          <div className="text-xs text-slate-400 line-clamp-2 mt-1">{t.desc || (t.theme ? `Theme: ${t.theme}` : '—')}</div>
-                          <div className="flex flex-wrap gap-2 mt-3">
-                            {tplUrl && (
+                <>
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="text-sm text-slate-300">
+                      You have <b>{nfts.length}</b> MadFill template{nfts.length > 1 ? 's' : ''}.
+                    </div>
+                    <Button onClick={castGallery} className="bg-fuchsia-600 hover:bg-fuchsia-500">
+                      Cast my gallery
+                    </Button>
+                  </div>
+
+                  <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
+                    {nfts.map((t) => {
+                      const tplUrl = t.external || (t.id ? absoluteUrl(`/template/${t.id}`) : null)
+                      const castTxt = t.name
+                        ? `🎨 I minted “${t.name}” on MadFill! ${tplUrl ?? ''}`
+                        : `🎨 I minted a MadFill Template! ${tplUrl ?? ''}`
+                      return (
+                        <div key={t.id} className="rounded-xl bg-slate-900/60 border border-slate-700 overflow-hidden">
+                          {t.image ? (
+                            <div className="aspect-video bg-slate-800 border-b border-slate-700">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={t.image} alt={t.name || `Token #${t.id}`} className="w-full h-full object-cover" />
+                            </div>
+                          ) : <div className="aspect-video bg-slate-800 border-b border-slate-700" />}
+                          <div className="p-4">
+                            <div className="text-sm font-semibold truncate">{t.name || `Template #${t.id}`}</div>
+                            <div className="text-xs text-slate-400 line-clamp-2 mt-1">{t.desc || (t.theme ? `Theme: ${t.theme}` : '—')}</div>
+                            <div className="flex flex-wrap gap-2 mt-3">
+                              {tplUrl && (
+                                <a
+                                  href={tplUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs"
+                                >
+                                  View Template
+                                </a>
+                              )}
                               <a
-                                href={tplUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs"
+                                href={`https://basescan.org/token/${NFT_ADDRESS}?a=${t.id}`}
+                                target="_blank" rel="noopener noreferrer"
+                                className="px-3 py-2 rounded-md bg-slate-800 border border-slate-600 hover:bg-slate-700 text-xs"
                               >
-                                View Template
+                                BaseScan
                               </a>
-                            )}
-                            <a
-                              href={`https://basescan.org/token/${NFT_ADDRESS}?a=${t.id}`}
-                              target="_blank" rel="noopener noreferrer"
-                              className="px-3 py-2 rounded-md bg-slate-800 border border-slate-600 hover:bg-slate-700 text-xs"
-                            >
-                              BaseScan
-                            </a>
-                            <Button
-                              onClick={() => openCast({ text: castTxt, embeds: tplUrl ? [tplUrl] : [] })}
-                              className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs"
-                            >
-                              Cast
-                            </Button>
-                          </div>
-                          <div className="text-[11px] text-slate-500 mt-2 break-all">
-                            {t.tokenURI ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a> : 'No tokenURI'}
+                              <Button
+                                onClick={() => openCast({ text: castTxt, embeds: tplUrl ? [tplUrl] : [] })}
+                                className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs"
+                              >
+                                Cast
+                              </Button>
+                            </div>
+                            <div className="text-[11px] text-slate-500 mt-2 break-all">
+                              {t.tokenURI ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a> : 'No tokenURI'}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    )
-                  })}
-                </div>
+                      )
+                    })}
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -860,13 +879,7 @@ function MyRoundsPage() {
                       )}
                     </div>
 
-                    <ShareBar
-                      url={roundUrl}
-                      text={shareTxt}
-                      og={{ screen: 'round', roundId: String(isPool1 ? card.id : card.originalPool1Id) }}
-                      small
-                    />
-
+                    {/* ShareBar removed; keep lightweight Cast buttons only */}
                     <div className="flex gap-2 pt-1">
                       {isPool1 ? (
                         <>
