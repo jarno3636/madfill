@@ -47,8 +47,8 @@ const TEMPLATE_READ_ABI = [
   { inputs: [], name: 'MAX_PARTS', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_PART_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_TOTAL_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'getMintPriceWei', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'paused', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'getMintPriceWei', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
 ]
 
 /** Build preview parts (implicit blanks) + contract parts (explicit BLANK tokens). */
@@ -137,9 +137,8 @@ export default function MYOPage() {
   // BLANK token from contract (default placeholder)
   const [blankToken, setBlankToken] = useState('[BLANK]')
 
-  // Display-only fee text; actual fee pulled on mint (may be 0 while oracle is stale)
-  const DISPLAY_FEE_WEI = 0n
-  const DISPLAY_FEE_ETH = Number(ethers.formatEther(DISPLAY_FEE_WEI)).toFixed(6)
+  // Live on-chain fee (fixed price contract)
+  const [chainFeeWei, setChainFeeWei] = useState(null)
 
   // ui
   const [loading, setLoading] = useState(false)
@@ -180,7 +179,7 @@ export default function MYOPage() {
     })
   }, [blanksInStory])
 
-  // safe reads for limits + BLANK + paused
+  // safe reads for limits + BLANK + paused + fee
   useEffect(() => {
     if (!NFT_ADDRESS) return
     const provider = new ethers.JsonRpcProvider(BASE_RPC)
@@ -189,12 +188,13 @@ export default function MYOPage() {
 
     const pull = async () => {
       try {
-        const [blk, mp, mpb, mtb, isPaused] = await Promise.all([
+        const [blk, mp, mpb, mtb, isPaused, feeWei] = await Promise.all([
           ct.BLANK().catch(() => '[BLANK]'),
           ct.MAX_PARTS().catch(() => null),
           ct.MAX_PART_BYTES().catch(() => null),
           ct.MAX_TOTAL_BYTES().catch(() => null),
           ct.paused().catch(() => false),
+          ct.getMintPriceWei().catch(() => null),
         ])
         if (!alive) return
         setBlankToken(String(blk || '[BLANK]'))
@@ -202,9 +202,11 @@ export default function MYOPage() {
         if (mpb && mpb > 0n) setMaxPartBytes(Number(mpb))
         if (mtb && mtb > 0n) setMaxTotalBytes(Number(mtb))
         setPaused(Boolean(isPaused))
+        setChainFeeWei(feeWei && feeWei >= 0n ? feeWei : null)
       } catch {
         if (!alive) return
         setBlankToken('[BLANK]')
+        setChainFeeWei(null)
       }
     }
 
@@ -298,7 +300,7 @@ export default function MYOPage() {
 
   const canMint = reasonsCantMint.length === 0 && !loading
 
-  // exact on-chain mint fee (contract expects exact value; may be 0 if oracle stale)
+  // exact on-chain mint fee (fixed price)
   const readMintFeeExact = useCallback(async () => {
     if (!NFT_ADDRESS) return 0n
     try {
@@ -430,15 +432,7 @@ export default function MYOPage() {
         }
       }
 
-      if (/execution reverted|no data|oracle|price/i.test(msg)) {
-        addToast({
-          type: 'error',
-          title: 'Mint Reverted',
-          message: 'Oracle price not ready or over a limit. If price is 0, wait for the oracle to refresh.',
-        })
-      } else {
-        addToast({ type: 'error', title: 'Mint Failed', message: msg })
-      }
+      addToast({ type: 'error', title: 'Mint Failed', message: msg })
       setTxError(msg)
       setTxStatus('Mint failed')
       setShowConfetti(false)
@@ -462,6 +456,14 @@ export default function MYOPage() {
   const pageUrl = absoluteUrl('/myo')
   const ogImage = buildOgUrl({ screen: 'myo', title: 'Make Your Own' })
 
+  // formatted fee for UI
+  const feeEthText = useMemo(() => {
+    try {
+      if (chainFeeWei == null) return '—'
+      return Number(ethers.formatEther(chainFeeWei)).toFixed(6)
+    } catch { return '—' }
+  }, [chainFeeWei])
+
   return (
     <Layout>
       <Head>
@@ -473,8 +475,9 @@ export default function MYOPage() {
         <link rel="canonical" href={pageUrl} />
       </Head>
 
+      {/* Page title unified with the rest of the site */}
       <SEO
-        title="Make Your Own — MadFill Templates"
+        title="Make Your Own — MadFill"
         description="Type your story, drop [BLANK] anywhere, pick a background, and mint as an NFT on Base."
         url={pageUrl}
         image={ogImage}
@@ -558,7 +561,7 @@ export default function MYOPage() {
           <div className="rounded-lg bg-slate-900/70 border border-slate-700 px-3 py-2">
             <div className="flex items-center gap-2 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
               <span className="shrink-0">Mint fee:</span>
-              <b className="shrink-0">{DISPLAY_FEE_ETH} ETH</b>
+              <b className="shrink-0">{feeEthText} ETH</b>
               <span className="opacity-70 shrink-0">+ gas</span>
             </div>
           </div>
@@ -615,6 +618,7 @@ export default function MYOPage() {
               <div>maxTotalBytes: {maxTotalBytes}</div>
               <div>mintTemplateNFT typeof: {typeof mintTemplateNFT}</div>
               <div>address: {String(address || '(none)')}</div>
+              <div>fee (wei): {String(chainFeeWei ?? '(unknown)')}</div>
             </div>
             {reasonsCantMint.length > 0 && (
               <div className="mt-3 text-rose-200">
@@ -755,8 +759,8 @@ export default function MYOPage() {
               <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
                 <div className="flex items-center gap-3 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
                   <div className="shrink-0">
-                    Mint fee: <b>{DISPLAY_FEE_ETH} ETH</b>
-                    <span className="opacity-70"> + gas (oracle determines exact fee)</span>
+                    Mint fee: <b>{feeEthText} ETH</b>
+                    <span className="opacity-70"> + gas</span>
                   </div>
                   <div className="opacity-80 shrink-0">•</div>
                   <div className="shrink-0">Blanks to fill by players: <b>{blankCount}</b></div>
@@ -798,7 +802,7 @@ export default function MYOPage() {
               </div>
 
               <div className="text-xs text-slate-400">
-                If you see an oracle/price error, the feed may be stale; try again after it refreshes.
+                Your fee is fixed by the contract owner. Gas varies with network conditions.
               </div>
             </CardContent>
           </Card>
