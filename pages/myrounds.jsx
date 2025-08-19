@@ -86,8 +86,9 @@ function mapLimit(items, limit, worker) {
 }
 const CONCURRENCY = 8
 
-/* ------------- NFT read ABI ------------- */
+/* ------------- NFT read ABI (adds Transfer event) ------------- */
 const NFT_READ_ABI = [
+  'event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)',
   'function balanceOf(address) view returns (uint256)',
   'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
   'function tokenURI(uint256 tokenId) view returns (string)',
@@ -101,10 +102,27 @@ const ipfsToHttp = (u) => {
   if (u.startsWith('ipfs://')) return `https://ipfs.io/ipfs/${u.slice('ipfs://'.length)}`
   return u
 }
-const buildCastUrl = (text, embeds=[]) => {
+
+// Robust Warpcast compose (deep link with web fallback)
+const buildCastWebUrl = (text, embeds = []) => {
   const qs = new URLSearchParams({ text })
   for (const e of embeds) qs.append('embeds[]', e)
   return `https://warpcast.com/~/compose?${qs.toString()}`
+}
+function openCast({ text, embeds = [] }) {
+  const webUrl = buildCastWebUrl(text, embeds)
+  const schemeText = encodeURIComponent(text)
+  const schemeEmbeds = embeds.map(e => encodeURIComponent(e))
+  const deep = `warpcast://compose?text=${schemeText}` +
+    (schemeEmbeds.length ? `&embeds[]=${schemeEmbeds.join('&embeds[]=')}` : '')
+
+  if (typeof window !== 'undefined' && /Warpcast/i.test(navigator.userAgent)) {
+    window.open(webUrl, '_blank', 'noopener,noreferrer'); return
+  }
+  let didOpen = false
+  const t = setTimeout(() => { if (!didOpen) window.open(webUrl, '_blank', 'noopener,noreferrer') }, 500)
+  window.location.href = deep
+  setTimeout(() => { didOpen = true; clearTimeout(t) }, 700)
 }
 
 /* ------------- tiny UI helpers ------------- */
@@ -129,6 +147,50 @@ function statusBadge(card) {
       : <span className="inline-block px-2 py-0.5 rounded bg-slate-700/40 text-slate-200 text-xs">Ended</span>
   }
   return <span className="inline-block px-2 py-0.5 rounded bg-cyan-700/40 text-cyan-200 text-xs">Active</span>
+}
+
+/* --------- Transfer-log scan for non-enumerable/sparse IDs --------- */
+async function findTokenIdsByLogs({ provider, nft, address, maxBack = 1_200_000, chunk = 40_000 }) {
+  try {
+    const latest = await provider.getBlockNumber()
+    const start = Math.max(0, latest - maxBack)
+    const iface = new ethers.Interface(NFT_READ_ABI)
+    const topicTransfer = iface.getEvent('Transfer').topicHash
+    const addrTopic = ethers.zeroPadValue(address, 32).toLowerCase()
+
+    const seen = new Set()
+
+    for (let to = latest; to > start; to -= chunk) {
+      const from = Math.max(start, to - chunk + 1)
+      const logs = await provider.getLogs({
+        address: nft.target || nft.address,
+        fromBlock: from,
+        toBlock: to,
+        topics: [topicTransfer, null, addrTopic],
+      })
+      for (const log of logs) {
+        try {
+          const parsed = iface.parseLog(log)
+          const tid = Number(parsed.args.tokenId)
+          seen.add(tid)
+        } catch {}
+      }
+    }
+
+    // Confirm current ownership
+    const tokenIds = Array.from(seen)
+    const confirmed = []
+    for (const tid of tokenIds) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const who = await nft.ownerOf(tid)
+        if (who && who.toLowerCase() === address.toLowerCase()) confirmed.push(tid)
+      } catch {}
+    }
+    return confirmed.sort((a, b) => a - b)
+  } catch {
+    return []
+  }
 }
 
 /* ------------- component ------------- */
@@ -255,7 +317,6 @@ function MyRoundsPage() {
       try {
         userEntries = await withRetry(() => ct.getUserEntries(address), { signal })
       } catch (e) {
-        // if helper fails entirely, keep current view (from cache) and surface status
         setStatus('Network hiccup loading entries — using cached view where available.')
         setLoading(false)
         return
@@ -423,8 +484,10 @@ function MyRoundsPage() {
       const bal = Number(await withRetry(() => nft.balanceOf(address), { signal }).catch(() => 0n))
       if (!bal) { setNfts([]); persistNftCache([]); return }
 
-      const tokens = []
+      let tokens = []
       let enumerableWorked = true
+
+      // 1) Enumerable lookup
       for (let i = 0; i < bal; i++) {
         try {
           // eslint-disable-next-line no-await-in-loop
@@ -432,7 +495,9 @@ function MyRoundsPage() {
           tokens.push(Number(tid))
         } catch { enumerableWorked = false; break }
       }
-      if (!enumerableWorked) {
+
+      // 2) Small brute force (sequential/small collections)
+      if (!enumerableWorked && tokens.length < bal) {
         const total = Number(await withRetry(() => nft.totalSupply(), { signal }).catch(() => 0n))
         const cap = Math.min(total || 0, 400)
         for (let tid = 1; tokens.length < bal && tid <= cap; tid++) {
@@ -443,12 +508,25 @@ function MyRoundsPage() {
         }
       }
 
+      // 3) Transfer logs scan (handles sparse/non-1..N IDs)
+      if (tokens.length < bal) {
+        const viaLogs = await findTokenIdsByLogs({ provider, nft, address })
+        for (const t of viaLogs) if (!tokens.includes(t)) tokens.push(t)
+      }
+
+      tokens = Array.from(new Set(tokens)).sort((a, b) => a - b)
+
+      // Enrich
       const enriched = await mapLimit(tokens, 6, async (id) => {
         if (signal.aborted) return { id }
         try {
           const uri = await withRetry(() => nft.tokenURI(id), { tries: 2, signal })
           const meta = await fetchJson(uri)
-          const image = ipfsToHttp(meta?.image || meta?.image_url || '')
+          const ipfsImg = meta?.image || meta?.image_url || ''
+          const image =
+            ipfsToHttp(ipfsImg) ||
+            (ipfsImg && `https://cloudflare-ipfs.com/ipfs/${ipfsImg.replace('ipfs://','')}`) ||
+            (ipfsImg && `https://w3s.link/ipfs/${ipfsImg.replace('ipfs://','')}`)
           const name = meta?.name || `Template #${id}`
           const desc = meta?.description || ''
           const external = meta?.external_url || null
@@ -457,6 +535,7 @@ function MyRoundsPage() {
           return { id, tokenURI: null }
         }
       })
+
       if (signal.aborted) return
       setNfts(enriched)
       persistNftCache(enriched)
@@ -628,10 +707,7 @@ function MyRoundsPage() {
                 <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
                   {nfts.map((t) => {
                     const tplUrl = t.external || (t.id ? absoluteUrl(`/template/${t.id}`) : null)
-                    const castUrl = buildCastUrl(
-                      `I minted a MadFill Template! ${tplUrl ?? ''}`,
-                      tplUrl ? [tplUrl] : []
-                    )
+                    const shareText = `I minted a MadFill Template! ${tplUrl ?? ''}`
                     return (
                       <div key={t.id} className="rounded-xl bg-slate-900/60 border border-slate-700 overflow-hidden">
                         {t.image ? (
@@ -661,13 +737,12 @@ function MyRoundsPage() {
                             >
                               BaseScan
                             </a>
-                            <a
-                              href={castUrl}
-                              target="_blank" rel="noopener noreferrer"
+                            <Button
+                              onClick={() => openCast({ text: shareText, embeds: tplUrl ? [tplUrl] : [] })}
                               className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs"
                             >
                               Cast
-                            </a>
+                            </Button>
                           </div>
                           <div className="text-[11px] text-slate-500 mt-2 break-all">
                             {t.tokenURI ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a> : 'No tokenURI'}
@@ -743,7 +818,6 @@ function MyRoundsPage() {
               const shareTxt = isPool1
                 ? `Check out my MadFill Round #${card.id}! ${roundUrl}`
                 : `I voted on a MadFill challenger for Round #${card.originalPool1Id}! ${roundUrl}`
-              const castHref = buildCastUrl(shareTxt, [roundUrl])
               const endsLabel = formatTimeLeft(card.deadline)
 
               return (
@@ -803,13 +877,12 @@ function MyRoundsPage() {
                           <Link href={`/round/${card.id}`} className="w-full">
                             <Button className="w-full bg-indigo-600 hover:bg-indigo-500">View Round</Button>
                           </Link>
-                          <a
-                            href={castHref}
-                            target="_blank" rel="noopener noreferrer"
-                            className="w-full"
+                          <Button
+                            className="w-full bg-fuchsia-600 hover:bg-fuchsia-500"
+                            onClick={() => openCast({ text: shareTxt, embeds: [roundUrl] })}
                           >
-                            <Button className="w-full bg-fuchsia-600 hover:bg-fuchsia-500">Cast</Button>
-                          </a>
+                            Cast
+                          </Button>
                           {card.ended && card.youWon && !card.claimed && (
                             <Button
                               onClick={() => finalizePool1(card.id)}
@@ -828,13 +901,12 @@ function MyRoundsPage() {
                           <Link href={`/round/${card.originalPool1Id}`} className="w-full">
                             <Button variant="outline" className="w-full border-slate-600 text-slate-200">View Round</Button>
                           </Link>
-                          <a
-                            href={castHref}
-                            target="_blank" rel="noopener noreferrer"
-                            className="w-full"
+                          <Button
+                            className="w-full bg-indigo-600 hover:bg-indigo-500"
+                            onClick={() => openCast({ text: shareTxt, embeds: [roundUrl] })}
                           >
-                            <Button className="w-full bg-indigo-600 hover:bg-indigo-500">Cast</Button>
-                          </a>
+                            Cast
+                          </Button>
                         </>
                       )}
                     </div>
