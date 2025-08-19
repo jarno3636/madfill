@@ -130,7 +130,7 @@ export default function MYOPage() {
     mintTemplateNFT,
   } = useTx()
 
-  // limits/state
+  // limits/state (kept for contract reads)
   const [maxParts, setMaxParts] = useState(24)
   const [maxPartBytes, setMaxPartBytes] = useState(96)
   const [maxTotalBytes, setMaxTotalBytes] = useState(4096)
@@ -323,6 +323,11 @@ export default function MYOPage() {
     setTimeout(() => { setTxStatus(''); setTxError('') }, 3000)
   }
 
+  // fixed mint fee override (0.0005 ETH)
+  const FIXED_MINT_FEE_WEI = useMemo(() => {
+    try { return ethers.parseEther('0.0005') } catch { return 500000000000000n }
+  }, [])
+
   // mint (no window.ethereum calls; rely on TxProvider)
   const handleMint = useCallback(async () => {
     if (!canMint) {
@@ -342,27 +347,25 @@ export default function MYOPage() {
       setLoading(true)
       setTxStatus('Waiting for wallet confirmation…')
 
-      // We still send the correct on-chain fee inside TxProvider via its preflight,
-      // but the UI always displays 0.0005 ETH + gas.
+      // Lock fee to 0.0005 ETH (gas handled by wallet); TxProvider should pass overrides along.
       const res = await mintTemplateNFT(
         String(title).slice(0, 128),
         String(description).slice(0, 2048),
         String(theme).slice(0, 128),
-        partsForContract
+        partsForContract,
+        { value: FIXED_MINT_FEE_WEI }
       )
 
-      // res is a receipt (TxProvider.runTx waits). Fall back to hash if needed.
+      // res may be a receipt; fall back to tx hash if needed.
       const receipt = res && res.status != null ? res : null
       const hash = receipt?.transactionHash || res?.hash || null
       if (hash) setTxHash(hash)
       setTxStatus('Finalizing…')
 
-      // If for any reason we didn't get a receipt, try to wait briefly.
       const ensured = receipt || (hash ? await waitForReceipt(hash, 35000) : null)
       const ok = Boolean(ensured && ensured.status === 1)
 
       if (ok) {
-        // Try to parse tokenId from logs:
         const tokenId = parseMintedTokenIdFromReceipt(ensured)
         if (tokenId) setMintedTokenId(tokenId)
 
@@ -405,7 +408,7 @@ export default function MYOPage() {
   }, [
     canMint, reasonsCantMint, mintTemplateNFT,
     title, description, theme, partsForContract,
-    addToast
+    addToast, FIXED_MINT_FEE_WEI
   ])
 
   const wordsForPreview = useMemo(() => {
@@ -420,7 +423,6 @@ export default function MYOPage() {
   // share / cast helpers
   const mintedUrl = useMemo(() => {
     if (!mintedTokenId) return null
-    // This matches your contract’s external_url in tokenURI
     return `https://madfill.vercel.app/template/${mintedTokenId}`
   }, [mintedTokenId])
 
@@ -428,7 +430,6 @@ export default function MYOPage() {
     if (!mintedUrl) return null
     const text = `I just minted a MadFill Template on Base! ${mintedUrl}`
     const qs = new URLSearchParams({ text })
-    // Warpcast composer supports embeds[] to force link previews
     qs.append('embeds[]', mintedUrl)
     return `https://warpcast.com/~/compose?${qs.toString()}`
   }, [mintedUrl])
@@ -521,43 +522,7 @@ export default function MYOPage() {
 
       {/* Main content */}
       <main className="max-w-6xl mx-auto px-4 py-8 text-white space-y-6">
-        {/* Limits strip */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="rounded-lg bg-slate-900/70 border border-slate-700 px-3 py-2">
-            <div className="flex items-center gap-2 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
-              <span className="shrink-0">Mint fee:</span>
-              <b className="shrink-0">0.0005 ETH</b>
-              <span className="opacity-70 shrink-0">+ gas</span>
-            </div>
-          </div>
-
-          <div className="rounded-lg bg-slate-900/70 border border-slate-700 px-3 py-2">
-            <div className="flex items-center justify-between">
-              <span>Parts</span>
-              <span className="font-semibold">{partsForContract.length} / {maxParts}</span>
-            </div>
-            <div className="mt-1 h-1.5 rounded bg-slate-700">
-              <div
-                className="h-1.5 rounded bg-indigo-400"
-                style={{ width: `${Math.min(100, (partsForContract.length / maxParts) * 100)}%` }}
-              />
-            </div>
-          </div>
-
-          <div className="rounded-lg bg-slate-900/70 border border-slate-700 px-3 py-2">
-            <div className="flex items-center justify-between">
-              <span>Total bytes</span>
-              <span className="font-semibold">{totalContractBytes} / {maxTotalBytes}</span>
-            </div>
-            <div className="mt-1 h-1.5 rounded bg-slate-700">
-              <div
-                className="h-1.5 rounded bg-emerald-400"
-                style={{ width: `${Math.min(100, (totalContractBytes / maxTotalBytes) * 100)}%` }}
-              />
-            </div>
-          </div>
-        </div>
-
+        {/* Minting paused notice */}
         {paused && (
           <div className="text-sm rounded-lg bg-rose-900/40 border border-rose-700 px-3 py-2 text-rose-100">
             ⏸️ Minting is currently paused.
@@ -688,7 +653,7 @@ export default function MYOPage() {
                 </div>
               </div>
 
-              {/* Fee + reasons */}
+              {/* Fee line */}
               <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
                 <div className="flex items-center gap-3 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
                   <div className="shrink-0">
@@ -698,14 +663,6 @@ export default function MYOPage() {
                   <div className="opacity-80 shrink-0">•</div>
                   <div className="shrink-0">Blanks to fill by players: <b>{blankCount}</b></div>
                 </div>
-                {!canMint && reasonsCantMint.length > 0 && (
-                  <div className="mt-2 text-xs text-amber-200">
-                    <span className="font-semibold">Why can’t I mint?</span>
-                    <ul className="list-disc list-inside">
-                      {reasonsCantMint.map((r, i) => <li key={i}>{r}</li>)}
-                    </ul>
-                  </div>
-                )}
               </div>
 
               <div className="flex flex-col sm:flex-row gap-3">
@@ -733,6 +690,16 @@ export default function MYOPage() {
                   Clear All
                 </Button>
               </div>
+
+              {/* Live reasons UNDER the button */}
+              {!canMint && reasonsCantMint.length > 0 && (
+                <div className="mt-2 text-xs text-amber-200">
+                  <span className="font-semibold">Why you can’t mint yet</span>
+                  <ul className="list-disc list-inside">
+                    {reasonsCantMint.map((r, i) => <li key={i}>{r}</li>)}
+                  </ul>
+                </div>
+              )}
 
               <div className="text-xs text-slate-400">
                 Your fee is fixed by the contract owner. Gas varies with network conditions.
