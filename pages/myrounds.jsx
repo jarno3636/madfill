@@ -21,7 +21,7 @@ import fillAbi from '@/abi/FillInStoryV3_ABI.json'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
-/** ---------- tiny utils ---------- */
+/* ---------------- utils ---------------- */
 const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
 const toEth = (wei) => { try { return Number(ethers.formatEther(wei ?? 0n)) } catch { return 0 } }
 const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(Number(n || 0))
@@ -47,27 +47,15 @@ const formatTimeLeft = (deadlineSec) => {
   if (h > 0) return `${h}h ${m}m`
   return `${m}m`
 }
-
-/** ---------- minimal NFT ABI (read) ---------- */
-const NFT_READ_ABI = [
-  'function balanceOf(address) view returns (uint256)',
-  'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
-  'function tokenURI(uint256 tokenId) view returns (string)',
-  'function ownerOf(uint256 tokenId) view returns (address)',
-  'function totalSupply() view returns (uint256)'
-]
-
-/** ---------- concurrency + retry helpers ---------- */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/* ------------- retry + concurrency ------------- */
 async function withRetry(fn, { tries = 4, minDelay = 150, maxDelay = 800, signal } = {}) {
   let lastErr
   for (let i = 0; i < tries; i++) {
     if (signal?.aborted) throw new Error('aborted')
-    try {
-      return await fn()
-    } catch (e) {
+    try { return await fn() } catch (e) {
       lastErr = e
-      // bail fast on aborts/reverts
       const msg = String(e?.message || e)
       if (/aborted|revert|CALL_EXCEPTION/i.test(msg)) break
       const backoff = Math.min(maxDelay, minDelay * Math.pow(2, i))
@@ -98,7 +86,28 @@ function mapLimit(items, limit, worker) {
 }
 const CONCURRENCY = 8
 
-/** ---------- UI bits ---------- */
+/* ------------- NFT read ABI ------------- */
+const NFT_READ_ABI = [
+  'function balanceOf(address) view returns (uint256)',
+  'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
+  'function tokenURI(uint256 tokenId) view returns (string)',
+  'function ownerOf(uint256 tokenId) view returns (address)',
+  'function totalSupply() view returns (uint256)'
+]
+
+/* ------------- URL helpers ------------- */
+const ipfsToHttp = (u) => {
+  if (!u) return u
+  if (u.startsWith('ipfs://')) return `https://ipfs.io/ipfs/${u.slice('ipfs://'.length)}`
+  return u
+}
+const buildCastUrl = (text, embeds=[]) => {
+  const qs = new URLSearchParams({ text })
+  for (const e of embeds) qs.append('embeds[]', e)
+  return `https://warpcast.com/~/compose?${qs.toString()}`
+}
+
+/* ------------- tiny UI helpers ------------- */
 function StatCard({ label, value, className = '' }) {
   return (
     <div className={`rounded-xl bg-slate-900/60 border border-slate-700 p-4 ${className}`}>
@@ -122,18 +131,16 @@ function statusBadge(card) {
   return <span className="inline-block px-2 py-0.5 rounded bg-cyan-700/40 text-cyan-200 text-xs">Active</span>
 }
 
-/** ---------- page ---------- */
+/* ------------- component ------------- */
 function MyRoundsPage() {
   useMiniAppReady()
   const { width, height } = useWindowSize()
-
   const {
     address, isConnected, isOnBase, connect, switchToBase,
     claimPool1,
     BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS,
   } = useTx()
 
-  // ui/data
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState('')
   const [priceUsd, setPriceUsd] = useState(0)
@@ -154,8 +161,50 @@ function MyRoundsPage() {
   const [sortBy, setSortBy] = useState('newest')
   const [activeTab, setActiveTab] = useState('stats')
 
-  // Abort controller for all loads
+  // Abort controller for loads
   const abortRef = useRef(null)
+
+  // ---- Local cache for resilience
+  const cacheKey = useMemo(() => address ? `myrounds:${FILLIN_ADDRESS}:${address.toLowerCase()}` : null, [address, FILLIN_ADDRESS])
+  const cacheNftKey = useMemo(() => address && NFT_ADDRESS ? `mynfts:${NFT_ADDRESS}:${address.toLowerCase()}` : null, [address, NFT_ADDRESS])
+
+  const hydrateFromCache = useCallback(() => {
+    try {
+      if (!cacheKey) return
+      const j = JSON.parse(localStorage.getItem(cacheKey) || '{}')
+      if (!j || !j.data) return
+      setStarted(j.data.started || [])
+      setJoined(j.data.joined || [])
+      setWins((j.data.wins || []))
+      setUnclaimedWins(j.data.unclaimedWins || [])
+      setVoted(j.data.voted || [])
+    } catch {}
+  }, [cacheKey])
+
+  const persistCache = useCallback((payload) => {
+    try {
+      if (!cacheKey) return
+      localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), data: payload }))
+    } catch {}
+  }, [cacheKey])
+
+  const hydrateNftsFromCache = useCallback(() => {
+    try {
+      if (!cacheNftKey) return
+      const j = JSON.parse(localStorage.getItem(cacheNftKey) || '{}')
+      if (!j || !j.data) return
+      setNfts(j.data || [])
+    } catch {}
+  }, [cacheNftKey])
+
+  const persistNftCache = useCallback((list) => {
+    try {
+      if (!cacheNftKey) return
+      localStorage.setItem(cacheNftKey, JSON.stringify({ at: Date.now(), data: list }))
+    } catch {}
+  }, [cacheNftKey])
+
+  useEffect(() => { hydrateFromCache(); hydrateNftsFromCache() }, [hydrateFromCache, hydrateNftsFromCache])
 
   // price (display only) with fallback + retry
   useEffect(() => {
@@ -163,8 +212,7 @@ function MyRoundsPage() {
     ;(async () => {
       try {
         const tryOnce = async (url) => {
-          const r = await fetch(url)
-          return await r.json()
+          const r = await fetch(url); return await r.json()
         }
         let usd = 0
         try {
@@ -190,10 +238,9 @@ function MyRoundsPage() {
     return { provider, ct }
   }, [BASE_RPC, FILLIN_ADDRESS])
 
-  // load rounds for user (robust)
+  // load rounds (robust + cache)
   const loadMyRounds = useCallback(async () => {
     if (!address) return
-    // cancel previous
     if (abortRef.current) abortRef.current.abort()
     const controller = new AbortController()
     abortRef.current = controller
@@ -203,18 +250,20 @@ function MyRoundsPage() {
     try {
       const { ct } = getRead()
 
-      // getUserEntries can flake; retry and allow partial fallback
+      // Prefer onchain helper, but keep cache as fallback
       let userEntries
       try {
         userEntries = await withRetry(() => ct.getUserEntries(address), { signal })
       } catch (e) {
-        // If the helper fails, produce empty arrays (page still loads)
-        userEntries = [[], []]
+        // if helper fails entirely, keep current view (from cache) and surface status
+        setStatus('Network hiccup loading entries — using cached view where available.')
+        setLoading(false)
+        return
       }
+
       const ids1 = Array.from(userEntries?.[0] || []).map(Number)
       const ids2 = Array.from(userEntries?.[1] || []).map(Number)
 
-      // ---- Load Pool1 cards with bounded concurrency + allSettled behavior
       const p1CardsRaw = await mapLimit(ids1, CONCURRENCY, async (id) => {
         if (signal.aborted) return null
         try {
@@ -230,7 +279,6 @@ function MyRoundsPage() {
           const claimed = Boolean(info.claimed_ ?? info[8])
           const poolBalance = info.poolBalance_ ?? info[9] ?? 0n
 
-          // Your submission (may revert/not exist)
           const your = await withRetry(
             () => ct.getPool1Submission(BigInt(id), address),
             { tries: 2, minDelay: 120, maxDelay: 300, signal }
@@ -260,18 +308,13 @@ function MyRoundsPage() {
             winner, claimed, ended, youWon,
             isCreator: creator && creator.toLowerCase() === address.toLowerCase(),
           }
-        } catch {
-          return null
-        }
+        } catch { return null }
       })
       const p1Cards = p1CardsRaw.filter(Boolean)
-
-      // Derive lists
       const startedCards = p1Cards.filter((c) => c.isCreator)
       const winCards = p1Cards.filter((c) => c.youWon)
       const unclaimed = winCards.filter((c) => !c.claimed)
 
-      // ---- Load Pool2 vote cards with bounded concurrency
       const p2CardsRaw = await mapLimit(ids2, CONCURRENCY, async (id) => {
         if (signal.aborted) return null
         try {
@@ -287,11 +330,9 @@ function MyRoundsPage() {
           const feeBase = toEth(p2.feeBase ?? p2[9] ?? 0n)
           const deadline = Number(p2.deadline ?? p2[10] ?? 0)
 
-          // Fetch parts & creator blank for preview
           const info = await withRetry(() => ct.getPool1Info(BigInt(originalId)), { signal })
           const parts = info.parts_ ?? info[2] ?? []
           const creatorAddr = (info.creator_ ?? info[5] ?? '').toString()
-
           const creatorSub = await withRetry(
             () => ct.getPool1Submission(BigInt(originalId), creatorAddr),
             { tries: 2, minDelay: 120, maxDelay: 300, signal }
@@ -309,43 +350,33 @@ function MyRoundsPage() {
             claimed, challengerWon,
             poolEth, poolUsd: poolEth * priceUsd, feeBase, deadline,
           }
-        } catch {
-          return null
-        }
+        } catch { return null }
       })
       const p2Cards = p2CardsRaw.filter(Boolean)
 
       if (signal.aborted) return
+      setJoined(p1Cards); setStarted(startedCards); setWins(winCards); setUnclaimedWins(unclaimed); setVoted(p2Cards)
+      persistCache({ started: startedCards, joined: p1Cards, wins: winCards, unclaimedWins: unclaimed, voted: p2Cards })
 
-      setJoined(p1Cards)
-      setStarted(startedCards)
-      setWins(winCards)
-      setUnclaimedWins(unclaimed)
-      setVoted(p2Cards)
-
-      // Surface partial failure hint
       const missed = (ids1.length - p1Cards.length) + (ids2.length - p2Cards.length)
       if (missed > 0) setStatus(`Loaded ${ids1.length + ids2.length - missed} items (${missed} skipped due to RPC timeouts).`)
     } catch (e) {
       if (String(e?.message).includes('aborted')) return
       console.error(e)
-      setStatus('Failed to load your rounds. Try Refresh.')
-      setJoined([]); setStarted([]); setWins([]); setUnclaimedWins([]); setVoted([])
+      setStatus('Failed to load your rounds. Showing cached view (if any).')
     } finally {
       if (!abortRef.current?.signal?.aborted) setLoading(false)
     }
-  }, [address, getRead, priceUsd])
+  }, [address, getRead, priceUsd, persistCache])
 
   useEffect(() => { if (address) loadMyRounds() }, [address, loadMyRounds])
-
-  // background refresh every 60s (doesn't block UI)
   useEffect(() => {
     if (!address) return
     const t = setInterval(() => { loadMyRounds() }, 60000)
     return () => clearInterval(t)
   }, [address, loadMyRounds])
 
-  // claim / finalize (uses TxProvider helper)
+  // claim / finalize
   const finalizePool1 = useCallback(async (id) => {
     try {
       setStatus('Finalizing round…')
@@ -359,12 +390,24 @@ function MyRoundsPage() {
     } catch (e) {
       console.error(e)
       const msg = e?.info?.error?.message || e?.shortMessage || e?.reason || e?.message || 'Finalize failed'
-      setStatus(msg)
-      setShowConfetti(false)
+      setStatus(msg); setShowConfetti(false)
     }
   }, [claimPool1])
 
-  // NFTs owned (contract-local), also robust + bounded
+  /* ------------- NFTs ------------- */
+  async function fetchJson(uri) {
+    try {
+      if (!uri) return null
+      if (uri.startsWith('data:')) {
+        const[,payload] = uri.split(',', 2)
+        const json = JSON.parse(decodeURIComponent(payload))
+        return json
+      }
+      const res = await fetch(ipfsToHttp(uri))
+      return await res.json()
+    } catch { return null }
+  }
+
   const loadMyNfts = useCallback(async () => {
     if (!address || !NFT_ADDRESS) { setNfts([]); return }
     if (abortRef.current) abortRef.current.abort()
@@ -378,25 +421,20 @@ function MyRoundsPage() {
       const nft = new ethers.Contract(NFT_ADDRESS, NFT_READ_ABI, provider)
 
       const bal = Number(await withRetry(() => nft.balanceOf(address), { signal }).catch(() => 0n))
-      if (!bal) { setNfts([]); return }
+      if (!bal) { setNfts([]); persistNftCache([]); return }
 
       const tokens = []
-      // Try enumerable fast path
       let enumerableWorked = true
       for (let i = 0; i < bal; i++) {
         try {
           // eslint-disable-next-line no-await-in-loop
           const tid = await withRetry(() => nft.tokenOfOwnerByIndex(address, i), { tries: 2, signal })
           tokens.push(Number(tid))
-        } catch {
-          enumerableWorked = false
-          break
-        }
+        } catch { enumerableWorked = false; break }
       }
-      // Fallback brute-force scan (bounded)
       if (!enumerableWorked) {
         const total = Number(await withRetry(() => nft.totalSupply(), { signal }).catch(() => 0n))
-        const cap = Math.min(total || 0, 400) // safety cap
+        const cap = Math.min(total || 0, 400)
         for (let tid = 1; tokens.length < bal && tid <= cap; tid++) {
           // eslint-disable-next-line no-await-in-loop
           const who = await withRetry(() => nft.ownerOf(tid), { tries: 2, signal }).catch(() => null)
@@ -405,26 +443,34 @@ function MyRoundsPage() {
         }
       }
 
-      const withUris = await mapLimit(tokens, 6, async (id) => {
-        if (signal.aborted) return { id, tokenURI: null }
+      const enriched = await mapLimit(tokens, 6, async (id) => {
+        if (signal.aborted) return { id }
         try {
           const uri = await withRetry(() => nft.tokenURI(id), { tries: 2, signal })
-          return { id, tokenURI: uri }
-        } catch { return { id, tokenURI: null } }
+          const meta = await fetchJson(uri)
+          const image = ipfsToHttp(meta?.image || meta?.image_url || '')
+          const name = meta?.name || `Template #${id}`
+          const desc = meta?.description || ''
+          const external = meta?.external_url || null
+          return { id, tokenURI: uri, meta, image, name, desc, external }
+        } catch {
+          return { id, tokenURI: null }
+        }
       })
       if (signal.aborted) return
-      setNfts(withUris)
+      setNfts(enriched)
+      persistNftCache(enriched)
     } catch (e) {
       if (!String(e?.message).includes('aborted')) console.error(e)
-      setNfts([])
+      // keep cached list
     } finally {
       if (!abortRef.current?.signal?.aborted) setNftLoading(false)
     }
-  }, [address, BASE_RPC, NFT_ADDRESS])
+  }, [address, BASE_RPC, NFT_ADDRESS, persistNftCache])
 
   useEffect(() => { if (address) loadMyNfts() }, [address, loadMyNfts])
 
-  /** ---------- derived views ---------- */
+  /* ------------- derived ------------- */
   const allCards = useMemo(() => {
     const s = started.map((c) => ({ ...c, group: 'Started' }))
     const j = joined.map((c) => ({ ...c, group: 'Joined' }))
@@ -464,7 +510,7 @@ function MyRoundsPage() {
     return { created, totalJoined, winCount, unclaimedCount, totalFeesEth, totalFeesUsd, totalPoolUsd }
   }, [started, joined, wins, unclaimedWins])
 
-  /** ---------- SEO / Frames ---------- */
+  /* ------------- SEO / Frames ------------- */
   const pageUrl = absoluteUrl('/myrounds')
   const ogImage = buildOgUrl({ screen: 'myrounds', user: shortAddr(address) || 'anon' })
 
@@ -491,7 +537,7 @@ function MyRoundsPage() {
       {showConfetti && width > 0 && height > 0 && <Confetti width={width} height={height} />}
 
       <main className="w-full mx-auto max-w-6xl px-4 sm:px-6 md:px-8 py-4 md:py-6 text-white space-y-6 overflow-x-hidden">
-        {/* Header (matches Vote/Challenge styling) */}
+        {/* Header */}
         <div className="rounded-2xl bg-slate-900/70 border border-slate-700 p-6">
           <div className="flex flex-wrap items-center justify-between gap-4 min-w-0">
             <div className="min-w-0">
@@ -580,23 +626,56 @@ function MyRoundsPage() {
                 </div>
               ) : (
                 <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
-                  {nfts.map((t) => (
-                    <div key={t.id} className="rounded-xl bg-slate-900/60 border border-slate-700 p-4 overflow-hidden">
-                      <div className="text-sm font-semibold">Token #{t.id}</div>
-                      <div className="text-xs text-slate-400 break-all mt-1">
-                        {t.tokenURI ? <a className="underline" href={t.tokenURI} target="_blank" rel="noopener noreferrer">tokenURI</a> : 'No tokenURI'}
+                  {nfts.map((t) => {
+                    const tplUrl = t.external || (t.id ? absoluteUrl(`/template/${t.id}`) : null)
+                    const castUrl = buildCastUrl(
+                      `I minted a MadFill Template! ${tplUrl ?? ''}`,
+                      tplUrl ? [tplUrl] : []
+                    )
+                    return (
+                      <div key={t.id} className="rounded-xl bg-slate-900/60 border border-slate-700 overflow-hidden">
+                        {t.image ? (
+                          <div className="aspect-video bg-slate-800 border-b border-slate-700">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={t.image} alt={t.name || `Token #${t.id}`} className="w-full h-full object-cover" />
+                          </div>
+                        ) : <div className="aspect-video bg-slate-800 border-b border-slate-700" />}
+                        <div className="p-4">
+                          <div className="text-sm font-semibold truncate">{t.name || `Token #${t.id}`}</div>
+                          <div className="text-xs text-slate-400 line-clamp-2 mt-1">{t.desc || '—'}</div>
+                          <div className="flex flex-wrap gap-2 mt-3">
+                            {tplUrl && (
+                              <a
+                                href={tplUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs"
+                              >
+                                View Template
+                              </a>
+                            )}
+                            <a
+                              href={`https://basescan.org/token/${NFT_ADDRESS}?a=${t.id}`}
+                              target="_blank" rel="noopener noreferrer"
+                              className="px-3 py-2 rounded-md bg-slate-800 border border-slate-600 hover:bg-slate-700 text-xs"
+                            >
+                              BaseScan
+                            </a>
+                            <a
+                              href={castUrl}
+                              target="_blank" rel="noopener noreferrer"
+                              className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs"
+                            >
+                              Cast
+                            </a>
+                          </div>
+                          <div className="text-[11px] text-slate-500 mt-2 break-all">
+                            {t.tokenURI ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a> : 'No tokenURI'}
+                          </div>
+                        </div>
                       </div>
-                      <div className="mt-3 flex items-center gap-2">
-                        <a
-                          className="text-xs underline text-indigo-300"
-                          href={`https://basescan.org/token/${NFT_ADDRESS}?a=${t.id}`}
-                          target="_blank" rel="noopener noreferrer"
-                        >
-                          View on BaseScan
-                        </a>
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -643,7 +722,7 @@ function MyRoundsPage() {
           </label>
         </div>
 
-        {/* Content */}
+        {/* Cards */}
         {!isConnected ? (
           <div className="text-center text-slate-300 py-16">
             Connect your wallet (top-right) to view your rounds.&nbsp;
@@ -662,8 +741,9 @@ function MyRoundsPage() {
               const isPool1 = card.kind === 'pool1'
               const roundUrl = absoluteUrl(`/round/${isPool1 ? card.id : card.originalPool1Id}`)
               const shareTxt = isPool1
-                ? `Check out my MadFill Round #${card.id}!`
-                : `I voted on a MadFill challenger for Round #${card.originalPool1Id}!`
+                ? `Check out my MadFill Round #${card.id}! ${roundUrl}`
+                : `I voted on a MadFill challenger for Round #${card.originalPool1Id}! ${roundUrl}`
+              const castHref = buildCastUrl(shareTxt, [roundUrl])
               const endsLabel = formatTimeLeft(card.deadline)
 
               return (
@@ -723,6 +803,13 @@ function MyRoundsPage() {
                           <Link href={`/round/${card.id}`} className="w-full">
                             <Button className="w-full bg-indigo-600 hover:bg-indigo-500">View Round</Button>
                           </Link>
+                          <a
+                            href={castHref}
+                            target="_blank" rel="noopener noreferrer"
+                            className="w-full"
+                          >
+                            <Button className="w-full bg-fuchsia-600 hover:bg-fuchsia-500">Cast</Button>
+                          </a>
                           {card.ended && card.youWon && !card.claimed && (
                             <Button
                               onClick={() => finalizePool1(card.id)}
@@ -741,6 +828,13 @@ function MyRoundsPage() {
                           <Link href={`/round/${card.originalPool1Id}`} className="w-full">
                             <Button variant="outline" className="w-full border-slate-600 text-slate-200">View Round</Button>
                           </Link>
+                          <a
+                            href={castHref}
+                            target="_blank" rel="noopener noreferrer"
+                            className="w-full"
+                          >
+                            <Button className="w-full bg-indigo-600 hover:bg-indigo-500">Cast</Button>
+                          </a>
                         </>
                       )}
                     </div>
@@ -751,7 +845,7 @@ function MyRoundsPage() {
           </div>
         )}
 
-        {/* Footer (matches Vote/Active) */}
+        {/* Footer */}
         <footer className="mt-10 text-xs text-slate-400 flex flex-wrap items-center gap-3 justify-between border-t border-slate-800 pt-4">
           <div className="flex items-center gap-3">
             <Link href="/challenge" className="underline text-indigo-300">Start a Challenge</Link>
@@ -781,9 +875,8 @@ function MyRoundsPage() {
           <div className="opacity-80">Built on Base • MadFill</div>
         </footer>
 
-        {/* Tiny note */}
         <div className="text-[11px] text-slate-500 text-center mt-2">
-          Prices use public ETH/USD spot (approx). Some items may be skipped if an RPC call times out; use Refresh.
+          Prices use public ETH/USD spot (approx). Cached results shown if RPC is flaky; use Refresh for a fresh pull.
         </div>
       </main>
     </Layout>
