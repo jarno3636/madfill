@@ -11,13 +11,11 @@ import nftAbi from '@/abi/MadFillTemplateNFT_ABI.json'
 const BASE_CHAIN_ID = 8453n
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 
-/** ---------- Contracts ---------- */
-// FillIn (unchanged; replace default if you want)
+/** ---------- Contracts (Base mainnet) ---------- */
 const FILLIN_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
 
-// MadFill Template NFT — new CA (env override if provided)
 const NFT_ADDRESS =
   process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS ||
   '0xCA699Fb766E3FaF36AC31196fb4bd7184769DD20'
@@ -25,13 +23,16 @@ const NFT_ADDRESS =
 /** ---------- Fee buffer (BPS) ---------- */
 const FEE_BUFFER_BPS = (() => {
   const v = Number(process.env.NEXT_PUBLIC_MYO_FEE_BUFFER_BPS)
-  return Number.isFinite(v) && v >= 0 && v <= 5000 ? Math.floor(v) : 200 // default +2%
+  return Number.isFinite(v) && v >= 0 && v <= 5000 ? Math.floor(v) : 200 // +2%
 })()
 
 /** ---------- Context ---------- */
 const TxContext = createContext(null)
 
-/** ---------- Helper: buffered overrides ---------- */
+/** ---------- Utils ---------- */
+const clampU8 = (n) => (Math.max(0, Math.min(255, Number(n ?? 0))) | 0)
+const toBig = (v) => ethers.toBigInt(v ?? 0n)
+
 function buildBufferedOverrides({ from, value, gasLimitBase = 250_000, gasJitter = 50_000 }) {
   const overrides = {}
   if (from) overrides.from = from
@@ -41,12 +42,24 @@ function buildBufferedOverrides({ from, value, gasLimitBase = 250_000, gasJitter
   return overrides
 }
 
+/** Build a tx request for frames (to, data, value, chainId) */
+function buildTxRequest(contractAddress, abi, fnName, args, { value, chainId = BASE_CHAIN_ID } = {}) {
+  const iface = new ethers.Interface(abi)
+  const data = iface.encodeFunctionData(fnName, args)
+  return {
+    to: contractAddress,
+    data,
+    value: value != null ? ethers.toBeHex(ethers.toBigInt(value)) : undefined,
+    chainId: Number(chainId),
+  }
+}
+
 export function TxProvider({ children }) {
   const { provider, signer, isOnBase, connect, switchToBase, address, isWarpcast } = useWallet()
 
-  const [txStatus, setTxStatus] = useState(null)     // 'pending' | 'success' | 'error' | null
-  const [pendingTx, setPendingTx] = useState(null)   // hash
-  const [lastTx, setLastTx] = useState(null)         // receipt
+  const [txStatus, setTxStatus] = useState(null)   // 'pending' | 'success' | 'error' | null
+  const [pendingTx, setPendingTx] = useState(null) // hash
+  const [lastTx, setLastTx] = useState(null)       // receipt
 
   /** read-only provider (no signer) */
   const read = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [])
@@ -64,7 +77,7 @@ export function TxProvider({ children }) {
     [provider, signer, read]
   )
 
-  /** Ensure wallet + network — don’t hard-switch in Warpcast */
+  /** Ensure wallet + network — don’t force switch inside Warpcast frames */
   const ensureReady = useCallback(async () => {
     if (!address) await connect()
     if (isWarpcast) {
@@ -82,12 +95,11 @@ export function TxProvider({ children }) {
     }
   }, [address, isOnBase, isWarpcast, connect, switchToBase, signer, provider])
 
-  /** Estimate + revert reason via read-only runner */
+  /** Preflight + gas estimate via read-only runner */
   const estimateWithRead = useCallback(
     async (contractAddress, abi, fnName, args, { from, value } = {}) => {
       const ctRead = new ethers.Contract(contractAddress, abi, read)
 
-      // Preflight revert check
       try {
         const overrides = {}
         if (value !== undefined && value !== null) overrides.value = ethers.toBigInt(value)
@@ -103,7 +115,6 @@ export function TxProvider({ children }) {
         throw new Error(msg)
       }
 
-      // Gas estimate (best effort)
       const overrides = {}
       if (value !== undefined && value !== null) overrides.value = ethers.toBigInt(value)
       if (from) overrides.from = from
@@ -135,6 +146,18 @@ export function TxProvider({ children }) {
       throw err
     }
   }
+
+  /** Decide to send, or return calldata for frames */
+  const maybeSendOrReturn = useCallback(
+    async ({ contract, contractAddress, abi, fnName, args, value, overrides, asCalldata }) => {
+      const shouldReturn = Boolean(asCalldata) || (isWarpcast && !signer)
+      if (shouldReturn) {
+        return buildTxRequest(contractAddress, abi, fnName, args, { value, chainId: BASE_CHAIN_ID })
+      }
+      return await runTx(() => contract[fnName](...args, overrides))
+    },
+    [isWarpcast, signer]
+  )
 
   /* =========================
      READ HELPERS (NFT)
@@ -176,15 +199,58 @@ export function TxProvider({ children }) {
     }
   }, [getContracts, readPaused, readMintPriceWei])
 
+  /** NEW: Quick-read helpers for gallery/detail pages */
+  const readTemplateOf = useCallback(async (tokenId) => {
+    const { nft } = getContracts(false)
+    try {
+      const res = await nft.templateOf(ethers.toBigInt(tokenId))
+      // struct layout from ABI:
+      // [title, description, theme, parts[], createdAt(uint64), author(address)]
+      return {
+        title: String(res?.[0] ?? ''),
+        description: String(res?.[1] ?? ''),
+        theme: String(res?.[2] ?? ''),
+        parts: Array.isArray(res?.[3]) ? res[3].map(String) : [],
+        createdAt: typeof res?.[4] === 'bigint' ? Number(res[4]) : Number(res?.createdAt ?? 0),
+        author: String(res?.[5] ?? '0x0000000000000000000000000000000000000000'),
+      }
+    } catch (e) {
+      console.warn('readTemplateOf error:', e)
+      return null
+    }
+  }, [getContracts])
+
+  const readTokenURI = useCallback(async (tokenId) => {
+    const { nft } = getContracts(false)
+    try {
+      return await nft.tokenURI(ethers.toBigInt(tokenId))
+    } catch (e) {
+      console.warn('readTokenURI error:', e)
+      return ''
+    }
+  }, [getContracts])
+
+  const readTotalSupply = useCallback(async () => {
+    const { nft } = getContracts(false)
+    try {
+      const ts = await nft.totalSupply()
+      return typeof ts === 'bigint' ? ts : ethers.toBigInt(ts ?? 0)
+    } catch (e) {
+      console.warn('readTotalSupply error:', e)
+      return 0n
+    }
+  }, [getContracts])
+
   /* =========================
      POOL 1
   ========================= */
   const createPool1 = useCallback(async ({
     title, theme, parts, word, username, feeBaseWei, durationSecs, blankIndex,
+    asCalldata = false,
   }) => {
     await ensureReady()
     const { fillin } = getContracts(true)
-    const fee = BigInt(feeBaseWei ?? 0n)
+    const fee = toBig(feeBaseWei)
     const args = [
       String(title ?? ''),
       String(theme ?? ''),
@@ -192,90 +258,150 @@ export function TxProvider({ children }) {
       String(word ?? ''),
       String(username ?? ''),
       fee,
-      BigInt(durationSecs ?? 0n),
-      Number(blankIndex ?? 0) | 0,
+      toBig(durationSecs),
+      clampU8(blankIndex),
     ]
     const overrides = await estimateWithRead(
       FILLIN_ADDRESS, fillinAbi, 'createPool1', args, { from: address, value: fee }
     )
-    return await runTx(() => fillin.createPool1(...args, overrides))
-  }, [ensureReady, getContracts, estimateWithRead, address])
+    return await maybeSendOrReturn({
+      contract: fillin,
+      contractAddress: FILLIN_ADDRESS,
+      abi: fillinAbi,
+      fnName: 'createPool1',
+      args,
+      value: fee,
+      overrides,
+      asCalldata,
+    })
+  }, [ensureReady, getContracts, estimateWithRead, address, maybeSendOrReturn])
 
-  const joinPool1 = useCallback(async ({ id, word, username, blankIndex, feeBaseWei }) => {
+  const joinPool1 = useCallback(async ({
+    id, word, username, blankIndex, feeBaseWei,
+    asCalldata = false,
+  }) => {
     await ensureReady()
     const { fillin } = getContracts(true)
-    const poolId = BigInt(id ?? 0)
-    const value  = BigInt(feeBaseWei ?? 0n)
-    const args = [poolId, String(word ?? ''), String(username ?? ''), Number(blankIndex ?? 0) | 0]
+    const poolId = toBig(id)
+    const value  = toBig(feeBaseWei)
+    const args = [poolId, String(word ?? ''), String(username ?? ''), clampU8(blankIndex)]
     const overrides = await estimateWithRead(
       FILLIN_ADDRESS, fillinAbi, 'joinPool1', args, { from: address, value }
     )
-    return await runTx(() => fillin.joinPool1(...args, overrides))
-  }, [ensureReady, getContracts, estimateWithRead, address])
+    return await maybeSendOrReturn({
+      contract: fillin,
+      contractAddress: FILLIN_ADDRESS,
+      abi: fillinAbi,
+      fnName: 'joinPool1',
+      args,
+      value,
+      overrides,
+      asCalldata,
+    })
+  }, [ensureReady, getContracts, estimateWithRead, address, maybeSendOrReturn])
 
-  const claimPool1 = useCallback(async (id) => {
+  const claimPool1 = useCallback(async (id, { asCalldata = false } = {}) => {
     await ensureReady()
     const { fillin } = getContracts(true)
-    const args = [BigInt(id ?? 0)]
+    const args = [toBig(id)]
     const overrides = await estimateWithRead(
       FILLIN_ADDRESS, fillinAbi, 'claimPool1', args, { from: address }
     )
-    return await runTx(() => fillin.claimPool1(...args, overrides))
-  }, [ensureReady, getContracts, estimateWithRead, address])
+    return await maybeSendOrReturn({
+      contract: fillin,
+      contractAddress: FILLIN_ADDRESS,
+      abi: fillinAbi,
+      fnName: 'claimPool1',
+      args,
+      value: undefined,
+      overrides,
+      asCalldata,
+    })
+  }, [ensureReady, getContracts, estimateWithRead, address, maybeSendOrReturn])
 
   /* =========================
      POOL 2
   ========================= */
   const createPool2 = useCallback(async ({
     pool1Id, challengerWord, challengerUsername, feeBaseWei, durationSecs,
+    asCalldata = false,
   }) => {
     await ensureReady()
     const { fillin } = getContracts(true)
-    const value = BigInt(feeBaseWei ?? 0n)
+    const value = toBig(feeBaseWei)
     const args = [
-      BigInt(pool1Id ?? 0),
+      toBig(pool1Id),
       String(challengerWord ?? ''),
       String(challengerUsername ?? ''),
       value,
-      BigInt(durationSecs ?? 0n),
+      toBig(durationSecs),
     ]
     const overrides = await estimateWithRead(
       FILLIN_ADDRESS, fillinAbi, 'createPool2', args, { from: address, value }
     )
-    return await runTx(() => fillin.createPool2(...args, overrides))
-  }, [ensureReady, getContracts, estimateWithRead, address])
+    return await maybeSendOrReturn({
+      contract: fillin,
+      contractAddress: FILLIN_ADDRESS,
+      abi: fillinAbi,
+      fnName: 'createPool2',
+      args,
+      value,
+      overrides,
+      asCalldata,
+    })
+  }, [ensureReady, getContracts, estimateWithRead, address, maybeSendOrReturn])
 
-  const votePool2 = useCallback(async ({ id, voteChallenger, feeWei }) => {
+  const votePool2 = useCallback(async ({
+    id, voteChallenger, feeWei,
+    asCalldata = false,
+  }) => {
     await ensureReady()
     const { fillin } = getContracts(true)
-    const args = [BigInt(id ?? 0), Boolean(voteChallenger)]
-    const value = BigInt(feeWei ?? 0n)
+    const args = [toBig(id), Boolean(voteChallenger)]
+    const value = toBig(feeWei)
     const overrides = await estimateWithRead(
       FILLIN_ADDRESS, fillinAbi, 'votePool2', args, { from: address, value }
     )
-    return await runTx(() => fillin.votePool2(...args, overrides))
-  }, [ensureReady, getContracts, estimateWithRead, address])
+    return await maybeSendOrReturn({
+      contract: fillin,
+      contractAddress: FILLIN_ADDRESS,
+      abi: fillinAbi,
+      fnName: 'votePool2',
+      args,
+      value,
+      overrides,
+      asCalldata,
+    })
+  }, [ensureReady, getContracts, estimateWithRead, address, maybeSendOrReturn])
 
-  const claimPool2 = useCallback(async (id) => {
+  const claimPool2 = useCallback(async (id, { asCalldata = false } = {}) => {
     await ensureReady()
     const { fillin } = getContracts(true)
-    const args = [BigInt(id ?? 0)]
+    const args = [toBig(id)]
     const overrides = await estimateWithRead(
       FILLIN_ADDRESS, fillinAbi, 'claimPool2', args, { from: address }
     )
-    return await runTx(() => fillin.claimPool2(...args, overrides))
-  }, [ensureReady, getContracts, estimateWithRead, address])
+    return await maybeSendOrReturn({
+      contract: fillin,
+      contractAddress: FILLIN_ADDRESS,
+      abi: fillinAbi,
+      fnName: 'claimPool2',
+      args,
+      value: undefined,
+      overrides,
+      asCalldata,
+    })
+  }, [ensureReady, getContracts, estimateWithRead, address, maybeSendOrReturn])
 
   /* =========================
-     NFT: mintTemplate (v3 ABI)
+     NFT: mintTemplate (payable)
   ========================= */
   const mintTemplateNFT = useCallback(
-    async (title, description, theme, parts, { value } = {}) => {
+    async (title, description, theme, parts, { value, asCalldata = false } = {}) => {
       await ensureReady()
       const { nft } = getContracts(true)
 
-      // If caller didn’t pass a value, read price and add buffer
-      let finalValue = value != null ? BigInt(value) : 0n
+      let finalValue = value != null ? toBig(value) : 0n
       if (finalValue === 0n) {
         const base = await readMintPriceWei()
         const extra = (base * BigInt(FEE_BUFFER_BPS)) / 10_000n
@@ -289,12 +415,17 @@ export function TxProvider({ children }) {
         Array.isArray(parts) ? parts.map((p) => String(p ?? '')) : [],
       ]
 
-      // Preflight & estimate from a read contract (gets revert reasons)
       const preflight = await estimateWithRead(
         NFT_ADDRESS, nftAbi, 'mintTemplate', args, { from: address, value: finalValue }
       )
 
-      // Buffered overrides for the write call
+      if (asCalldata || (isWarpcast && !signer)) {
+        return buildTxRequest(NFT_ADDRESS, nftAbi, 'mintTemplate', args, {
+          value: preflight?.value ?? finalValue,
+          chainId: BASE_CHAIN_ID,
+        })
+      }
+
       const overrides = buildBufferedOverrides({
         from: address,
         value: preflight?.value ?? finalValue,
@@ -304,7 +435,7 @@ export function TxProvider({ children }) {
 
       return await runTx(() => nft.mintTemplate(...args, overrides))
     },
-    [ensureReady, getContracts, estimateWithRead, address, readMintPriceWei]
+    [ensureReady, getContracts, estimateWithRead, address, readMintPriceWei, isWarpcast, signer]
   )
 
   /** ---------------- Context Value ---------------- */
@@ -319,15 +450,18 @@ export function TxProvider({ children }) {
     provider,
     getContracts,
 
-    // Pools
+    // Pools (each supports { asCalldata } option)
     createPool1, joinPool1, claimPool1,
     createPool2, votePool2, claimPool2,
 
-    // NFT
+    // NFT: write + reads
     mintTemplateNFT,
     readNftLimits,
     readMintPriceWei,
     readPaused,
+    readTemplateOf,
+    readTokenURI,
+    readTotalSupply,
 
     // tx state
     txStatus, pendingTx, lastTx,
@@ -340,6 +474,7 @@ export function TxProvider({ children }) {
     createPool1, joinPool1, claimPool1,
     createPool2, votePool2, claimPool2,
     mintTemplateNFT, readNftLimits, readMintPriceWei, readPaused,
+    readTemplateOf, readTokenURI, readTotalSupply,
     txStatus, pendingTx, lastTx
   ])
 
