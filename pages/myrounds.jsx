@@ -18,6 +18,7 @@ import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useTx } from '@/components/TxProvider'
 import fillAbi from '@/abi/FillInStoryV3_ABI.json'
+import { openCast } from '@/lib/cast'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -101,28 +102,6 @@ const ipfsToHttp = (u) => {
   if (!u) return u
   if (u.startsWith('ipfs://')) return `https://ipfs.io/ipfs/${u.slice('ipfs://'.length)}`
   return u
-}
-
-// Robust Warpcast compose (deep link with web fallback)
-const buildCastWebUrl = (text, embeds = []) => {
-  const qs = new URLSearchParams({ text })
-  for (const e of embeds) qs.append('embeds[]', e)
-  return `https://warpcast.com/~/compose?${qs.toString()}`
-}
-function openCast({ text, embeds = [] }) {
-  const webUrl = buildCastWebUrl(text, embeds)
-  const schemeText = encodeURIComponent(text)
-  const schemeEmbeds = embeds.map(e => encodeURIComponent(e))
-  const deep = `warpcast://compose?text=${schemeText}` +
-    (schemeEmbeds.length ? `&embeds[]=${schemeEmbeds.join('&embeds[]=')}` : '')
-
-  if (typeof window !== 'undefined' && /Warpcast/i.test(navigator.userAgent)) {
-    window.open(webUrl, '_blank', 'noopener,noreferrer'); return
-  }
-  let didOpen = false
-  const t = setTimeout(() => { if (!didOpen) window.open(webUrl, '_blank', 'noopener,noreferrer') }, 500)
-  window.location.href = deep
-  setTimeout(() => { didOpen = true; clearTimeout(t) }, 700)
 }
 
 /* ------------- tiny UI helpers ------------- */
@@ -312,11 +291,10 @@ function MyRoundsPage() {
     try {
       const { ct } = getRead()
 
-      // Prefer onchain helper, but keep cache as fallback
       let userEntries
       try {
         userEntries = await withRetry(() => ct.getUserEntries(address), { signal })
-      } catch (e) {
+      } catch {
         setStatus('Network hiccup loading entries — using cached view where available.')
         setLoading(false)
         return
@@ -490,13 +468,13 @@ function MyRoundsPage() {
       // 1) Enumerable lookup
       for (let i = 0; i < bal; i++) {
         try {
-          // eslint-disable-next-line no-await-in-loop
+          // eslint-disable-next-line no-await-nofor-of-loop
           const tid = await withRetry(() => nft.tokenOfOwnerByIndex(address, i), { tries: 2, signal })
           tokens.push(Number(tid))
         } catch { enumerableWorked = false; break }
       }
 
-      // 2) Small brute force (sequential/small collections)
+      // 2) Small brute force (for tiny collections)
       if (!enumerableWorked && tokens.length < bal) {
         const total = Number(await withRetry(() => nft.totalSupply(), { signal }).catch(() => 0n))
         const cap = Math.min(total || 0, 400)
@@ -508,7 +486,7 @@ function MyRoundsPage() {
         }
       }
 
-      // 3) Transfer logs scan (handles sparse/non-1..N IDs)
+      // 3) Transfer logs scan (handles sparse IDs)
       if (tokens.length < bal) {
         const viaLogs = await findTokenIdsByLogs({ provider, nft, address })
         for (const t of viaLogs) if (!tokens.includes(t)) tokens.push(t)
