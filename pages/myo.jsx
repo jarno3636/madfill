@@ -48,7 +48,6 @@ const TEMPLATE_READ_ABI = [
   { inputs: [], name: 'MAX_PART_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'MAX_TOTAL_BYTES', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'paused', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'getMintPriceWei', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
 ]
 
 /** Build preview parts (implicit blanks) + contract parts (explicit BLANK tokens). */
@@ -110,7 +109,11 @@ const SOFT_ERROR_TEXTS = [
 ]
 const isSoftError = (msg='') => SOFT_ERROR_TEXTS.some(s => (msg || '').toLowerCase().includes(s))
 
+// Event topic + parser for Minted(tokenId,address,string,string)
 const TOPIC_MINTED = ethers.id('Minted(uint256,address,string,string)')
+const MintedIface = new ethers.Interface([
+  'event Minted(uint256 indexed tokenId,address indexed author,string title,string theme)'
+])
 
 const Spinner = () => (
   <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/70 border-t-transparent align-middle" />
@@ -125,7 +128,6 @@ export default function MYOPage() {
     isConnected, connect, isOnBase, isWarpcast,
     BASE_RPC, NFT_ADDRESS,
     mintTemplateNFT,
-    address,
   } = useTx()
 
   // limits/state
@@ -137,9 +139,6 @@ export default function MYOPage() {
   // BLANK token from contract (default placeholder)
   const [blankToken, setBlankToken] = useState('[BLANK]')
 
-  // Live on-chain fee (fixed price contract)
-  const [chainFeeWei, setChainFeeWei] = useState(null)
-
   // ui
   const [loading, setLoading] = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
@@ -150,13 +149,13 @@ export default function MYOPage() {
   const [txHash, setTxHash] = useState(null)
   const [verifying, setVerifying] = useState(false)
 
+  // minted output for share/cast
+  const [mintedTokenId, setMintedTokenId] = useState(null)
+
   // meta
   const [title, setTitle] = useState('')
   const [theme, setTheme] = useState('')
   const [description, setDescription] = useState('')
-
-  // debug
-  const [showDebug, setShowDebug] = useState(false)
 
   // story + fills
   const storyRef = useRef(null)
@@ -179,7 +178,7 @@ export default function MYOPage() {
     })
   }, [blanksInStory])
 
-  // safe reads for limits + BLANK + paused + fee
+  // safe reads for limits + BLANK + paused (no fee fetching for UI)
   useEffect(() => {
     if (!NFT_ADDRESS) return
     const provider = new ethers.JsonRpcProvider(BASE_RPC)
@@ -188,13 +187,12 @@ export default function MYOPage() {
 
     const pull = async () => {
       try {
-        const [blk, mp, mpb, mtb, isPaused, feeWei] = await Promise.all([
+        const [blk, mp, mpb, mtb, isPaused] = await Promise.all([
           ct.BLANK().catch(() => '[BLANK]'),
           ct.MAX_PARTS().catch(() => null),
           ct.MAX_PART_BYTES().catch(() => null),
           ct.MAX_TOTAL_BYTES().catch(() => null),
           ct.paused().catch(() => false),
-          ct.getMintPriceWei().catch(() => null),
         ])
         if (!alive) return
         setBlankToken(String(blk || '[BLANK]'))
@@ -202,11 +200,9 @@ export default function MYOPage() {
         if (mpb && mpb > 0n) setMaxPartBytes(Number(mpb))
         if (mtb && mtb > 0n) setMaxTotalBytes(Number(mtb))
         setPaused(Boolean(isPaused))
-        setChainFeeWei(feeWei && feeWei >= 0n ? feeWei : null)
       } catch {
         if (!alive) return
         setBlankToken('[BLANK]')
-        setChainFeeWei(null)
       }
     }
 
@@ -300,41 +296,27 @@ export default function MYOPage() {
 
   const canMint = reasonsCantMint.length === 0 && !loading
 
-  // exact on-chain mint fee (fixed price)
-  const readMintFeeExact = useCallback(async () => {
-    if (!NFT_ADDRESS) return 0n
-    try {
-      const provider = new ethers.JsonRpcProvider(BASE_RPC)
-      const ct = new ethers.Contract(NFT_ADDRESS, TEMPLATE_READ_ABI, provider)
-      const onchain = await ct.getMintPriceWei().catch(() => 0n)
-      return (onchain && onchain >= 0n) ? onchain : 0n
-    } catch {
-      return 0n
-    }
-  }, [BASE_RPC, NFT_ADDRESS])
-
-  /* ---------- helpers: provider + wait + verification ---------- */
+  /* ---------- provider (for optional log verification) ---------- */
   const provider = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [BASE_RPC])
 
   async function waitForReceipt(hash, timeoutMs = 35000) {
     try {
       const rec = await provider.waitForTransaction(hash, 1, timeoutMs)
-      return rec?.status === 1
-    } catch { return false }
+      return rec?.status === 1 ? rec : null
+    } catch { return null }
   }
 
-  async function verifyMintedOnChain({ contractAddr, lookback = 3000 }) {
+  function parseMintedTokenIdFromReceipt(receipt) {
     try {
-      const latest = await provider.getBlockNumber()
-      const fromBlock = Math.max(0, latest - lookback)
-      const logs = await provider.getLogs({
-        address: contractAddr,
-        fromBlock,
-        toBlock: latest,
-        topics: [TOPIC_MINTED],
-      })
-      return (logs && logs.length > 0)
-    } catch { return false }
+      for (const log of receipt?.logs || []) {
+        if (log.topics?.[0] === TOPIC_MINTED) {
+          const parsed = MintedIface.parseLog(log)
+          const tokenId = parsed?.args?.tokenId
+          if (tokenId != null) return tokenId.toString()
+        }
+      }
+    } catch {}
+    return null
   }
 
   function clearStatusSoon() {
@@ -354,40 +336,36 @@ export default function MYOPage() {
     setTxStatus('')
     setTxHash(null)
     setVerifying(false)
+    setMintedTokenId(null)
 
     try {
       setLoading(true)
       setTxStatus('Waiting for wallet confirmation…')
 
-      const valueWei = await readMintFeeExact()
-
-      let res = await mintTemplateNFT(
+      // We still send the correct on-chain fee inside TxProvider via its preflight,
+      // but the UI always displays 0.0005 ETH + gas.
+      const res = await mintTemplateNFT(
         String(title).slice(0, 128),
         String(description).slice(0, 2048),
         String(theme).slice(0, 128),
-        partsForContract,
-        { value: valueWei }
+        partsForContract
       )
 
-      const hash =
-        res?.hash ||
-        res?.transactionHash ||
-        (typeof res === 'string' && res.startsWith('0x') ? res : null)
-
+      // res is a receipt (TxProvider.runTx waits). Fall back to hash if needed.
+      const receipt = res && res.status != null ? res : null
+      const hash = receipt?.transactionHash || res?.hash || null
       if (hash) setTxHash(hash)
-      setTxStatus('Submitting transaction…')
+      setTxStatus('Finalizing…')
 
-      let success = false
-      if (hash) success = await waitForReceipt(hash, 35000)
+      // If for any reason we didn't get a receipt, try to wait briefly.
+      const ensured = receipt || (hash ? await waitForReceipt(hash, 35000) : null)
+      const ok = Boolean(ensured && ensured.status === 1)
 
-      if (!success) {
-        setVerifying(true)
-        setTxStatus('Verifying on-chain…')
-        const ok = await verifyMintedOnChain({ contractAddr: NFT_ADDRESS })
-        success = ok
-      }
+      if (ok) {
+        // Try to parse tokenId from logs:
+        const tokenId = parseMintedTokenIdFromReceipt(ensured)
+        if (tokenId) setMintedTokenId(tokenId)
 
-      if (success) {
         addToast({ type: 'success', title: 'Template Minted!', message: 'Your template NFT is live.' })
         setTxStatus('Minted ✓')
         setShowConfetti(true)
@@ -413,23 +391,7 @@ export default function MYOPage() {
 
       if (isSoftError(msg)) {
         setVerifying(true)
-        setTxStatus('Network hiccup. Verifying on-chain…')
-        const ok = await verifyMintedOnChain({ contractAddr: NFT_ADDRESS })
-        if (ok) {
-          addToast({ type: 'success', title: 'Template Minted!', message: 'Your template NFT is live.' })
-          setTxStatus('Minted ✓')
-          setShowConfetti(true)
-          setTimeout(() => setShowConfetti(false), 1600)
-          setTxError('')
-          clearStatusSoon()
-          setLoading(false)
-          setVerifying(false)
-
-          setTitle(''); setTheme(''); setDescription('')
-          setStory(PROMPT_STARTERS[Math.floor(Math.random() * PROMPT_STARTERS.length)])
-          setFills([])
-          return
-        }
+        setTxStatus('Network hiccup. Checking on-chain…')
       }
 
       addToast({ type: 'error', title: 'Mint Failed', message: msg })
@@ -441,10 +403,9 @@ export default function MYOPage() {
       setVerifying(false)
     }
   }, [
-    canMint, reasonsCantMint,
-    readMintFeeExact, mintTemplateNFT,
+    canMint, reasonsCantMint, mintTemplateNFT,
     title, description, theme, partsForContract,
-    addToast, NFT_ADDRESS
+    addToast
   ])
 
   const wordsForPreview = useMemo(() => {
@@ -456,13 +417,21 @@ export default function MYOPage() {
   const pageUrl = absoluteUrl('/myo')
   const ogImage = buildOgUrl({ screen: 'myo', title: 'Make Your Own' })
 
-  // formatted fee for UI
-  const feeEthText = useMemo(() => {
-    try {
-      if (chainFeeWei == null) return '—'
-      return Number(ethers.formatEther(chainFeeWei)).toFixed(6)
-    } catch { return '—' }
-  }, [chainFeeWei])
+  // share / cast helpers
+  const mintedUrl = useMemo(() => {
+    if (!mintedTokenId) return null
+    // This matches your contract’s external_url in tokenURI
+    return `https://madfill.vercel.app/template/${mintedTokenId}`
+  }, [mintedTokenId])
+
+  const warpcastUrl = useMemo(() => {
+    if (!mintedUrl) return null
+    const text = `I just minted a MadFill Template on Base! ${mintedUrl}`
+    const qs = new URLSearchParams({ text })
+    // Warpcast composer supports embeds[] to force link previews
+    qs.append('embeds[]', mintedUrl)
+    return `https://warpcast.com/~/compose?${qs.toString()}`
+  }, [mintedUrl])
 
   return (
     <Layout>
@@ -544,10 +513,6 @@ export default function MYOPage() {
                     ⚠️ Wrong network. Switch to <b>Base (8453)</b>.
                   </div>
                 ) : null}
-
-                <Button variant="outline" onClick={() => setShowDebug((v) => !v)} className="w-full border-slate-600 text-slate-200">
-                  {showDebug ? 'Hide Debug' : 'Show Debug'}
-                </Button>
               </div>
             </div>
           </div>
@@ -561,7 +526,7 @@ export default function MYOPage() {
           <div className="rounded-lg bg-slate-900/70 border border-slate-700 px-3 py-2">
             <div className="flex items-center gap-2 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
               <span className="shrink-0">Mint fee:</span>
-              <b className="shrink-0">{feeEthText} ETH</b>
+              <b className="shrink-0">0.0005 ETH</b>
               <span className="opacity-70 shrink-0">+ gas</span>
             </div>
           </div>
@@ -596,38 +561,6 @@ export default function MYOPage() {
         {paused && (
           <div className="text-sm rounded-lg bg-rose-900/40 border border-rose-700 px-3 py-2 text-rose-100">
             ⏸️ Minting is currently paused.
-          </div>
-        )}
-
-        {/* Debug panel */}
-        {showDebug && (
-          <div className="rounded-lg bg-slate-900/70 border border-amber-500/40 p-4 text-xs">
-            <div className="font-semibold mb-2 text-amber-300">Debug</div>
-            <div className="grid sm:grid-cols-2 gap-y-1">
-              <div>isConnected: {String(isConnected)}</div>
-              <div>isOnBase: {String(isOnBase)}</div>
-              <div>isWarpcast: {String(isWarpcast)}</div>
-              <div>NFT_ADDRESS: {String(NFT_ADDRESS || '(missing)')}</div>
-              <div>BASE_RPC: {String(BASE_RPC || '(missing)')}</div>
-              <div>paused: {String(paused)}</div>
-              <div>blankCount: {blankCount}</div>
-              <div>partsForContract.length: {partsForContract.length}</div>
-              <div>maxParts: {maxParts}</div>
-              <div>maxPartBytes: {maxPartBytes}</div>
-              <div>totalContractBytes: {totalContractBytes}</div>
-              <div>maxTotalBytes: {maxTotalBytes}</div>
-              <div>mintTemplateNFT typeof: {typeof mintTemplateNFT}</div>
-              <div>address: {String(address || '(none)')}</div>
-              <div>fee (wei): {String(chainFeeWei ?? '(unknown)')}</div>
-            </div>
-            {reasonsCantMint.length > 0 && (
-              <div className="mt-3 text-rose-200">
-                <div className="font-semibold">Why can’t I mint?</div>
-                <ul className="list-disc list-inside">
-                  {reasonsCantMint.map((r, i) => <li key={i}>{r}</li>)}
-                </ul>
-              </div>
-            )}
           </div>
         )}
 
@@ -759,7 +692,7 @@ export default function MYOPage() {
               <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
                 <div className="flex items-center gap-3 whitespace-nowrap overflow-hidden text-[12px] sm:text-sm">
                   <div className="shrink-0">
-                    Mint fee: <b>{feeEthText} ETH</b>
+                    Mint fee: <b>0.0005 ETH</b>
                     <span className="opacity-70"> + gas</span>
                   </div>
                   <div className="opacity-80 shrink-0">•</div>
@@ -804,6 +737,39 @@ export default function MYOPage() {
               <div className="text-xs text-slate-400">
                 Your fee is fixed by the contract owner. Gas varies with network conditions.
               </div>
+
+              {/* Share / Cast after mint */}
+              {mintedTokenId && (
+                <div className="rounded-lg bg-slate-900/70 border border-indigo-500/40 p-4">
+                  <div className="font-semibold mb-2">🎉 Your template is live!</div>
+                  <div className="flex flex-wrap gap-2">
+                    <a
+                      href={`https://madfill.vercel.app/template/${mintedTokenId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-2 rounded-md bg-slate-800 border border-slate-600 hover:bg-slate-700"
+                    >
+                      View Template
+                    </a>
+                    <a
+                      href={warpcastUrl ?? '#'}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-60"
+                    >
+                      Cast on Warpcast
+                    </a>
+                    <a
+                      href={`https://basescan.org/token/${NFT_ADDRESS}?a=${mintedTokenId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-2 rounded-md bg-slate-800 border border-slate-600 hover:bg-slate-700"
+                    >
+                      View on Basescan
+                    </a>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
