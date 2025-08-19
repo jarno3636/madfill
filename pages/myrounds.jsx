@@ -87,11 +87,11 @@ function mapLimit(items, limit, worker) {
 }
 const CONCURRENCY = 8
 
-/* ------------- NFT read ABI (adds Transfer event) ------------- */
+/* ------------- NFT read ABI (balance/owner for discovery) ------------- */
 const NFT_READ_ABI = [
   'event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)',
   'function balanceOf(address) view returns (uint256)',
-  'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
+  'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)', // may revert if non-enumerable
   'function tokenURI(uint256 tokenId) view returns (string)',
   'function ownerOf(uint256 tokenId) view returns (address)',
   'function totalSupply() view returns (uint256)'
@@ -180,6 +180,9 @@ function MyRoundsPage() {
     address, isConnected, isOnBase, connect, switchToBase,
     claimPool1,
     BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS,
+
+    // New reliable read helpers from TxProvider
+    readTemplateOf, readTokenURI,
   } = useTx()
 
   const [loading, setLoading] = useState(false)
@@ -494,21 +497,34 @@ function MyRoundsPage() {
 
       tokens = Array.from(new Set(tokens)).sort((a, b) => a - b)
 
-      // Enrich
+      // Enrich using TxProvider helpers with retries
       const enriched = await mapLimit(tokens, 6, async (id) => {
         if (signal.aborted) return { id }
         try {
-          const uri = await withRetry(() => nft.tokenURI(id), { tries: 2, signal })
+          const [uri, tpl] = await Promise.all([
+            withRetry(() => readTokenURI(id), { tries: 3, signal }).catch(() => null),
+            withRetry(() => readTemplateOf(id), { tries: 3, signal }).catch(() => null),
+          ])
+
           const meta = await fetchJson(uri)
           const ipfsImg = meta?.image || meta?.image_url || ''
           const image =
             ipfsToHttp(ipfsImg) ||
             (ipfsImg && `https://cloudflare-ipfs.com/ipfs/${ipfsImg.replace('ipfs://','')}`) ||
             (ipfsImg && `https://w3s.link/ipfs/${ipfsImg.replace('ipfs://','')}`)
-          const name = meta?.name || `Template #${id}`
-          const desc = meta?.description || ''
-          const external = meta?.external_url || null
-          return { id, tokenURI: uri, meta, image, name, desc, external }
+
+          const name = meta?.name || tpl?.title || `Template #${id}`
+          const desc = meta?.description || tpl?.description || ''
+          const external = meta?.external_url || (id ? absoluteUrl(`/template/${id}`) : null)
+
+          return {
+            id,
+            tokenURI: uri,
+            meta, image, name, desc, external,
+            // extra for fun casting
+            theme: tpl?.theme || '',
+            author: tpl?.author || '',
+          }
         } catch {
           return { id, tokenURI: null }
         }
@@ -523,7 +539,7 @@ function MyRoundsPage() {
     } finally {
       if (!abortRef.current?.signal?.aborted) setNftLoading(false)
     }
-  }, [address, BASE_RPC, NFT_ADDRESS, persistNftCache])
+  }, [address, BASE_RPC, NFT_ADDRESS, persistNftCache, readTemplateOf, readTokenURI])
 
   useEffect(() => { if (address) loadMyNfts() }, [address, loadMyNfts])
 
@@ -685,7 +701,9 @@ function MyRoundsPage() {
                 <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
                   {nfts.map((t) => {
                     const tplUrl = t.external || (t.id ? absoluteUrl(`/template/${t.id}`) : null)
-                    const shareText = `I minted a MadFill Template! ${tplUrl ?? ''}`
+                    const castTxt = t.name
+                      ? `🎨 I minted “${t.name}” on MadFill! ${tplUrl ?? ''}`
+                      : `🎨 I minted a MadFill Template! ${tplUrl ?? ''}`
                     return (
                       <div key={t.id} className="rounded-xl bg-slate-900/60 border border-slate-700 overflow-hidden">
                         {t.image ? (
@@ -695,8 +713,8 @@ function MyRoundsPage() {
                           </div>
                         ) : <div className="aspect-video bg-slate-800 border-b border-slate-700" />}
                         <div className="p-4">
-                          <div className="text-sm font-semibold truncate">{t.name || `Token #${t.id}`}</div>
-                          <div className="text-xs text-slate-400 line-clamp-2 mt-1">{t.desc || '—'}</div>
+                          <div className="text-sm font-semibold truncate">{t.name || `Template #${t.id}`}</div>
+                          <div className="text-xs text-slate-400 line-clamp-2 mt-1">{t.desc || (t.theme ? `Theme: ${t.theme}` : '—')}</div>
                           <div className="flex flex-wrap gap-2 mt-3">
                             {tplUrl && (
                               <a
@@ -716,7 +734,7 @@ function MyRoundsPage() {
                               BaseScan
                             </a>
                             <Button
-                              onClick={() => openCast({ text: shareText, embeds: tplUrl ? [tplUrl] : [] })}
+                              onClick={() => openCast({ text: castTxt, embeds: tplUrl ? [tplUrl] : [] })}
                               className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs"
                             >
                               Cast
