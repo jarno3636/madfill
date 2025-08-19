@@ -18,7 +18,7 @@ import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useTx } from '@/components/TxProvider'
 import fillAbi from '@/abi/FillInStoryV3_ABI.json'
-import { openCast } from '@/lib/share'
+import { openCast } from '@/lib/share' // still used as a JS fallback
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -41,15 +41,34 @@ const buildPreviewSingle = (parts, word, blankIndex) => {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-/** Reconstruct the full “template line” from parts using the on-chain BLANK token */
-function composeTemplateFromParts(parts = [], blank = '____') {
+/** Build a pretty template view (parts + highlighted blank chips) */
+function renderTemplateParts(parts = [], blankChip = '[BLANK]') {
+  const nodes = []
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i]) nodes.push(<span key={`p-${i}`}>{parts[i]}</span>)
+    if (i < parts.length - 1) {
+      nodes.push(
+        <span
+          key={`b-${i}`}
+          className="mx-1 inline-flex items-center rounded-md px-2 py-0.5 text-xs md:text-sm font-semibold bg-amber-500/20 text-amber-200 border border-amber-400/30"
+        >
+          {blankChip}
+        </span>
+      )
+    }
+  }
+  return nodes
+}
+
+/** Reconstruct a plain-text version (for casting text-only) */
+function composeTemplateText(parts = [], blank = '[BLANK]') {
   if (!Array.isArray(parts) || parts.length === 0) return ''
   const out = []
   for (let i = 0; i < parts.length; i++) {
     out.push(parts[i] || '')
-    if (i < parts.length - 1) out.push(blank)
+    if (i < parts.length - 1) out.push(` ${blank} `)
   }
-  return out.join('')
+  return out.join('').replace(/\s+/g, ' ').trim()
 }
 
 function truncateForCast(s, max = 280) {
@@ -109,7 +128,7 @@ const CONCURRENCY = 8
 const NFT_READ_ABI = [
   'event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)',
   'function balanceOf(address) view returns (uint256)',
-  'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)', // may revert if non-enumerable
+  'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
   'function tokenURI(uint256 tokenId) view returns (string)',
   'function ownerOf(uint256 tokenId) view returns (address)',
   'function totalSupply() view returns (uint256)'
@@ -190,6 +209,15 @@ async function findTokenIdsByLogs({ provider, nft, address, maxBack = 1_200_000,
   }
 }
 
+/* Cast helpers */
+function buildWarpcastUrl({ text, embeds = [] }) {
+  const base = 'https://warpcast.com/~/compose'
+  const params = new URLSearchParams()
+  if (text) params.set('text', text)
+  for (const e of embeds) params.append('embeds[]', e)
+  return `${base}?${params.toString()}`
+}
+
 /* ------------- component ------------- */
 function MyRoundsPage() {
   useMiniAppReady()
@@ -199,7 +227,7 @@ function MyRoundsPage() {
     claimPool1,
     BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS,
 
-    // TxProvider read helpers (must exist on TxProvider)
+    // TxProvider read helpers
     readTemplateOf, readTokenURI, readNftLimits,
   } = useTx()
 
@@ -217,7 +245,7 @@ function MyRoundsPage() {
   // NFTs
   const [nfts, setNfts] = useState([])
   const [nftLoading, setNftLoading] = useState(false)
-  const [blankToken, setBlankToken] = useState('____')
+  const [blankToken, setBlankToken] = useState('[BLANK]') // default visible chip text
 
   // filters
   const [filter, setFilter] = useState('all')
@@ -469,13 +497,15 @@ function MyRoundsPage() {
     } catch { return null }
   }
 
-  // pull BLANK token once
+  // pull BLANK token label once (use readable token for UI; keep default if not available)
   useEffect(() => {
     let dead = false
     ;(async () => {
       try {
         const lim = await readNftLimits?.()
-        if (!dead && lim?.BLANK) setBlankToken(String(lim.BLANK))
+        // contract BLANK might be something like "[BLANK]" or custom; fall back to readable "[BLANK]"
+        const v = String(lim?.BLANK ?? '').trim()
+        if (!dead && v) setBlankToken(v)
       } catch {}
     })()
     return () => { dead = true }
@@ -527,7 +557,7 @@ function MyRoundsPage() {
 
       tokens = Array.from(new Set(tokens)).sort((a, b) => a - b)
 
-      // Enrich: tokenURI + templateOf. Also compute nice reconstructed template.
+      // Enrich: tokenURI + templateOf. Also compute polished view data.
       const enriched = await mapLimit(tokens, 6, async (id) => {
         if (signal.aborted) return { id }
         try {
@@ -547,11 +577,12 @@ function MyRoundsPage() {
           const desc = meta?.description || tpl?.description || ''
           const theme = tpl?.theme || meta?.attributes?.find?.(a => a?.trait_type === 'theme')?.value || ''
           const parts = Array.isArray(tpl?.parts) ? tpl.parts : []
-          const reconstructed = composeTemplateFromParts(parts, blankToken)
+          const plainTemplate = composeTemplateText(parts, blankToken)
 
           return {
             id, tokenURI: uri,
-            meta, image, name, desc, theme, parts, reconstructed,
+            meta, image, name, desc, theme, parts,
+            plainTemplate, // for cast text
           }
         } catch {
           return { id, tokenURI: null }
@@ -570,16 +601,24 @@ function MyRoundsPage() {
 
   useEffect(() => { if (address) loadMyNfts() }, [address, loadMyNfts])
 
-  // ---- Cast a single template (no gallery cast) ----
-  const castTemplate = useCallback((tpl) => {
-    if (!tpl) return
+  // ---- Cast a single template (as link + JS fallback) ----
+  const buildTemplateCastText = useCallback((tpl) => {
+    if (!tpl) return ''
     const header = tpl.name ? `🎨 ${tpl.name}` : `🎨 MadFill Template #${tpl.id}`
     const themeLine = tpl.theme ? `Theme: ${tpl.theme}\n` : ''
-    const body = tpl.reconstructed || ''
-    const text = truncateForCast(`${header}\n${themeLine}${body}`, 280)
-    // No external link since route 404'd; casting pure content
-    openCast({ text, embeds: [] })
+    const body = tpl.plainTemplate || ''
+    return truncateForCast(`${header}\n${themeLine}${body}`, 280)
   }, [])
+
+  const tryOpenCast = useCallback((tpl) => {
+    const text = buildTemplateCastText(tpl)
+    try {
+      // fallback to JS-based share if available
+      openCast?.({ text, embeds: [] })
+    } catch {
+      // ignore—anchor link will be present as primary path
+    }
+  }, [buildTemplateCastText])
 
   /* ------------- derived ------------- */
   const allCards = useMemo(() => {
@@ -737,51 +776,74 @@ function MyRoundsPage() {
                 </div>
               ) : (
                 <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
-                  {nfts.map((t) => (
-                    <div key={t.id} className="rounded-xl bg-slate-900/60 border border-slate-700 overflow-hidden">
-                      {t.image ? (
-                        <div className="aspect-video bg-slate-800 border-b border-slate-700">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={t.image} alt={t.name || `Token #${t.id}`} className="w-full h-full object-cover" />
-                        </div>
-                      ) : <div className="aspect-video bg-slate-800 border-b border-slate-700" />}
-                      <div className="p-4">
-                        <div className="text-sm font-semibold truncate">{t.name || `Template #${t.id}`}</div>
-                        {t.theme && <div className="text-xs text-slate-400 mt-0.5">Theme: {t.theme}</div>}
-                        {t.desc && <div className="text-xs text-slate-400 mt-0.5 line-clamp-2">{t.desc}</div>}
-
-                        {/* Reconstructed template */}
-                        {t.reconstructed && (
-                          <div className="mt-3 p-3 rounded bg-slate-800/60 border border-slate-700 text-sm leading-relaxed font-mono whitespace-pre-wrap break-words max-h-40 overflow-auto">
-                            {t.reconstructed}
+                  {nfts.map((t) => {
+                    const castText = buildTemplateCastText(t)
+                    const castUrl = buildWarpcastUrl({ text: castText })
+                    return (
+                      <div key={t.id} className="rounded-2xl bg-slate-900/70 border border-slate-700 overflow-hidden shadow-lg">
+                        {t.image ? (
+                          <div className="aspect-video bg-slate-800 border-b border-slate-700">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={t.image} alt={t.name || `Token #${t.id}`} className="w-full h-full object-cover" />
                           </div>
-                        )}
+                        ) : <div className="aspect-video bg-slate-800 border-b border-slate-700" />}
+                        <div className="p-4">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-base md:text-lg font-bold truncate text-slate-100">
+                              {t.name || `Template #${t.id}`}
+                            </div>
+                            {t.theme && (
+                              <span className="shrink-0 inline-flex items-center rounded-full px-2.5 py-1 text-[10px] md:text-xs font-semibold bg-indigo-600/30 text-indigo-200 border border-indigo-500/40">
+                                {t.theme}
+                              </span>
+                            )}
+                          </div>
 
-                        <div className="flex flex-wrap gap-2 mt-3">
-                          {/* Removed View Template link (404). Keep BaseScan only */}
-                          <a
-                            href={`https://basescan.org/token/${NFT_ADDRESS}?a=${t.id}`}
-                            target="_blank" rel="noopener noreferrer"
-                            className="px-3 py-2 rounded-md bg-slate-800 border border-slate-600 hover:bg-slate-700 text-xs"
-                          >
-                            BaseScan
-                          </a>
-                          <Button
-                            onClick={() => castTemplate(t)}
-                            className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs"
-                          >
-                            Cast this template
-                          </Button>
-                        </div>
+                          {t.desc && (
+                            <div className="text-xs md:text-sm text-slate-300 mt-1 line-clamp-2">
+                              {t.desc}
+                            </div>
+                          )}
 
-                        <div className="text-[11px] text-slate-500 mt-2 break-all">
-                          {t.tokenURI
-                            ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a>
-                            : 'No tokenURI'}
+                          {/* Polished reconstructed template */}
+                          {Array.isArray(t.parts) && t.parts.length > 0 && (
+                            <div className="mt-3 p-4 rounded-xl bg-gradient-to-br from-indigo-900/50 to-slate-900/70 border border-indigo-700/40 text-slate-100 text-base md:text-lg leading-7 font-medium tracking-wide shadow-inner whitespace-pre-wrap break-words">
+                              {renderTemplateParts(t.parts, blankToken)}
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap gap-2 mt-3">
+                            {/* BaseScan */}
+                            <a
+                              href={`https://basescan.org/token/${NFT_ADDRESS}?a=${t.id}`}
+                              target="_blank" rel="noopener noreferrer"
+                              className="px-3 py-2 rounded-md bg-slate-800 border border-slate-600 hover:bg-slate-700 text-xs"
+                            >
+                              BaseScan
+                            </a>
+
+                            {/* Primary: open Warpcast composer in a new tab. */}
+                            <Button asChild className="bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs">
+                              <a
+                                href={castUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={() => tryOpenCast(t)} // JS fallback (does nothing harmful if link opens)
+                              >
+                                Cast this template
+                              </a>
+                            </Button>
+                          </div>
+
+                          <div className="text-[11px] text-slate-400 mt-2 break-all">
+                            {t.tokenURI
+                              ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a>
+                              : 'No tokenURI'}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -895,7 +957,7 @@ function MyRoundsPage() {
                       )}
                     </div>
 
-                    {/* Bring ShareBar back for rounds; remove extra Cast buttons */}
+                    {/* ShareBar for rounds */}
                     <ShareBar
                       url={roundUrl}
                       text={shareTxt}
