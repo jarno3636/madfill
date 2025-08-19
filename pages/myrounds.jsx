@@ -12,7 +12,7 @@ import Layout from '@/components/Layout'
 import SEO from '@/components/SEO'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-// import ShareBar from '@/components/ShareBar' // removed
+import ShareBar from '@/components/ShareBar'
 import Countdown from '@/components/Countdown'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
@@ -135,7 +135,7 @@ async function findTokenIdsByLogs({ provider, nft, address, maxBack = 1_200_000,
     const start = Math.max(0, latest - maxBack)
     const iface = new ethers.Interface(NFT_READ_ABI)
     const topicTransfer = iface.getEvent('Transfer').topicHash
-    const addrTopic = ethers.zeroPadValue(address, 32).toLowerCase()
+    const addrTopic = ethers.hexZeroPad(address, 32) // topics need 32-byte hex
 
     const seen = new Set()
 
@@ -181,7 +181,7 @@ function MyRoundsPage() {
     claimPool1,
     BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS,
 
-    // TxProvider read helpers (be sure TxProvider exports these)
+    // TxProvider read helpers
     readTemplateOf, readTokenURI,
   } = useTx()
 
@@ -441,8 +441,13 @@ function MyRoundsPage() {
     try {
       if (!uri) return null
       if (uri.startsWith('data:')) {
-        const[,payload] = uri.split(',', 2)
-        const json = JSON.parse(decodeURIComponent(payload))
+        const [, payload] = uri.split(',', 2)
+        let json
+        try {
+          json = JSON.parse(decodeURIComponent(payload))
+        } catch {
+          try { json = JSON.parse(atob(payload)) } catch { json = JSON.parse(payload) }
+        }
         return json
       }
       const res = await fetch(ipfsToHttp(uri))
@@ -471,6 +476,7 @@ function MyRoundsPage() {
       // 1) Enumerable lookup
       for (let i = 0; i < bal; i++) {
         try {
+          // eslint-disable-next-line no-await-nofor-of-loop
           const tid = await withRetry(() => nft.tokenOfOwnerByIndex(address, i), { tries: 2, signal })
           tokens.push(Number(tid))
         } catch { enumerableWorked = false; break }
@@ -540,6 +546,13 @@ function MyRoundsPage() {
 
   useEffect(() => { if (address) loadMyNfts() }, [address, loadMyNfts])
 
+  // also load when switching to NFTs tab (handles late wallet connect / flaky RPC)
+  useEffect(() => {
+    if (activeTab === 'nfts' && address && !nftLoading && nfts.length === 0) {
+      loadMyNfts()
+    }
+  }, [activeTab, address, nftLoading, nfts.length, loadMyNfts])
+
   // ---- Cast my gallery ----
   const castGallery = useCallback(() => {
     if (!nfts?.length) return
@@ -547,7 +560,6 @@ function MyRoundsPage() {
     const urls = top.map((t) => t.external || (t.id ? absoluteUrl(`/template/${t.id}`) : null)).filter(Boolean)
     const lines = top.map((t) => `• ${t.name || `Template #${t.id}`}${t.theme ? ` — ${t.theme}` : ''} ${t.external ?? absoluteUrl(`/template/${t.id}`)}`)
     const text = `🎨 My MadFill gallery (${nfts.length}):\n${lines.join('\n')}`
-    // Warpcast shows one rich embed; include the first template (rest are in text)
     openCast({ text, embeds: urls.length ? [urls[0]] : [] })
   }, [nfts])
 
@@ -693,7 +705,11 @@ function MyRoundsPage() {
 
           {activeTab === 'nfts' && (
             <div className="mt-4">
-              {!isConnected ? (
+              {!NFT_ADDRESS ? (
+                <div className="rounded-xl bg-slate-900/60 border border-slate-700 p-4 text-sm text-amber-200">
+                  NFT contract is not configured. Set <code className="font-mono">NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS</code>.
+                </div>
+              ) : !isConnected ? (
                 <div className="rounded-xl bg-slate-900/60 border border-slate-700 p-4 text-sm text-slate-300">
                   Connect your wallet to view NFTs.
                 </div>
@@ -732,7 +748,7 @@ function MyRoundsPage() {
                           ) : <div className="aspect-video bg-slate-800 border-b border-slate-700" />}
                           <div className="p-4">
                             <div className="text-sm font-semibold truncate">{t.name || `Template #${t.id}`}</div>
-                            <div className="text-xs text-slate-400 line-clamp-2 mt-1">{t.desc || (t.theme ? `Theme: ${t.theme}` : '—')}</div>
+                            <div className="text-xs text-slate-400 line-clamp-2 mt-1">{t.desc || (t.theme ? `Theme: {t.theme}` : '—')}</div>
                             <div className="flex flex-wrap gap-2 mt-3">
                               {tplUrl && (
                                 <a
@@ -861,37 +877,20 @@ function MyRoundsPage() {
                       {isPool1 ? card.preview : card.chPreview}
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2 text-xs text-slate-300">
-                      {isPool1 ? (
-                        <>
-                          <div className="min-w-0"><span className="text-slate-400">Entry Fee:</span> {fmt(card.feeEth, 4)} ETH (${fmt(card.feeUsd)})</div>
-                          <div className="min-w-0"><span className="text-slate-400">Pool:</span> {fmt(card.poolEth, 4)} ETH (${fmt(card.poolUsd)})</div>
-                          <div className="min-w-0"><span className="text-slate-400">Participants:</span> {card.participantsCount}</div>
-                          <div className="min-w-0"><span className="text-slate-400">Creator:</span> <span className="font-mono">{shortAddr(card.creator)}</span></div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="min-w-0"><span className="text-slate-400">Votes (OG):</span> {card.votersOriginal}</div>
-                          <div className="min-w-0"><span className="text-slate-400">Votes (Ch):</span> {card.votersChallenger}</div>
-                          <div className="min-w-0"><span className="text-slate-400">Fee / vote:</span> {fmt(card.feeBase, 4)} ETH</div>
-                          <div className="min-w-0"><span className="text-slate-400">Pool:</span> {fmt(card.poolEth, 4)} ETH (${fmt(card.poolUsd)})</div>
-                        </>
-                      )}
-                    </div>
+                    {/* Dynamic share for rounds */}
+                    <ShareBar
+                      url={roundUrl}
+                      text={shareTxt}
+                      og={{ screen: 'round', roundId: String(isPool1 ? card.id : card.originalPool1Id) }}
+                      small
+                    />
 
-                    {/* ShareBar removed; keep lightweight Cast buttons only */}
                     <div className="flex gap-2 pt-1">
                       {isPool1 ? (
                         <>
                           <Link href={`/round/${card.id}`} className="w-full">
                             <Button className="w-full bg-indigo-600 hover:bg-indigo-500">View Round</Button>
                           </Link>
-                          <Button
-                            className="w-full bg-fuchsia-600 hover:bg-fuchsia-500"
-                            onClick={() => openCast({ text: shareTxt, embeds: [roundUrl] })}
-                          >
-                            Cast
-                          </Button>
                           {card.ended && card.youWon && !card.claimed && (
                             <Button
                               onClick={() => finalizePool1(card.id)}
@@ -910,12 +909,6 @@ function MyRoundsPage() {
                           <Link href={`/round/${card.originalPool1Id}`} className="w-full">
                             <Button variant="outline" className="w-full border-slate-600 text-slate-200">View Round</Button>
                           </Link>
-                          <Button
-                            className="w-full bg-indigo-600 hover:bg-indigo-500"
-                            onClick={() => openCast({ text: shareTxt, embeds: [roundUrl] })}
-                          >
-                            Cast
-                          </Button>
                         </>
                       )}
                     </div>
