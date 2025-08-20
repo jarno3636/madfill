@@ -5,7 +5,7 @@ import { ethers } from 'ethers'
 const BASE_RPC =
   process.env.NEXT_PUBLIC_BASE_RPC || process.env.BASE_RPC || 'https://mainnet.base.org'
 
-const NFT_ADDRESS =
+const NFT_ADDRESS_DEFAULT =
   process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS ||
   process.env.NFT_TEMPLATE_ADDRESS ||
   '0xCA699Fb766E3FaF36AC31196fb4bd7184769DD20'
@@ -18,14 +18,14 @@ const NFT_READ_ABI = [
   'function tokenURI(uint256 tokenId) view returns (string)',
   'function ownerOf(uint256 tokenId) view returns (address)',
   'function totalSupply() view returns (uint256)',
-  // optional quick-read (if present on your contract)
-  'function templateOf(uint256 tokenId) view returns (string title, string description, string theme, string[] parts, uint64 createdAt, address author)'
+  // optional quick-read
+  'function templateOf(uint256 tokenId) view returns (string title, string description, string theme, string[] parts, uint64 createdAt, address author)',
 ]
 
 /** ---------- Helpers ---------- */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-async function withRetry(fn, { tries = 4, minDelay = 120, maxDelay = 900, signal } = {}) {
+async function withRetry(fn, { tries = 4, minDelay = 120, maxDelay = 800, signal } = {}) {
   let last
   for (let i = 0; i < tries; i++) {
     if (signal?.aborted) throw new Error('aborted')
@@ -33,7 +33,7 @@ async function withRetry(fn, { tries = 4, minDelay = 120, maxDelay = 900, signal
       last = e
       const msg = String(e?.message || e)
       if (/aborted|revert|CALL_EXCEPTION/i.test(msg)) break
-      const backoff = Math.min(maxDelay, minDelay * (1 << i)) + Math.floor(Math.random() * 80)
+      const backoff = Math.min(maxDelay, minDelay * Math.pow(2, i)) + Math.floor(Math.random() * 80)
       await sleep(backoff)
     }
   }
@@ -73,91 +73,19 @@ async function fetchJson(uri) {
       const [, payload] = uri.split(',', 2)
       return JSON.parse(decodeURIComponent(payload))
     }
-    const urls = [
-      ipfsToHttp(uri),
-      uri.replace('ipfs://', 'https://cloudflare-ipfs.com/ipfs/'),
-      uri.replace('ipfs://', 'https://w3s.link/ipfs/'),
-    ].filter(Boolean)
-
-    for (const u of urls) {
-      try {
-        const res = await fetch(u, { cache: 'no-store' })
-        if (res.ok) return await res.json()
-      } catch {}
-    }
-    return null
+    const res = await fetch(ipfsToHttp(uri), { cache: 'no-store' })
+    if (!res.ok) return null
+    return await res.json()
   } catch { return null }
 }
 
-/** Try multiple layouts to extract template parts */
-function extractParts(meta, tpl) {
-  // 1) On-chain tuple wins if present
-  if (tpl && Array.isArray(tpl.parts) && tpl.parts.length) {
-    return tpl.parts.map((s) => String(s ?? ''))
-  }
-
-  // 2) Top-level parts
-  if (Array.isArray(meta?.parts) && meta.parts.length) {
-    return meta.parts.map((s) => String(s ?? ''))
-  }
-
-  // 3) properties.parts (common on some mints)
-  if (Array.isArray(meta?.properties?.parts) && meta.properties.parts.length) {
-    return meta.properties.parts.map((s) => String(s ?? ''))
-  }
-
-  // 4) attributes that look like parts: part_0 / Part 0 / etc
-  if (Array.isArray(meta?.attributes)) {
-    const numbered = []
-    const loose = []
-    for (const a of meta.attributes) {
-      const key = String(a?.trait_type || a?.trait || '').toLowerCase()
-      const val = a?.value ?? ''
-      if (!val && typeof a === 'string') {
-        loose.push(String(a))
-        continue
-      }
-      const m = key.match(/part[_\s-]?(\d+)/i)
-      if (m) {
-        numbered.push({ i: Number(m[1]), v: String(val ?? '') })
-      } else if (/^part$/.test(key)) {
-        loose.push(String(val ?? ''))
-      }
-    }
-    if (numbered.length) {
-      return numbered.sort((a,b)=>a.i-b.i).map(x=>x.v)
-    }
-    if (loose.length) return loose
-  }
-
-  // 5) Fallback: split description around blanks “____”
-  const desc = String(meta?.description || tpl?.description || '')
-  if (desc.includes('____')) {
-    // pieces between blanks; make sure last piece is kept
-    const segs = desc.split('____').map((s) => s)
-    // e.g. A ____ B ____ C  -> parts = ["A ", " B ", " C"]
-    // we want exactly N blanks => N+1 parts
-    return segs
-  }
-
-  return []
-}
-
-/** Guess a user-filled word if present in metadata */
-function extractWord(meta) {
-  if (!Array.isArray(meta?.attributes)) return ''
-  const hit = meta.attributes.find(a =>
-    String(a?.trait_type || '').toLowerCase().includes('word')
-  )
-  return String(hit?.value || '')
-}
-
-/** Scan Transfer logs to find tokenIds when ERC721Enumerable is missing/sparse */
+/** Scan Transfer logs to find tokenIds when ERC721Enumerable is missing */
 async function findTokenIdsByLogs({ provider, nftAddress, owner, maxBack = 1_200_000, chunk = 40_000 }) {
   try {
     const iface = new ethers.Interface(NFT_READ_ABI)
-    const topicTransfer = iface.getEventTopic('Transfer') // ethers v6
-    const ownerTopic = ethers.zeroPadValue(owner, 32).toLowerCase()
+    // ✅ ethers v6 way
+    const topicTransfer = iface.getEventTopic('Transfer')
+    const ownerTopic = ethers.zeroPadValue(owner, 32)
     const latest = await provider.getBlockNumber()
     const start = Math.max(0, latest - maxBack)
     const seen = new Set()
@@ -174,12 +102,12 @@ async function findTokenIdsByLogs({ provider, nftAddress, owner, maxBack = 1_200
         try {
           const parsed = iface.parseLog(log)
           const tid = Number(parsed.args.tokenId)
-          seen.add(tid)
+          if (Number.isFinite(tid)) seen.add(tid)
         } catch {}
       }
     }
 
-    // Confirm ownership now
+    // Confirm current ownership
     const nft = new ethers.Contract(nftAddress, NFT_READ_ABI, provider)
     const confirmed = []
     for (const tid of Array.from(seen)) {
@@ -207,6 +135,10 @@ export default async function handler(req, res) {
       return
     }
 
+    // Allow client to override NFT address to avoid env drift
+    const nftOverride = String(req.query.nft || '').trim()
+    const NFT_ADDRESS = ethers.isAddress(nftOverride) ? nftOverride : NFT_ADDRESS_DEFAULT
+
     const controller = new AbortController()
     const { signal } = controller
     const timeout = setTimeout(() => controller.abort(), 12000)
@@ -215,7 +147,7 @@ export default async function handler(req, res) {
     const nft = new ethers.Contract(NFT_ADDRESS, NFT_READ_ABI, provider)
 
     // balance
-    const balanceRaw = await withRetry(() => nft.balanceOf(owner), { signal }).catch(() => 0n)
+    const balanceRaw = await withRetry(() => nft.balanceOf(owner), { signal }).catch(() => BigInt(0))
     const bal = Number(balanceRaw || 0)
     if (!bal) {
       clearTimeout(timeout)
@@ -236,8 +168,9 @@ export default async function handler(req, res) {
     }
 
     if (!enumerableOk && tokenIds.length < bal) {
-      const total = Number(await withRetry(() => nft.totalSupply(), { signal }).catch(() => 0n))
-      const cap = Math.min(total || 0, 400)
+      const total = Number(await withRetry(() => nft.totalSupply(), { signal }).catch(() => BigInt(0)))
+      // raise the cap a bit in case ids are > 400
+      const cap = Math.min(total || 0, 2000)
       for (let tid = 1; tokenIds.length < bal && tid <= cap; tid++) {
         // eslint-disable-next-line no-await-in-loop
         const who = await withRetry(() => nft.ownerOf(tid), { tries: 2, signal }).catch(() => null)
@@ -257,38 +190,36 @@ export default async function handler(req, res) {
     const items = await mapLimit(tokenIds, 6, async (id) => {
       try {
         const [uri, tpl] = await Promise.all([
-          withRetry(() => nft.tokenURI(BigInt(id)), { tries: 3, signal }).catch(() => ''),
-          withRetry(() => nft.templateOf(BigInt(id)), { tries: 3, signal }).catch(() => null),
+          withRetry(() => nft.tokenURI(id), { tries: 3, signal }).catch(() => ''),
+          withRetry(() => nft.templateOf?.(id), { tries: 3, signal }).catch(() => null),
         ])
 
         const meta = await fetchJson(uri)
-
-        // image (fallbacks)
         const rawImg = meta?.image || meta?.image_url || ''
         const image =
-          (rawImg && ipfsToHttp(rawImg)) ||
+          ipfsToHttp(rawImg) ||
           (rawImg && `https://cloudflare-ipfs.com/ipfs/${rawImg.replace('ipfs://','')}`) ||
-          (rawImg && `https://w3s.link/ipfs/${rawImg.replace('ipfs://','')}`) ||
-          ''
+          (rawImg && `https://w3s.link/ipfs/${rawImg.replace('ipfs://','')}`)
 
-        const parts = extractParts(meta, tpl)
-        const wordAttr = extractWord(meta)
+        const parts = Array.isArray(tpl?.parts) ? tpl.parts.map(String)
+          : Array.isArray(meta?.attributes) ? meta.attributes.map(a => String(a.value || a))
+          : []
 
-        const name = meta?.name || tpl?.title || `Template #${id}`
-        const description = meta?.description || tpl?.description || ''
-        const theme = tpl?.theme || meta?.theme || ''
+        const wordAttr = Array.isArray(meta?.attributes)
+          ? (meta.attributes.find(a => (a.trait_type || '').toLowerCase().includes('word'))?.value || '')
+          : ''
 
-        // story with optional {{word}} expansion
-        let story = description
+        // Prefer onchain template description; fall back to metadata description
+        let story = tpl?.description || meta?.description || ''
         if (story && wordAttr) story = story.replace(/\{\{word\}\}/gi, wordAttr)
 
         return {
           id,
           tokenURI: uri || '',
-          name,
-          description,
-          image,
-          theme,
+          name: meta?.name || tpl?.title || `Template #${id}`,
+          description: meta?.description || tpl?.description || '',
+          image: image || '',
+          theme: tpl?.theme || '',
           parts,
           word: wordAttr || '',
           story: story || '',
