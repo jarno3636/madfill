@@ -18,7 +18,7 @@ import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useTx } from '@/components/TxProvider'
 import fillAbi from '@/abi/FillInStoryV3_ABI.json'
-import { shareOrCast } from '@/lib/share'
+import { shareOrCast } from '@/lib/share'   // ✅ robust caster (native compose + fallback)
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -94,28 +94,45 @@ const ipfsToHttp = (u) => {
   return u
 }
 
-/* ------------- tiny UI helpers ------------- */
-function StatCard({ label, value, className = '' }) {
-  return (
-    <div className={`rounded-xl bg-slate-900/60 border border-slate-700 p-4 ${className}`}>
-      <div className="text-slate-400 text-xs">{label}</div>
-      <div className="text-xl font-semibold mt-1">{value}</div>
-    </div>
+/* ---------- Template reconstruction helpers (for NFTs) ---------- */
+function partsFromMeta(meta) {
+  if (!meta) return []
+  if (Array.isArray(meta.parts)) return meta.parts.map(String)
+  if (Array.isArray(meta?.properties?.parts)) return meta.properties.parts.map(String)
+
+  const attrParts = (meta.attributes || []).find(a =>
+    (a?.trait_type || a?.traitType || '').toLowerCase() === 'parts'
   )
+  if (attrParts?.value) {
+    try {
+      const parsed = JSON.parse(attrParts.value)
+      if (Array.isArray(parsed)) return parsed.map(String)
+    } catch {}
+  }
+
+  // last-resort heuristic from description/template body
+  const body = String(meta.template || meta.description || '')
+  if (/_+/.test(body)) {
+    const chunks = body.split(/_{4,}/g)
+    if (chunks.length > 1) {
+      const out = []
+      for (let i = 0; i < chunks.length; i++) {
+        out.push(chunks[i])
+        if (i < chunks.length - 1) out.push('')
+      }
+      return out
+    }
+  }
+  return []
 }
-function statusBadge(card) {
-  if (card.kind === 'pool2') {
-    if (card.claimed) return <span className="inline-block px-2 py-0.5 rounded bg-emerald-700/40 text-emerald-200 text-xs">Claimed</span>
-    if (card.challengerWon) return <span className="inline-block px-2 py-0.5 rounded bg-indigo-700/40 text-indigo-200 text-xs">Challenger won</span>
-    return <span className="inline-block px-2 py-0.5 rounded bg-slate-700/40 text-slate-200 text-xs">Voting</span>
+function buildTemplateLine(parts) {
+  if (!Array.isArray(parts) || parts.length === 0) return ''
+  let out = ''
+  for (let i = 0; i < parts.length; i++) {
+    out += String(parts[i] ?? '')
+    if (i < parts.length - 1) out += '____'
   }
-  if (card.claimed) return <span className="inline-block px-2 py-0.5 rounded bg-emerald-700/40 text-emerald-200 text-xs">Claimed</span>
-  if (card.ended) {
-    return card.youWon
-      ? <span className="inline-block px-2 py-0.5 rounded bg-yellow-600/40 text-yellow-200 text-xs">You won</span>
-      : <span className="inline-block px-2 py-0.5 rounded bg-slate-700/40 text-slate-200 text-xs">Ended</span>
-  }
-  return <span className="inline-block px-2 py-0.5 rounded bg-cyan-700/40 text-cyan-200 text-xs">Active</span>
+  return out
 }
 
 /* ------------- component ------------- */
@@ -126,6 +143,9 @@ function MyRoundsPage() {
     address, isConnected, isOnBase, connect, switchToBase,
     claimPool1,
     BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS,
+
+    // Optional read helpers we’ll use to enrich NFT data
+    readTemplateOf, readTokenURI,
   } = useTx()
 
   const [loading, setLoading] = useState(false)
@@ -379,38 +399,86 @@ function MyRoundsPage() {
     }
   }, [claimPool1])
 
-  /* ------------- NFTs via API (normalize fields) ------------- */
+  /* ------------- NFTs: API first, then enrich from chain/metadata ------------- */
   const loadMyNfts = useCallback(async () => {
     if (!address) { setNfts([]); return }
     setNftLoading(true)
     try {
+      // 1) Base list from your API (fast)
       const r = await fetch(`/api/nfts/${address}`)
       const data = await r.json()
-      const arr = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [])
+      const rawArr = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [])
 
-      const list = arr.map((raw) => {
-        const id = Number(raw.id)
-        const name = raw.name || raw.title || `Template #${id}`
-        const desc = raw.desc || raw.description || ''
-        const parts = Array.isArray(raw.parts) ? raw.parts.map(String) : []
-        const templateLine = parts.length
-          ? parts.reduce((acc, part, i) => acc + String(part || '') + (i < parts.length - 1 ? '____' : ''), '')
-          : desc
+      // 2) Enrich reliably
+      const enriched = await Promise.all(
+        rawArr.map(async (raw) => {
+          const id = Number(raw.id)
+          let name = raw.name || raw.title || `Template #${id}`
+          let desc = raw.desc || raw.description || ''
+          let theme = raw.theme || ''
+          let image = raw.image || raw.image_url || ''
+          let tokenURI = raw.tokenURI
+          let meta = raw.meta
+          let parts = Array.isArray(raw.parts) ? raw.parts.map(String) : []
 
-        return {
-          ...raw,
-          id, name, desc, parts, templateLine,
-        }
-      })
+          // tokenURI if missing
+          if (!tokenURI) {
+            try { tokenURI = await withRetry(() => readTokenURI(BigInt(id)), { tries: 3 }) } catch {}
+          }
 
-      setNfts(list)
-      persistNftCache(list)
+          // pull metadata if needed
+          if (!meta && tokenURI) {
+            try {
+              const u = tokenURI.startsWith('ipfs://')
+                ? `https://ipfs.io/ipfs/${tokenURI.slice('ipfs://'.length)}`
+                : tokenURI
+              const jr = await fetch(u)
+              meta = await jr.json()
+            } catch {}
+          }
+
+          if (meta) {
+            name  = name  || meta.name || meta.title || name
+            desc  = desc  || meta.description || ''
+            theme = theme || meta.theme || (meta.attributes || []).find(a => (a?.trait_type||a?.traitType) === 'theme')?.value || ''
+            image = image || meta.image || meta.image_url || ''
+            if (parts.length === 0) parts = partsFromMeta(meta)
+          }
+
+          // If still missing, ask on-chain
+          if (parts.length === 0) {
+            try {
+              const tpl = await withRetry(() => readTemplateOf(BigInt(id)), { tries: 3 })
+              if (tpl) {
+                theme = theme || String(tpl.theme || '')
+                parts = Array.isArray(tpl.parts) ? tpl.parts.map(String) : []
+                desc  = desc  || String(tpl.description || '')
+                name  = name  || String(tpl.title || '')
+              }
+            } catch {}
+          }
+
+          // Build final template line for display/casting
+          const templateLine = buildTemplateLine(parts)
+
+          // normalize image gateway
+          if (image && image.startsWith('ipfs://')) {
+            image = `https://ipfs.io/ipfs/${image.slice('ipfs://'.length)}`
+          }
+
+          return { ...raw, id, name, desc, theme, tokenURI, image, meta, parts, templateLine }
+        })
+      )
+
+      setNfts(enriched)
+      persistNftCache(enriched)
     } catch (e) {
       console.error(e)
     } finally {
       setNftLoading(false)
     }
-  }, [address, persistNftCache])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, persistNftCache, readTemplateOf, readTokenURI])
 
   useEffect(() => { if (address) loadMyNfts() }, [address, loadMyNfts])
 
@@ -571,21 +639,23 @@ function MyRoundsPage() {
               ) : (
                 <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
                   {nfts.map((t) => {
-                    const castTxt = t.name
-                      ? `🎨 “${t.name}” — a MadFill Template.\n${t.templateLine || ''}`
-                      : `🎨 My MadFill Template.\n${t.templateLine || ''}`
+                    const castTxt = [
+                      `🎨 “${t.name || `Template #${t.id}` }” — a MadFill Template`,
+                      t.theme ? `Theme: ${t.theme}` : '',
+                      t.templateLine || t.desc || ''
+                    ].filter(Boolean).join('\n')
 
                     return (
                       <div key={t.id} className="rounded-2xl bg-slate-900/60 border border-slate-700 overflow-hidden">
-                        {/* Image */}
-                        {t.image ? (
+                        {/* Only render image when present (no blank box) */}
+                        {t.image && (
                           <div className="aspect-video bg-slate-800 border-b border-slate-700">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img src={t.image} alt={t.name || `Token #${t.id}`} className="w-full h-full object-cover" loading="lazy" />
                           </div>
-                        ) : <div className="aspect-video bg-slate-800 border-b border-slate-700" />}
+                        )}
 
-                        {/* Reconstructed Template */}
+                        {/* Reconstructed template */}
                         <div className="p-4">
                           <div className="text-lg md:text-xl font-bold text-white truncate">
                             {t.name || `Template #${t.id}`}
@@ -595,9 +665,9 @@ function MyRoundsPage() {
                           )}
 
                           {t.templateLine && (
-                            <div className="mt-3 rounded-2xl bg-slate-800/80 border border-slate-700 p-5">
-                              <div className="text-[11px] sm:text-xs uppercase tracking-wider text-slate-400">Template</div>
-                              <div className="mt-1 text-lg sm:text-xl md:text-2xl leading-relaxed font-extrabold text-white break-words">
+                            <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4">
+                              <div className="text-xs uppercase tracking-wide text-slate-400">Template</div>
+                              <div className="mt-1 text-base md:text-lg leading-relaxed font-semibold text-white break-words">
                                 {t.templateLine}
                               </div>
                             </div>
@@ -616,14 +686,14 @@ function MyRoundsPage() {
                               BaseScan
                             </a>
                             <Button
-                              onClick={() => shareOrCast({ text: castTxt })}
+                              onClick={() => shareOrCast({ text: castTxt, embeds: t.image ? [t.image] : [] })}
                               className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs"
                             >
                               Cast
                             </Button>
                             <div className="text-[11px] text-slate-500">
                               {t.tokenURI
-                                ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a>
+                                ? <a className="underline" href={t.tokenURI.startsWith('ipfs://') ? `https://ipfs.io/ipfs/${t.tokenURI.slice('ipfs://'.length)}` : t.tokenURI} target="_blank" rel="noreferrer">tokenURI</a>
                                 : 'No tokenURI'}
                             </div>
                           </div>
@@ -744,7 +814,7 @@ function MyRoundsPage() {
                       )}
                     </div>
 
-                    {/* ShareBar for round cards */}
+                    {/* ShareBar for rounds */}
                     <ShareBar
                       url={roundUrl}
                       text={shareTxt}
