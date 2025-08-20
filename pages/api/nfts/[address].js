@@ -18,7 +18,7 @@ const NFT_READ_ABI = [
   'function tokenURI(uint256 tokenId) view returns (string)',
   'function ownerOf(uint256 tokenId) view returns (address)',
   'function totalSupply() view returns (uint256)',
-  // optional quick-read
+  // optional quick-read (if present on your contract)
   'function templateOf(uint256 tokenId) view returns (string title, string description, string theme, string[] parts, uint64 createdAt, address author)'
 ]
 
@@ -79,11 +79,12 @@ async function fetchJson(uri) {
   } catch { return null }
 }
 
-/** Scan Transfer logs to find tokenIds when ERC721Enumerable is missing */
+/** Scan Transfer logs to find tokenIds when ERC721Enumerable is missing/sparse */
 async function findTokenIdsByLogs({ provider, nftAddress, owner, maxBack = 1200000, chunk = 40000 }) {
   try {
     const iface = new ethers.Interface(NFT_READ_ABI)
-    const topicTransfer = iface.getEvent('Transfer').topicHash
+    // ✅ ethers v6: use getEventTopic
+    const topicTransfer = iface.getEventTopic('Transfer')
     const ownerTopic = ethers.zeroPadValue(owner, 32).toLowerCase()
     const latest = await provider.getBlockNumber()
     const start = Math.max(0, latest - maxBack)
@@ -136,6 +137,7 @@ export default async function handler(req, res) {
 
     const controller = new AbortController()
     const { signal } = controller
+    // cancel after 12s to avoid long Vercel lambdas
     const timeout = setTimeout(() => controller.abort(), 12000)
 
     const provider = new ethers.JsonRpcProvider(BASE_RPC, undefined, { staticNetwork: true })
@@ -189,31 +191,55 @@ export default async function handler(req, res) {
         ])
 
         const meta = await fetchJson(uri)
+
+        // image (fallbacks)
         const rawImg = meta?.image || meta?.image_url || ''
         const image =
           ipfsToHttp(rawImg) ||
           (rawImg && `https://cloudflare-ipfs.com/ipfs/${rawImg.replace('ipfs://','')}`) ||
-          (rawImg && `https://w3s.link/ipfs/${rawImg.replace('ipfs://','')}`)
+          (rawImg && `https://w3s.link/ipfs/${rawImg.replace('ipfs://','')}`) ||
+          ''
 
-        const parts = Array.isArray(tpl?.parts) ? tpl.parts.map(String)
-          : Array.isArray(meta?.attributes) ? meta.attributes.map(a => String(a.value || a))
-          : []
+        // parts (prefer on-chain templateOf)
+        let parts = []
+        if (Array.isArray(tpl?.parts)) {
+          parts = tpl.parts.map((s) => String(s ?? ''))
+        } else if (Array.isArray(meta?.attributes)) {
+          // try to reconstruct parts if metadata stores them
+          // accept {trait_type, value} or plain strings
+          parts = meta.attributes
+            .map((a) => (typeof a === 'string' ? a : (a?.value ?? '')))
+            .map((s) => String(s ?? ''))
+            .filter((s) => s !== '')
+        }
 
+        // try to find a "word" attribute (optional)
         const wordAttr = Array.isArray(meta?.attributes)
-          ? (meta.attributes.find(a => (a.trait_type || '').toLowerCase().includes('word'))?.value || '')
+          ? String(
+              (meta.attributes.find(
+                (a) => String(a?.trait_type || '').toLowerCase().includes('word')
+              )?.value ?? '')
+            )
           : ''
 
-        // build story
-        let story = tpl?.description || meta?.description || ''
-        if (story && wordAttr) story = story.replace(/\{\{word\}\}/gi, wordAttr)
+        // description / theme
+        const name = meta?.name || tpl?.title || `Template #${id}`
+        const description = meta?.description || tpl?.description || ''
+        const theme = tpl?.theme || ''
+
+        // Expand a simple story variant (optional placeholder support)
+        let story = description
+        if (story && wordAttr) {
+          story = story.replace(/\{\{word\}\}/gi, wordAttr)
+        }
 
         return {
           id,
           tokenURI: uri || '',
-          name: meta?.name || tpl?.title || `Template #${id}`,
-          description: meta?.description || tpl?.description || '',
-          image: image || '',
-          theme: tpl?.theme || '',
+          name,
+          description,
+          image,
+          theme,
           parts,
           word: wordAttr || '',
           story: story || '',
