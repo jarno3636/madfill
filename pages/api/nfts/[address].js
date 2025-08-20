@@ -18,8 +18,10 @@ const NFT_READ_ABI = [
   'function tokenURI(uint256 tokenId) view returns (string)',
   'function ownerOf(uint256 tokenId) view returns (address)',
   'function totalSupply() view returns (uint256)',
-  // contract-specific quick read
-  'function templateOf(uint256 tokenId) view returns (string title, string description, string theme, string[] parts, uint64 createdAt, address author)'
+  // quick-read onchain template struct
+  'function templateOf(uint256 tokenId) view returns (string title, string description, string theme, string[] parts, uint64 createdAt, address author)',
+  // optional helpers (don’t assume they exist)
+  'function BLANK() view returns (string)'
 ]
 
 /** ---------- Helpers ---------- */
@@ -66,23 +68,36 @@ const ipfsToHttp = (u) => {
   return u
 }
 
+/** Robust data: URI -> JSON */
+function parseDataUriJson(uri) {
+  // data:application/json;base64,<...>
+  const mB64 = uri.match(/^data:(?:application\/json|text\/plain)[^,]*;base64,(.*)$/i)
+  if (mB64) {
+    try {
+      const json = Buffer.from(mB64[1], 'base64').toString('utf8')
+      return JSON.parse(json)
+    } catch { return null }
+  }
+  // data:application/json;utf8,<%7B...%7D>  OR  data:application/json,<%7B...%7D>
+  const mUtf8 = uri.match(/^data:(?:application\/json|text\/plain)[^,]*,(.*)$/i)
+  if (mUtf8) {
+    try {
+      return JSON.parse(decodeURIComponent(mUtf8[1]))
+    } catch { return null }
+  }
+  return null
+}
+
 async function fetchJson(uri) {
   try {
     if (!uri) return null
     if (uri.startsWith('data:')) {
-      const [, payload] = uri.split(',', 2)
-      return JSON.parse(decodeURIComponent(payload))
+      return parseDataUriJson(uri)
     }
     const res = await fetch(ipfsToHttp(uri), { cache: 'no-store' })
     if (!res.ok) return null
     return await res.json()
   } catch { return null }
-}
-
-function buildTemplateLine(parts) {
-  if (!Array.isArray(parts) || parts.length === 0) return ''
-  // parts are the fixed chunks around blanks; join with "____"
-  return parts.reduce((acc, part, i) => acc + String(part || '') + (i < parts.length - 1 ? '____' : ''), '')
 }
 
 /** Scan Transfer logs to find tokenIds when ERC721Enumerable is missing */
@@ -112,6 +127,7 @@ async function findTokenIdsByLogs({ provider, nftAddress, owner, maxBack = 1_200
       }
     }
 
+    // Confirm current ownership
     const nft = new ethers.Contract(nftAddress, NFT_READ_ABI, provider)
     const confirmed = []
     for (const tid of Array.from(seen)) {
@@ -141,14 +157,14 @@ export default async function handler(req, res) {
 
     const controller = new AbortController()
     const { signal } = controller
-    const timeout = setTimeout(() => controller.abort(), 12000)
+    const timeout = setTimeout(() => controller.abort(), 15000)
 
     const provider = new ethers.JsonRpcProvider(BASE_RPC, undefined, { staticNetwork: true })
     const nft = new ethers.Contract(NFT_ADDRESS, NFT_READ_ABI, provider)
 
     // balance
     const balanceRaw = await withRetry(() => nft.balanceOf(owner), { signal }).catch(() => 0n)
-    const bal = Number(balanceRaw || 0)
+    const bal = Number(balanceRaw || 0n)
     if (!bal) {
       clearTimeout(timeout)
       res.setHeader('Cache-Control', 'no-store')
@@ -190,56 +206,74 @@ export default async function handler(req, res) {
       try {
         const [uri, tpl] = await Promise.all([
           withRetry(() => nft.tokenURI(id), { tries: 3, signal }).catch(() => ''),
-          withRetry(() => nft.templateOf?.(id), { tries: 3, signal }).catch(() => null),
+          withRetry(() => nft.templateOf(id), { tries: 3, signal }).catch(() => null),
         ])
 
         const meta = await fetchJson(uri)
 
+        // image handling (prefer ipfs, fallback to common IPFS gateways)
         const rawImg = meta?.image || meta?.image_url || ''
         const image =
           ipfsToHttp(rawImg) ||
           (rawImg && `https://cloudflare-ipfs.com/ipfs/${rawImg.replace('ipfs://','')}`) ||
-          (rawImg && `https://w3s.link/ipfs/${rawImg.replace('ipfs://','')}`) ||
+          (rawImg && `https://w3s.link/ipfs/${rawImg.replace('ipfs://','')}`)
+
+        // Prefer onchain parts from templateOf
+        let parts = Array.isArray(tpl?.parts) ? tpl.parts.map(String) : []
+
+        // If missing, try metadata "attributes" that look like parts
+        if (!parts.length && Array.isArray(meta?.attributes)) {
+          const partLike = meta.attributes
+            .filter(a => /part/i.test(String(a?.trait_type || '')))
+            .map(a => String(a?.value ?? ''))
+            .filter(Boolean)
+          if (partLike.length) parts = partLike
+        }
+
+        // As one more fallback, if metadata has a "parts" array directly
+        if (!parts.length && Array.isArray(meta?.parts)) {
+          parts = meta.parts.map(String)
+        }
+
+        const name =
+          meta?.name ||
+          tpl?.title ||
+          `Template #${id}`
+
+        const description =
+          meta?.description ||
+          tpl?.description ||
           ''
 
-        const name = meta?.name || tpl?.title || `Template #${id}`
-        const description = meta?.description || tpl?.description || ''
-        const theme = tpl?.theme || meta?.theme || ''
+        const theme =
+          tpl?.theme ||
+          (Array.isArray(meta?.attributes)
+            ? (meta.attributes.find(a => /theme/i.test(String(a?.trait_type || '')))?.value ?? '')
+            : '') ||
+          ''
 
-        // Prefer onchain parts; else try meta attributes -> string[]
-        const parts = Array.isArray(tpl?.parts)
-          ? tpl.parts.map(String)
-          : Array.isArray(meta?.attributes)
-            ? meta.attributes.map(a => String(a?.value ?? a))
-            : []
+        // try to find a word hint (optional)
+        const word =
+          (Array.isArray(meta?.attributes)
+            ? (meta.attributes.find(a => /word/i.test(String(a?.trait_type || '')))?.value ?? '')
+            : '') || ''
 
-        // Optional "word" from metadata attributes (if present)
-        const wordAttr = Array.isArray(meta?.attributes)
-          ? (meta.attributes.find(a => (String(a?.trait_type || '')).toLowerCase().includes('word'))?.value || '')
-          : ''
-
-        // "story" is a friendly long text where {{word}} could be substituted
-        let story = tpl?.description || meta?.description || ''
-        if (story && wordAttr) story = story.replace(/\{\{word\}\}/gi, String(wordAttr))
-
-        // Prebuild a template line so the client can just render it
-        const templateLine = buildTemplateLine(parts)
-
+        // If neither templateOf nor metadata yields text parts, return minimal record
+        // so the client can show "raw metadata" gracefully.
         return {
           id,
-          tokenId: id,
           tokenURI: uri || '',
           name,
           description,
           theme,
-          image,
+          image: image || '',
           parts,
-          word: String(wordAttr || ''),
-          story: String(story || ''),
-          templateLine,
+          word,
+          // optional convenience for client
+          story: description || '',
         }
       } catch {
-        return { id, tokenId: id }
+        return { id }
       }
     })
 
