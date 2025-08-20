@@ -1,3 +1,4 @@
+// pages/api/nfts/[address].js
 import { ethers } from 'ethers'
 
 /** ---------- Config ---------- */
@@ -17,7 +18,7 @@ const NFT_READ_ABI = [
   'function tokenURI(uint256 tokenId) view returns (string)',
   'function ownerOf(uint256 tokenId) view returns (address)',
   'function totalSupply() view returns (uint256)',
-  // optional quick-read (if present on your contract)
+  // optional quick-read
   'function templateOf(uint256 tokenId) view returns (string title, string description, string theme, string[] parts, uint64 createdAt, address author)'
 ]
 
@@ -78,7 +79,7 @@ async function fetchJson(uri) {
   } catch { return null }
 }
 
-/** Scan Transfer logs to find tokenIds when ERC721Enumerable is missing/sparse */
+/** Scan Transfer logs to find tokenIds when ERC721Enumerable is missing */
 async function findTokenIdsByLogs({ provider, nftAddress, owner, maxBack = 1200000, chunk = 40000 }) {
   try {
     const iface = new ethers.Interface(NFT_READ_ABI)
@@ -135,7 +136,6 @@ export default async function handler(req, res) {
 
     const controller = new AbortController()
     const { signal } = controller
-    // cancel after 12s to avoid long Vercel lambdas
     const timeout = setTimeout(() => controller.abort(), 12000)
 
     const provider = new ethers.JsonRpcProvider(BASE_RPC, undefined, { staticNetwork: true })
@@ -195,12 +195,17 @@ export default async function handler(req, res) {
           (rawImg && `https://cloudflare-ipfs.com/ipfs/${rawImg.replace('ipfs://','')}`) ||
           (rawImg && `https://w3s.link/ipfs/${rawImg.replace('ipfs://','')}`)
 
-        // try to include user-filled word if the contract exposes parts
-        const parts = Array.isArray(tpl?.parts) ? tpl.parts.map(String) : Array.isArray(meta?.attributes) ? meta.attributes : []
-        // guess a "word" attribute if present
+        const parts = Array.isArray(tpl?.parts) ? tpl.parts.map(String)
+          : Array.isArray(meta?.attributes) ? meta.attributes.map(a => String(a.value || a))
+          : []
+
         const wordAttr = Array.isArray(meta?.attributes)
           ? (meta.attributes.find(a => (a.trait_type || '').toLowerCase().includes('word'))?.value || '')
           : ''
+
+        // build story
+        let story = tpl?.description || meta?.description || ''
+        if (story && wordAttr) story = story.replace(/\{\{word\}\}/gi, wordAttr)
 
         return {
           id,
@@ -210,7 +215,8 @@ export default async function handler(req, res) {
           image: image || '',
           theme: tpl?.theme || '',
           parts,
-          word: wordAttr || '', // will be empty if not present on-chain/metadata
+          word: wordAttr || '',
+          story: story || '',
         }
       } catch {
         return { id }
