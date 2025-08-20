@@ -101,6 +101,12 @@ const ipfsToHttp = (u) => {
   return u
 }
 
+/* ------------- cast helpers ------------- */
+const capCast = (text, max = 300) => {
+  const s = String(text || '').trim()
+  return s.length > max ? s.slice(0, max - 1) + '…' : s
+}
+
 /* ------------- tiny UI helpers ------------- */
 function StatCard({ label, value, className = '' }) {
   return (
@@ -385,25 +391,28 @@ function MyRoundsPage() {
     if (!address) { setNfts([]); return }
     setNftLoading(true)
     try {
-      // IMPORTANT: pass the contract address to ensure server and client use the same one
-      const r = await fetch(`/api/nfts/${address}?nft=${encodeURIComponent(NFT_ADDRESS)}`)
+      const r = await fetch(`/api/nfts/${encodeURIComponent(address)}`)
       if (!r.ok) throw new Error(`NFT API ${r.status}`)
       let j = null
       try { j = await r.json() } catch { j = { items: [] } }
 
       const raw = Array.isArray(j?.items) ? j.items : []
+      if (raw.length === 0) {
+        setStatus((s) => s ? s + ' • ' + 'No NFTs returned from API.' : 'No NFTs returned from API.')
+      }
+
       const list = raw.map((t) => {
         const parts = Array.isArray(t?.parts) ? t.parts : []
         const word = String(t?.word || '')
-
-        // Prefer reconstructed parts; otherwise fall back to story or description
-        const templateLine = parts.length
+        // Prefer server-built templateLine when available
+        const templateLineServer = String(t?.templateLine || '')
+        const templateLine = templateLineServer || (parts.length
           ? parts.reduce((acc, part, i) => acc + String(part || '') + (i < parts.length - 1 ? '____' : ''), '')
           : String(t?.story || t?.description || '')
-
+        )
         const filledLine = parts.length
-          ? buildPreviewSingle(parts, word, 0) // show an example using the first blank
-          : (templateLine || '')
+          ? buildPreviewSingle(parts, word, 0)
+          : templateLine
 
         return {
           id: Number(t?.id ?? t?.tokenId ?? 0),
@@ -421,11 +430,11 @@ function MyRoundsPage() {
       persistNftCache(list)
     } catch (e) {
       console.error('NFT load failed:', e)
-      // keep cache if any
+      setStatus('NFTs failed to load — check RPC/contract address & try refresh.')
     } finally {
       setNftLoading(false)
     }
-  }, [address, persistNftCache, NFT_ADDRESS])
+  }, [address, persistNftCache])
 
   useEffect(() => { if (address) loadMyNfts() }, [address, loadMyNfts])
 
@@ -591,9 +600,11 @@ function MyRoundsPage() {
               ) : (
                 <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
                   {nfts.map((t) => {
-                    const templateCast = `🎨 “${t.name || `Template #${t.id}` }” — MadFill Template\n${t.templateLine || ''}`
+                    const templateCast = capCast(`🎨 “${t.name || `Template #${t.id}` }” — MadFill Template
+${t.templateLine || ''}`)
                     const filledCast = t.filledLine
-                      ? `🧠 Filled example from “${t.name || `Template #${t.id}` }”\n${t.filledLine}`
+                      ? capCast(`🧠 Filled example from “${t.name || `Template #${t.id}` }”
+${t.filledLine}`)
                       : ''
 
                     return (
@@ -767,7 +778,7 @@ function MyRoundsPage() {
                       <Button
                         variant="outline"
                         className="border-slate-600 text-slate-200"
-                        onClick={() => shareOrCast({ text: shareTxt, url: roundUrl })}
+                        onClick={() => shareOrCast({ text: capCast(shareTxt, 320), url: roundUrl })}
                       >
                         Share
                       </Button>
