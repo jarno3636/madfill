@@ -5,7 +5,7 @@ import { ethers } from 'ethers'
 const BASE_RPC =
   process.env.NEXT_PUBLIC_BASE_RPC || process.env.BASE_RPC || 'https://mainnet.base.org'
 
-const NFT_ADDRESS_DEFAULT =
+const NFT_ADDRESS =
   process.env.NEXT_PUBLIC_NFT_TEMPLATE_ADDRESS ||
   process.env.NFT_TEMPLATE_ADDRESS ||
   '0xCA699Fb766E3FaF36AC31196fb4bd7184769DD20'
@@ -18,8 +18,8 @@ const NFT_READ_ABI = [
   'function tokenURI(uint256 tokenId) view returns (string)',
   'function ownerOf(uint256 tokenId) view returns (address)',
   'function totalSupply() view returns (uint256)',
-  // optional quick-read
-  'function templateOf(uint256 tokenId) view returns (string title, string description, string theme, string[] parts, uint64 createdAt, address author)',
+  // contract-specific quick read
+  'function templateOf(uint256 tokenId) view returns (string title, string description, string theme, string[] parts, uint64 createdAt, address author)'
 ]
 
 /** ---------- Helpers ---------- */
@@ -79,13 +79,18 @@ async function fetchJson(uri) {
   } catch { return null }
 }
 
+function buildTemplateLine(parts) {
+  if (!Array.isArray(parts) || parts.length === 0) return ''
+  // parts are the fixed chunks around blanks; join with "____"
+  return parts.reduce((acc, part, i) => acc + String(part || '') + (i < parts.length - 1 ? '____' : ''), '')
+}
+
 /** Scan Transfer logs to find tokenIds when ERC721Enumerable is missing */
 async function findTokenIdsByLogs({ provider, nftAddress, owner, maxBack = 1_200_000, chunk = 40_000 }) {
   try {
     const iface = new ethers.Interface(NFT_READ_ABI)
-    // ✅ ethers v6 way
-    const topicTransfer = iface.getEventTopic('Transfer')
-    const ownerTopic = ethers.zeroPadValue(owner, 32)
+    const topicTransfer = iface.getEvent('Transfer').topicHash
+    const ownerTopic = ethers.zeroPadValue(owner, 32).toLowerCase()
     const latest = await provider.getBlockNumber()
     const start = Math.max(0, latest - maxBack)
     const seen = new Set()
@@ -102,12 +107,11 @@ async function findTokenIdsByLogs({ provider, nftAddress, owner, maxBack = 1_200
         try {
           const parsed = iface.parseLog(log)
           const tid = Number(parsed.args.tokenId)
-          if (Number.isFinite(tid)) seen.add(tid)
+          seen.add(tid)
         } catch {}
       }
     }
 
-    // Confirm current ownership
     const nft = new ethers.Contract(nftAddress, NFT_READ_ABI, provider)
     const confirmed = []
     for (const tid of Array.from(seen)) {
@@ -135,10 +139,6 @@ export default async function handler(req, res) {
       return
     }
 
-    // Allow client to override NFT address to avoid env drift
-    const nftOverride = String(req.query.nft || '').trim()
-    const NFT_ADDRESS = ethers.isAddress(nftOverride) ? nftOverride : NFT_ADDRESS_DEFAULT
-
     const controller = new AbortController()
     const { signal } = controller
     const timeout = setTimeout(() => controller.abort(), 12000)
@@ -147,7 +147,7 @@ export default async function handler(req, res) {
     const nft = new ethers.Contract(NFT_ADDRESS, NFT_READ_ABI, provider)
 
     // balance
-    const balanceRaw = await withRetry(() => nft.balanceOf(owner), { signal }).catch(() => BigInt(0))
+    const balanceRaw = await withRetry(() => nft.balanceOf(owner), { signal }).catch(() => 0n)
     const bal = Number(balanceRaw || 0)
     if (!bal) {
       clearTimeout(timeout)
@@ -168,9 +168,8 @@ export default async function handler(req, res) {
     }
 
     if (!enumerableOk && tokenIds.length < bal) {
-      const total = Number(await withRetry(() => nft.totalSupply(), { signal }).catch(() => BigInt(0)))
-      // raise the cap a bit in case ids are > 400
-      const cap = Math.min(total || 0, 2000)
+      const total = Number(await withRetry(() => nft.totalSupply(), { signal }).catch(() => 0n))
+      const cap = Math.min(total || 0, 400)
       for (let tid = 1; tokenIds.length < bal && tid <= cap; tid++) {
         // eslint-disable-next-line no-await-in-loop
         const who = await withRetry(() => nft.ownerOf(tid), { tries: 2, signal }).catch(() => null)
@@ -195,37 +194,52 @@ export default async function handler(req, res) {
         ])
 
         const meta = await fetchJson(uri)
+
         const rawImg = meta?.image || meta?.image_url || ''
         const image =
           ipfsToHttp(rawImg) ||
           (rawImg && `https://cloudflare-ipfs.com/ipfs/${rawImg.replace('ipfs://','')}`) ||
-          (rawImg && `https://w3s.link/ipfs/${rawImg.replace('ipfs://','')}`)
+          (rawImg && `https://w3s.link/ipfs/${rawImg.replace('ipfs://','')}`) ||
+          ''
 
-        const parts = Array.isArray(tpl?.parts) ? tpl.parts.map(String)
-          : Array.isArray(meta?.attributes) ? meta.attributes.map(a => String(a.value || a))
-          : []
+        const name = meta?.name || tpl?.title || `Template #${id}`
+        const description = meta?.description || tpl?.description || ''
+        const theme = tpl?.theme || meta?.theme || ''
 
+        // Prefer onchain parts; else try meta attributes -> string[]
+        const parts = Array.isArray(tpl?.parts)
+          ? tpl.parts.map(String)
+          : Array.isArray(meta?.attributes)
+            ? meta.attributes.map(a => String(a?.value ?? a))
+            : []
+
+        // Optional "word" from metadata attributes (if present)
         const wordAttr = Array.isArray(meta?.attributes)
-          ? (meta.attributes.find(a => (a.trait_type || '').toLowerCase().includes('word'))?.value || '')
+          ? (meta.attributes.find(a => (String(a?.trait_type || '')).toLowerCase().includes('word'))?.value || '')
           : ''
 
-        // Prefer onchain template description; fall back to metadata description
+        // "story" is a friendly long text where {{word}} could be substituted
         let story = tpl?.description || meta?.description || ''
-        if (story && wordAttr) story = story.replace(/\{\{word\}\}/gi, wordAttr)
+        if (story && wordAttr) story = story.replace(/\{\{word\}\}/gi, String(wordAttr))
+
+        // Prebuild a template line so the client can just render it
+        const templateLine = buildTemplateLine(parts)
 
         return {
           id,
+          tokenId: id,
           tokenURI: uri || '',
-          name: meta?.name || tpl?.title || `Template #${id}`,
-          description: meta?.description || tpl?.description || '',
-          image: image || '',
-          theme: tpl?.theme || '',
+          name,
+          description,
+          theme,
+          image,
           parts,
-          word: wordAttr || '',
-          story: story || '',
+          word: String(wordAttr || ''),
+          story: String(story || ''),
+          templateLine,
         }
       } catch {
-        return { id }
+        return { id, tokenId: id }
       }
     })
 
