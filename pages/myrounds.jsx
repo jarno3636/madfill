@@ -18,7 +18,7 @@ import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useTx } from '@/components/TxProvider'
 import fillAbi from '@/abi/FillInStoryV3_ABI.json'
-import { shareOrCast } from '@/lib/share' // ✅ new robust caster
+import { shareOrCast } from '@/lib/share'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -87,16 +87,6 @@ function mapLimit(items, limit, worker) {
 }
 const CONCURRENCY = 8
 
-/* ------------- NFT read ABI (for serverless fallback in /api if needed) ------------- */
-const NFT_READ_ABI = [
-  'event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)',
-  'function balanceOf(address) view returns (uint256)',
-  'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
-  'function tokenURI(uint256 tokenId) view returns (string)',
-  'function ownerOf(uint256 tokenId) view returns (address)',
-  'function totalSupply() view returns (uint256)'
-]
-
 /* ------------- URL helpers ------------- */
 const ipfsToHttp = (u) => {
   if (!u) return u
@@ -136,9 +126,6 @@ function MyRoundsPage() {
     address, isConnected, isOnBase, connect, switchToBase,
     claimPool1,
     BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS,
-
-    // Optional read helpers (used elsewhere)
-    readTemplateOf, readTokenURI,
   } = useTx()
 
   const [loading, setLoading] = useState(false)
@@ -392,20 +379,30 @@ function MyRoundsPage() {
     }
   }, [claimPool1])
 
-  /* ------------- NFTs via server API (reliable) ------------- */
+  /* ------------- NFTs via API (normalize fields) ------------- */
   const loadMyNfts = useCallback(async () => {
     if (!address) { setNfts([]); return }
     setNftLoading(true)
     try {
       const r = await fetch(`/api/nfts/${address}`)
-      const j = await r.json()
-      const list = (j?.items || []).map((t) => ({
-        ...t,
-        // prebuild reconstructed line if parts exist
-        templateLine: Array.isArray(t.parts) && t.parts.length
-          ? t.parts.reduce((acc, part, i, arr) => acc + String(part || '') + (i < arr.length - 1 ? '____' : ''), '')
-          : (t.desc || '')
-      }))
+      const data = await r.json()
+      const arr = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [])
+
+      const list = arr.map((raw) => {
+        const id = Number(raw.id)
+        const name = raw.name || raw.title || `Template #${id}`
+        const desc = raw.desc || raw.description || ''
+        const parts = Array.isArray(raw.parts) ? raw.parts.map(String) : []
+        const templateLine = parts.length
+          ? parts.reduce((acc, part, i) => acc + String(part || '') + (i < parts.length - 1 ? '____' : ''), '')
+          : desc
+
+        return {
+          ...raw,
+          id, name, desc, parts, templateLine,
+        }
+      })
+
       setNfts(list)
       persistNftCache(list)
     } catch (e) {
@@ -580,11 +577,11 @@ function MyRoundsPage() {
 
                     return (
                       <div key={t.id} className="rounded-2xl bg-slate-900/60 border border-slate-700 overflow-hidden">
-                        {/* Image (if any) */}
+                        {/* Image */}
                         {t.image ? (
                           <div className="aspect-video bg-slate-800 border-b border-slate-700">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={t.image} alt={t.name || `Token #${t.id}`} className="w-full h-full object-cover" />
+                            <img src={t.image} alt={t.name || `Token #${t.id}`} className="w-full h-full object-cover" loading="lazy" />
                           </div>
                         ) : <div className="aspect-video bg-slate-800 border-b border-slate-700" />}
 
@@ -598,9 +595,9 @@ function MyRoundsPage() {
                           )}
 
                           {t.templateLine && (
-                            <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4">
-                              <div className="text-sm uppercase tracking-wide text-slate-400">Template</div>
-                              <div className="mt-1 text-base md:text-lg leading-relaxed font-semibold text-white break-words">
+                            <div className="mt-3 rounded-2xl bg-slate-800/80 border border-slate-700 p-5">
+                              <div className="text-[11px] sm:text-xs uppercase tracking-wider text-slate-400">Template</div>
+                              <div className="mt-1 text-lg sm:text-xl md:text-2xl leading-relaxed font-extrabold text-white break-words">
                                 {t.templateLine}
                               </div>
                             </div>
@@ -610,8 +607,7 @@ function MyRoundsPage() {
                             <div className="mt-3 text-sm text-slate-300 leading-relaxed">{t.desc}</div>
                           )}
 
-                          <div className="flex flex-wrap gap-2 mt-3">
-                            {/* Removed "View Template" (404) */}
+                          <div className="flex flex-wrap gap-2 mt-3 items-center">
                             <a
                               href={`https://basescan.org/token/${NFT_ADDRESS}?a=${t.id}`}
                               target="_blank" rel="noopener noreferrer"
@@ -625,8 +621,10 @@ function MyRoundsPage() {
                             >
                               Cast
                             </Button>
-                            <div className="text-[11px] text-slate-500 self-center">
-                              {t.tokenURI ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a> : 'No tokenURI'}
+                            <div className="text-[11px] text-slate-500">
+                              {t.tokenURI
+                                ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a>
+                                : 'No tokenURI'}
                             </div>
                           </div>
                         </div>
@@ -746,7 +744,7 @@ function MyRoundsPage() {
                       )}
                     </div>
 
-                    {/* ✅ ShareBar restored for rounds */}
+                    {/* ShareBar for round cards */}
                     <ShareBar
                       url={roundUrl}
                       text={shareTxt}
