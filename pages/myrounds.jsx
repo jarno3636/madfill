@@ -12,7 +12,7 @@ import Layout from '@/components/Layout'
 import SEO from '@/components/SEO'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-// import ShareBar from '@/components/ShareBar' // ⚠️ remove to avoid crash
+// import ShareBar from '@/components/ShareBar' // ⚠️ keep disabled to avoid crash
 import Countdown from '@/components/Countdown'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
@@ -27,6 +27,7 @@ const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
 const toEth = (wei) => { try { return Number(ethers.formatEther(wei ?? 0n)) } catch { return 0 } }
 const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(Number(n || 0))
 const needsSpaceBefore = (str) => !!str && !/\s|[.,!?;:)"'\]]/.test(str[0])
+
 const buildPreviewSingle = (parts, word, blankIndex) => {
   const n = Array.isArray(parts) ? parts.length : 0
   if (!n) return ''
@@ -43,6 +44,7 @@ const buildPreviewSingle = (parts, word, blankIndex) => {
   }
   return out.join('')
 }
+
 const formatTimeLeft = (deadlineSec) => {
   const now = Math.floor(Date.now() / 1000)
   const diff = Math.max(0, Number(deadlineSec || 0) - now)
@@ -52,6 +54,7 @@ const formatTimeLeft = (deadlineSec) => {
   if (h > 0) return `${h}h ${m}m`
   return `${m}m`
 }
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /* ------------- retry + concurrency ------------- */
@@ -134,7 +137,7 @@ function MyRoundsPage() {
 
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState('')
-  const [fatal, setFatal] = useState('') // show friendly error instead of Next error overlay
+  const [fatal, setFatal] = useState('')
   const [priceUsd, setPriceUsd] = useState(0)
   const [showConfetti, setShowConfetti] = useState(false)
 
@@ -203,20 +206,10 @@ function MyRoundsPage() {
     let dead = false
     ;(async () => {
       try {
-        const tryOnce = async (url) => {
-          const r = await fetch(url); return await r.json()
-        }
+        const tryOnce = async (url) => { const r = await fetch(url); return await r.json() }
         let usd = 0
-        try {
-          const j = await tryOnce('https://api.coinbase.com/v2/prices/ETH-USD/spot')
-          usd = Number(j?.data?.amount || 0)
-        } catch {}
-        if (!usd) {
-          try {
-            const j = await tryOnce('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
-            usd = Number(j?.ethereum?.usd || 0)
-          } catch {}
-        }
+        try { const j = await tryOnce('https://api.coinbase.com/v2/prices/ETH-USD/spot'); usd = Number(j?.data?.amount || 0) } catch {}
+        if (!usd) { try { const j = await tryOnce('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd'); usd = Number(j?.ethereum?.usd || 0) } catch {} }
         if (!dead) setPriceUsd(usd || 0)
       } catch { if (!dead) setPriceUsd(0) }
     })()
@@ -400,9 +393,13 @@ function MyRoundsPage() {
       const raw = Array.isArray(j?.items) ? j.items : []
       const list = raw.map((t) => {
         const parts = Array.isArray(t?.parts) ? t.parts : []
+        const word = String(t?.word || '')
         const templateLine = parts.length
           ? parts.reduce((acc, part, i) => acc + String(part || '') + (i < parts.length - 1 ? '____' : ''), '')
-          : String(t?.desc || '')
+          : String(t?.desc || t?.description || '')
+        const filledLine = parts.length
+          ? buildPreviewSingle(parts, word, 0) // default: fill first blank
+          : (templateLine || '')
         return {
           id: Number(t?.id ?? t?.tokenId ?? 0),
           name: String(t?.name ?? `Template #${t?.id ?? t?.tokenId ?? ''}`),
@@ -411,6 +408,8 @@ function MyRoundsPage() {
           image: t?.image ? ipfsToHttp(String(t.image)) : '',
           tokenURI: t?.tokenURI ? String(t.tokenURI) : '',
           templateLine,
+          filledLine,
+          word,
         }
       })
       setNfts(list)
@@ -587,9 +586,10 @@ function MyRoundsPage() {
               ) : (
                 <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
                   {nfts.map((t) => {
-                    const castTxt = t.name
-                      ? `🎨 “${t.name}” — a MadFill Template.\n${t.templateLine || ''}`
-                      : `🎨 My MadFill Template.\n${t.templateLine || ''}`
+                    const templateCast = `🎨 “${t.name || `Template #${t.id}` }” — MadFill Template\n${t.templateLine || ''}`
+                    const filledCast = t.filledLine
+                      ? `🧠 Filled example from “${t.name || `Template #${t.id}` }”\n${t.filledLine}`
+                      : ''
 
                     return (
                       <div key={t.id} className="rounded-2xl bg-slate-900/60 border border-slate-700 overflow-hidden">
@@ -619,6 +619,15 @@ function MyRoundsPage() {
                             </div>
                           )}
 
+                          {t.filledLine && t.filledLine !== t.templateLine && (
+                            <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4">
+                              <div className="text-sm uppercase tracking-wide text-slate-400">Filled Example</div>
+                              <div className="mt-1 text-base md:text-lg leading-relaxed font-semibold text-white break-words">
+                                {t.filledLine}
+                              </div>
+                            </div>
+                          )}
+
                           {t.desc && (
                             <div className="mt-3 text-sm text-slate-300 leading-relaxed">{t.desc}</div>
                           )}
@@ -632,11 +641,19 @@ function MyRoundsPage() {
                               BaseScan
                             </a>
                             <Button
-                              onClick={() => shareOrCast({ text: castTxt })}
+                              onClick={() => shareOrCast({ text: templateCast })}
                               className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs"
                             >
-                              Cast
+                              Cast Template
                             </Button>
+                            {filledCast ? (
+                              <Button
+                                onClick={() => shareOrCast({ text: filledCast })}
+                                className="px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs"
+                              >
+                                Cast Filled
+                              </Button>
+                            ) : null}
                             <div className="text-[11px] text-slate-500">
                               {t.tokenURI ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a> : 'No tokenURI'}
                             </div>
