@@ -257,8 +257,8 @@ export default async function handler(req, res) {
     const items = await mapLimit(tokenIds, 6, async (id) => {
       try {
         const [uri, tpl] = await Promise.all([
-          withRetry(() => nft.tokenURI(id), { tries: 3, signal }).catch(() => ''),
-          withRetry(() => nft.templateOf?.(id), { tries: 3, signal }).catch(() => null),
+          withRetry(() => nft.tokenURI(BigInt(id)), { tries: 3, signal }).catch(() => ''),
+          withRetry(() => nft.templateOf(BigInt(id)), { tries: 3, signal }).catch(() => null),
         ])
 
         const meta = await fetchJson(uri)
