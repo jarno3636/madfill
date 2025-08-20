@@ -1,7 +1,7 @@
 // pages/myrounds.jsx
 'use client'
 
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback, Fragment } from 'react'
 import dynamic from 'next/dynamic'
 import Head from 'next/head'
 import Link from 'next/link'
@@ -27,6 +27,26 @@ const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
 const toEth = (wei) => { try { return Number(ethers.formatEther(wei ?? 0n)) } catch { return 0 } }
 const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(Number(n || 0))
 const needsSpaceBefore = (str) => !!str && !/\s|[.,!?;:)"'\]]/.test(str[0])
+
+// Highlight "____" nicely in dark mode
+function HighlightBlanks({ text }) {
+  if (!text) return null
+  const parts = String(text).split('____')
+  return (
+    <span>
+      {parts.map((chunk, i) => (
+        <Fragment key={i}>
+          <span className="text-slate-200">{chunk}</span>
+          {i < parts.length - 1 && (
+            <span className="px-1 rounded-md bg-slate-700/70 text-amber-300 font-semibold align-baseline">
+              ____{/* blank */}
+            </span>
+          )}
+        </Fragment>
+      ))}
+    </span>
+  )
+}
 
 const buildPreviewSingle = (parts, word, blankIndex) => {
   const n = Array.isArray(parts) ? parts.length : 0
@@ -106,7 +126,7 @@ function StatCard({ label, value, className = '' }) {
   return (
     <div className={`rounded-xl bg-slate-900/60 border border-slate-700 p-4 ${className}`}>
       <div className="text-slate-400 text-xs">{label}</div>
-      <div className="text-xl font-semibold mt-1">{value}</div>
+      <div className="text-xl font-semibold mt-1 text-slate-100">{value}</div>
     </div>
   )
 }
@@ -154,7 +174,7 @@ function MyRoundsPage() {
   // filters
   const [filter, setFilter] = useState('all')
   const [sortBy, setSortBy] = useState('newest')
-  const [activeTab, setActiveTab] = useState('stats')
+  const [activeTab, setActiveTab] = useState('templates') // default to templates (nicer ux)
 
   // Abort controller for loads
   const abortRef = useRef(null)
@@ -401,7 +421,7 @@ function MyRoundsPage() {
           : String(t?.story || t?.description || '')
 
         const filledLine = parts.length
-          ? buildPreviewSingle(parts, word, 0)
+          ? buildPreviewSingle(parts, word, 0) // show an example using the first blank
           : (templateLine || '')
 
         return {
@@ -542,7 +562,7 @@ function MyRoundsPage() {
           {/* Tabs */}
           <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-slate-800/40 p-2">
             {[
-              { key: 'nfts', label: '🎨 Templates' },
+              { key: 'templates', label: '🎨 Templates' },
               { key: 'stats', label: '📊 Stats' },
             ].map((t) => (
               <button
@@ -572,7 +592,7 @@ function MyRoundsPage() {
             </div>
           )}
 
-          {activeTab === 'nfts' && (
+          {activeTab === 'templates' && (
             <div className="mt-4">
               {!isConnected ? (
                 <div className="rounded-xl bg-slate-900/60 border border-slate-700 p-4 text-sm text-slate-300">
@@ -589,10 +609,13 @@ function MyRoundsPage() {
               ) : (
                 <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
                   {nfts.map((t) => {
-                    const templateCast = `🎨 ${t.name || `Template #${t.id}`}\n${t.templateLine || ''}`
+                    const templateCast = `🎨 “${t.name || `Template #${t.id}` }” — MadFill Template\n${t.templateLine || ''}`
                     const filledCast = t.filledLine
-                      ? `🧠 From “${t.name || `Template #${t.id}` }”\n${t.filledLine}`
+                      ? `🧠 Filled example from “${t.name || `Template #${t.id}` }”\n${t.filledLine}`
                       : ''
+
+                    // Shareable route for unfurls:
+                    const templateUrl = absoluteUrl(`/template/${t.id}`)
 
                     return (
                       <div key={t.id} className="rounded-2xl bg-slate-900/60 border border-slate-700 overflow-hidden">
@@ -604,7 +627,7 @@ function MyRoundsPage() {
                           </div>
                         ) : <div className="aspect-video bg-slate-800 border-b border-slate-700" />}
 
-                        {/* Reconstructed Template */}
+                        {/* Template Card Body */}
                         <div className="p-4">
                           <div className="text-lg md:text-xl font-bold text-white truncate">
                             {t.name || `Template #${t.id}`}
@@ -615,50 +638,57 @@ function MyRoundsPage() {
 
                           {t.templateLine && (
                             <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4">
-                              <div className="text-xs font-semibold tracking-wide text-slate-300 uppercase">Template</div>
-                              <div className="mt-1 text-[15px] md:text-base leading-relaxed font-medium text-slate-100 break-words whitespace-pre-wrap">
-                                {t.templateLine}
+                              <div className="text-[11px] tracking-wide text-slate-400 uppercase">Template</div>
+                              <div className="mt-1 text-base md:text-lg leading-relaxed font-medium break-words">
+                                <HighlightBlanks text={t.templateLine} />
                               </div>
                             </div>
                           )}
 
                           {t.filledLine && t.filledLine !== t.templateLine && (
                             <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4">
-                              <div className="text-xs font-semibold tracking-wide text-slate-300 uppercase">Filled example</div>
-                              <div className="mt-1 text-[15px] md:text-base leading-relaxed font-medium text-slate-100 break-words whitespace-pre-wrap">
+                              <div className="text-[11px] tracking-wide text-slate-400 uppercase">Filled Example</div>
+                              <div className="mt-1 text-base md:text-lg leading-relaxed font-semibold text-slate-100 break-words">
                                 {t.filledLine}
                               </div>
                             </div>
                           )}
 
                           {t.desc && (
-                            <div className="mt-3 text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">{t.desc}</div>
+                            <div className="mt-3 text-sm text-slate-300 leading-relaxed">{t.desc}</div>
                           )}
 
                           <div className="flex flex-wrap gap-2 mt-3 items-center">
                             <a
                               href={`https://basescan.org/token/${NFT_ADDRESS}?a=${t.id}`}
                               target="_blank" rel="noopener noreferrer"
-                              className="px-3 py-2 rounded-md bg-slate-800 border border-slate-600 hover:bg-slate-700 text-xs"
+                              className="px-3 py-2 rounded-md bg-slate-800 border border-slate-600 hover:bg-slate-700 text-xs text-slate-200"
                             >
                               BaseScan
                             </a>
+
+                            <Link href={`/template/${t.id}`} className="px-3 py-2 rounded-md bg-slate-800 border border-slate-600 hover:bg-slate-700 text-xs text-slate-200">
+                              Open
+                            </Link>
+
                             <Button
-                              onClick={() => shareOrCast({ text: templateCast /* , url: absoluteUrl(`/templates/${t.id}`) */ })}
+                              onClick={() => shareOrCast({ text: templateCast, url: templateUrl })}
                               className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs"
                             >
                               Cast Template
                             </Button>
+
                             {filledCast ? (
                               <Button
-                                onClick={() => shareOrCast({ text: filledCast })}
+                                onClick={() => shareOrCast({ text: filledCast, url: templateUrl })}
                                 className="px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs"
                               >
                                 Cast Filled
                               </Button>
                             ) : null}
+
                             <div className="text-[11px] text-slate-400">
-                              {t.tokenURI ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a> : 'No tokenURI'}
+                              {t.tokenURI ? <a className="underline hover:text-slate-200" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a> : 'No tokenURI'}
                             </div>
                           </div>
                         </div>
@@ -699,7 +729,7 @@ function MyRoundsPage() {
           <label className="text-sm text-slate-300">
             Sort by{' '}
             <select
-              className="ml-1 bg-slate-900 border border-slate-700 rounded px-2 py-1"
+              className="ml-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200"
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
               aria-label="Sort cards"
@@ -740,7 +770,7 @@ function MyRoundsPage() {
                     <div className="flex items-start gap-3 min-w-0">
                       <div className="text-2xl shrink-0">{isPool1 ? '🧩' : '⚔️'}</div>
                       <div className="min-w-0">
-                        <h2 className="text-lg font-bold truncate">
+                        <h2 className="text-lg font-bold truncate text-slate-100">
                           {isPool1 ? <>#{card.id} — {card.name}</> : <>Vote #{card.id} — Round #{card.originalPool1Id}</>}
                         </h2>
                         <div className="mt-1">{statusBadge(card)}</div>
@@ -756,8 +786,11 @@ function MyRoundsPage() {
                   </CardHeader>
 
                   <CardContent className="space-y-3 text-sm min-w-0">
-                    <div className="p-3 rounded bg-slate-800/70 border border-slate-700 leading-relaxed break-words whitespace-pre-wrap text-slate-100">
-                      {isPool1 ? card.preview : card.chPreview}
+                    <div className="p-3 rounded bg-slate-800/60 border border-slate-700 leading-relaxed break-words">
+                      {/* Ensure readable text + highlighted blanks */}
+                      {isPool1
+                        ? <HighlightBlanks text={card.preview} />
+                        : <HighlightBlanks text={card.chPreview} />}
                     </div>
 
                     {/* Minimal share row (replaces ShareBar to avoid crashes) */}
@@ -777,7 +810,7 @@ function MyRoundsPage() {
                           <div className="min-w-0"><span className="text-slate-400">Entry Fee:</span> {fmt(card.feeEth, 4)} ETH (${fmt(card.feeUsd)})</div>
                           <div className="min-w-0"><span className="text-slate-400">Pool:</span> {fmt(card.poolEth, 4)} ETH (${fmt(card.poolUsd)})</div>
                           <div className="min-w-0"><span className="text-slate-400">Participants:</span> {card.participantsCount}</div>
-                          <div className="min-w-0"><span className="text-slate-400">Creator:</span> <span className="font-mono">{shortAddr(card.creator)}</span></div>
+                          <div className="min-w-0"><span className="text-slate-400">Creator:</span> <span className="font-mono text-slate-200">{shortAddr(card.creator)}</span></div>
                         </>
                       ) : (
                         <>
