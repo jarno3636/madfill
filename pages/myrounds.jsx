@@ -12,13 +12,12 @@ import Layout from '@/components/Layout'
 import SEO from '@/components/SEO'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-// import ShareBar from '@/components/ShareBar' // ⚠️ keep disabled to avoid crash
+// import ShareBar from '@/components/ShareBar' // keep disabled to avoid crash
 import Countdown from '@/components/Countdown'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useTx } from '@/components/TxProvider'
 import fillAbi from '@/abi/FillInStoryV3_ABI.json'
-import { shareOrCast } from '@/lib/share'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -38,7 +37,7 @@ const buildPreviewSingle = (parts, word, blankIndex) => {
     out.push(String(parts[i] ?? ''))
     if (i < n - 1) {
       const isThisBlank = i === idx
-      const sub = isThisBlank ? (word ? String(word) + (needsSpaceBefore(parts[i + 1]) ? ' ' : '') : '____') : '____'
+      const sub = isThisBlank ? (needsSpaceBefore(parts[i + 1]) ? '____ ' : '____') : '____'
       out.push(sub)
     }
   }
@@ -101,11 +100,11 @@ const ipfsToHttp = (u) => {
   return u
 }
 
-/* ------------- cast helpers ------------- */
-const capCast = (text, max = 300) => {
-  const s = String(text || '').trim()
-  return s.length > max ? s.slice(0, max - 1) + '…' : s
-}
+/* ------------- minimal NFT read ABI (for client-side fallback) ------------- */
+const NFT_READ_ABI = [
+  'function templateOf(uint256 tokenId) view returns (string title, string description, string theme, string[] parts, uint64 createdAt, address author)',
+  'function tokenURI(uint256 tokenId) view returns (string)',
+]
 
 /* ------------- tiny UI helpers ------------- */
 function StatCard({ label, value, className = '' }) {
@@ -153,14 +152,15 @@ function MyRoundsPage() {
   const [unclaimedWins, setUnclaimedWins] = useState([])
   const [voted, setVoted] = useState([])
 
-  // NFTs
+  // NFTs (template-first)
   const [nfts, setNfts] = useState([])
   const [nftLoading, setNftLoading] = useState(false)
+  const [nftDebug, setNftDebug] = useState(null)
 
   // filters
   const [filter, setFilter] = useState('all')
   const [sortBy, setSortBy] = useState('newest')
-  const [activeTab, setActiveTab] = useState('stats')
+  const [activeTab, setActiveTab] = useState('nfts') // default to NFTs so user sees templates
 
   // Abort controller for loads
   const abortRef = useRef(null)
@@ -207,7 +207,7 @@ function MyRoundsPage() {
 
   useEffect(() => { hydrateFromCache(); hydrateNftsFromCache() }, [hydrateFromCache, hydrateNftsFromCache])
 
-  // price (display only) with fallback + retry
+  // price (display only)
   useEffect(() => {
     let dead = false
     ;(async () => {
@@ -229,7 +229,7 @@ function MyRoundsPage() {
     return { provider, ct }
   }, [BASE_RPC, FILLIN_ADDRESS])
 
-  // load rounds (robust + cache)
+  // load rounds (robust + cache) — unchanged
   const loadMyRounds = useCallback(async () => {
     if (!address) return
     if (abortRef.current) abortRef.current.abort()
@@ -240,7 +240,6 @@ function MyRoundsPage() {
     setLoading(true); setStatus(''); setFatal('')
     try {
       const { ct } = getRead()
-
       let userEntries
       try {
         if (!ct?.getUserEntries) throw new Error('Contract not ready')
@@ -368,7 +367,7 @@ function MyRoundsPage() {
     return () => clearInterval(t)
   }, [address, loadMyRounds])
 
-  // claim / finalize
+  // claim / finalize — unchanged
   const finalizePool1 = useCallback(async (id) => {
     try {
       setStatus('Finalizing round…')
@@ -386,33 +385,52 @@ function MyRoundsPage() {
     }
   }, [claimPool1])
 
-  /* ------------- NFTs via server API (guarded) ------------- */
+  /* ------------- NFTs via server API, with on-chain fallback ------------- */
   const loadMyNfts = useCallback(async () => {
     if (!address) { setNfts([]); return }
     setNftLoading(true)
     try {
-      const r = await fetch(`/api/nfts/${encodeURIComponent(address)}`)
+      // Pass contract + rpc to guarantee correct target
+      const url = `/api/nfts/${address}?contract=${encodeURIComponent(NFT_ADDRESS || '')}&rpc=${encodeURIComponent(BASE_RPC || '')}`
+      const r = await fetch(url)
       if (!r.ok) throw new Error(`NFT API ${r.status}`)
-      let j = null
-      try { j = await r.json() } catch { j = { items: [] } }
+      const j = await r.json().catch(() => ({ items: [] }))
 
-      const raw = Array.isArray(j?.items) ? j.items : []
-      if (raw.length === 0) {
-        setStatus((s) => s ? s + ' • ' + 'No NFTs returned from API.' : 'No NFTs returned from API.')
+      setNftDebug({
+        contract: j?.contract,
+        balance: j?.balance,
+        tokenIds: Array.isArray(j?.tokenIds) ? j.tokenIds : [],
+      })
+
+      let items = Array.isArray(j?.items) ? j.items : []
+
+      // If any item has no parts/template, try to enrich via client-side templateOf
+      const needsEnrich = items.filter(it => !Array.isArray(it?.parts) || it.parts.length === 0)
+      if (needsEnrich.length && NFT_ADDRESS && BASE_RPC) {
+        try {
+          const provider = new ethers.JsonRpcProvider(BASE_RPC, undefined, { staticNetwork: true })
+          const nft = new ethers.Contract(NFT_ADDRESS, NFT_READ_ABI, provider)
+          const enriched = await Promise.all(needsEnrich.map(async (it) => {
+            try {
+              const tpl = await withRetry(() => nft.templateOf(it.id), { tries: 3 })
+              const parts = Array.isArray(tpl?.parts) ? tpl.parts.map(String) : []
+              return { ...it, parts, theme: it.theme || tpl?.theme || '', name: it.name || tpl?.title || `Template #${it.id}`, description: it.description || tpl?.description || '' }
+            } catch { return it }
+          }))
+          // merge enriched back into items
+          const map = new Map(items.map(x => [x.id, x]))
+          for (const e of enriched) map.set(e.id, e)
+          items = Array.from(map.values())
+        } catch (e) {
+          console.warn('Client-side templateOf enrichment failed:', e)
+        }
       }
 
-      const list = raw.map((t) => {
+      const list = items.map((t) => {
         const parts = Array.isArray(t?.parts) ? t.parts : []
-        const word = String(t?.word || '')
-        // Prefer server-built templateLine when available
-        const templateLineServer = String(t?.templateLine || '')
-        const templateLine = templateLineServer || (parts.length
+        const templateLine = parts.length
           ? parts.reduce((acc, part, i) => acc + String(part || '') + (i < parts.length - 1 ? '____' : ''), '')
           : String(t?.story || t?.description || '')
-        )
-        const filledLine = parts.length
-          ? buildPreviewSingle(parts, word, 0)
-          : templateLine
 
         return {
           id: Number(t?.id ?? t?.tokenId ?? 0),
@@ -422,19 +440,17 @@ function MyRoundsPage() {
           image: t?.image ? ipfsToHttp(String(t.image)) : '',
           tokenURI: t?.tokenURI ? String(t.tokenURI) : '',
           templateLine,
-          filledLine,
-          word,
         }
       })
+
       setNfts(list)
       persistNftCache(list)
     } catch (e) {
       console.error('NFT load failed:', e)
-      setStatus('NFTs failed to load — check RPC/contract address & try refresh.')
     } finally {
       setNftLoading(false)
     }
-  }, [address, persistNftCache])
+  }, [address, NFT_ADDRESS, BASE_RPC, persistNftCache])
 
   useEffect(() => { if (address) loadMyNfts() }, [address, loadMyNfts])
 
@@ -516,7 +532,7 @@ function MyRoundsPage() {
                 {isConnected ? (
                   <>Signed in as <span className="font-mono">{shortAddr(address)}</span></>
                 ) : (
-                  <>Connect your wallet to see your rounds and NFTs.</>
+                  <>Connect your wallet to see your rounds and templates.</>
                 )}
               </p>
             </div>
@@ -539,22 +555,11 @@ function MyRoundsPage() {
             </div>
           </div>
 
-          {status && (
-            <div className="mt-3 rounded bg-slate-800/70 border border-slate-700 px-3 py-2 text-sm text-amber-200">
-              {status}
-            </div>
-          )}
-          {fatal && (
-            <div className="mt-2 rounded bg-rose-900/50 border border-rose-700 px-3 py-2 text-sm text-rose-100">
-              {fatal}
-            </div>
-          )}
-
-          {/* Tabs */}
+          {/* Tabs (default to NFTs) */}
           <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-slate-800/40 p-2">
             {[
+              { key: 'nfts', label: '🎨 Templates' },
               { key: 'stats', label: '📊 Stats' },
-              { key: 'nfts', label: '🎨 My NFTs' },
             ].map((t) => (
               <button
                 key={t.key}
@@ -587,104 +592,77 @@ function MyRoundsPage() {
             <div className="mt-4">
               {!isConnected ? (
                 <div className="rounded-xl bg-slate-900/60 border border-slate-700 p-4 text-sm text-slate-300">
-                  Connect your wallet to view NFTs.
+                  Connect your wallet to view templates.
                 </div>
               ) : nftLoading ? (
                 <div className="rounded-xl bg-slate-900/60 border border-slate-700 p-4 text-sm text-slate-300">
-                  Loading your NFTs…
+                  Loading your templates…
                 </div>
               ) : nfts.length === 0 ? (
                 <div className="rounded-xl bg-slate-900/60 border border-slate-700 p-4 text-sm text-slate-300">
-                  No MadFill NFTs found for <span className="font-mono">{shortAddr(address)}</span>.
+                  No templates found for <span className="font-mono">{shortAddr(address)}</span>.
+                  {nftDebug && (
+                    <div className="mt-2 text-[11px] text-slate-400">
+                      (Debug • contract: {nftDebug.contract || 'n/a'} • balance: {nftDebug.balance ?? 'n/a'} • ids: {Array.isArray(nftDebug.tokenIds) ? nftDebug.tokenIds.join(', ') : 'n/a'})
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
-                  {nfts.map((t) => {
-                    const templateCast = capCast(`🎨 “${t.name || `Template #${t.id}` }” — MadFill Template
-${t.templateLine || ''}`)
-                    const filledCast = t.filledLine
-                      ? capCast(`🧠 Filled example from “${t.name || `Template #${t.id}` }”
-${t.filledLine}`)
-                      : ''
+                  {nfts.map((t) => (
+                    <div key={t.id} className="rounded-2xl bg-slate-900/60 border border-slate-700 overflow-hidden">
+                      {/* Image (if any) */}
+                      {t.image ? (
+                        <div className="aspect-video bg-slate-800 border-b border-slate-700">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={t.image} alt={t.name || `Token #${t.id}`} className="w-full h-full object-cover" />
+                        </div>
+                      ) : <div className="aspect-video bg-slate-800 border-b border-slate-700" />}
 
-                    return (
-                      <div key={t.id} className="rounded-2xl bg-slate-900/60 border border-slate-700 overflow-hidden">
-                        {/* Image (if any) */}
-                        {t.image ? (
-                          <div className="aspect-video bg-slate-800 border-b border-slate-700">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={t.image} alt={t.name || `Token #${t.id}`} className="w-full h-full object-cover" />
+                      {/* Template */}
+                      <div className="p-4">
+                        <div className="text-lg md:text-xl font-bold text-white truncate">
+                          {t.name || `Template #${t.id}`}
+                        </div>
+                        {t.theme && (
+                          <div className="text-[13px] text-slate-300 mt-0.5">Theme: {t.theme}</div>
+                        )}
+
+                        {t.templateLine ? (
+                          <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4">
+                            <div className="text-sm uppercase tracking-wide text-slate-400">Template</div>
+                            <div className="mt-1 text-base md:text-lg leading-relaxed font-semibold text-white break-words">
+                              {t.templateLine}
+                            </div>
                           </div>
-                        ) : <div className="aspect-video bg-slate-800 border-b border-slate-700" />}
-
-                        {/* Reconstructed Template */}
-                        <div className="p-4">
-                          <div className="text-lg md:text-xl font-bold text-white truncate">
-                            {t.name || `Template #${t.id}`}
+                        ) : (
+                          <div className="mt-3 rounded-xl bg-rose-900/40 border border-rose-700 p-3 text-sm">
+                            Couldn’t reconstruct template text for #{t.id}.
                           </div>
-                          {t.theme && (
-                            <div className="text-[13px] text-slate-300 mt-0.5">Theme: {t.theme}</div>
-                          )}
+                        )}
 
-                          {t.templateLine && (
-                            <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4">
-                              <div className="text-sm uppercase tracking-wide text-slate-400">Template</div>
-                              <div className="mt-1 text-base md:text-lg leading-relaxed font-semibold text-white break-words">
-                                {t.templateLine}
-                              </div>
-                            </div>
-                          )}
-
-                          {t.filledLine && t.filledLine !== t.templateLine && (
-                            <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4">
-                              <div className="text-sm uppercase tracking-wide text-slate-400">Filled Example</div>
-                              <div className="mt-1 text-base md:text-lg leading-relaxed font-semibold text-white break-words">
-                                {t.filledLine}
-                              </div>
-                            </div>
-                          )}
-
-                          {t.desc && (
-                            <div className="mt-3 text-sm text-slate-300 leading-relaxed">{t.desc}</div>
-                          )}
-
-                          <div className="flex flex-wrap gap-2 mt-3 items-center">
-                            <a
-                              href={`https://basescan.org/token/${NFT_ADDRESS}?a=${t.id}`}
-                              target="_blank" rel="noopener noreferrer"
-                              className="px-3 py-2 rounded-md bg-slate-800 border border-slate-600 hover:bg-slate-700 text-xs"
-                            >
-                              BaseScan
-                            </a>
-                            <Button
-                              onClick={() => shareOrCast({ text: templateCast })}
-                              className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs"
-                            >
-                              Cast Template
-                            </Button>
-                            {filledCast ? (
-                              <Button
-                                onClick={() => shareOrCast({ text: filledCast })}
-                                className="px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs"
-                              >
-                                Cast Filled
-                              </Button>
-                            ) : null}
-                            <div className="text-[11px] text-slate-500">
-                              {t.tokenURI ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a> : 'No tokenURI'}
-                            </div>
+                        <div className="flex flex-wrap gap-2 mt-3 items-center">
+                          <a
+                            href={`https://basescan.org/token/${NFT_ADDRESS}?a=${t.id}`}
+                            target="_blank" rel="noopener noreferrer"
+                            className="px-3 py-2 rounded-md bg-slate-800 border border-slate-600 hover:bg-slate-700 text-xs"
+                          >
+                            BaseScan
+                          </a>
+                          <div className="text-[11px] text-slate-500">
+                            {t.tokenURI ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a> : 'No tokenURI'}
                           </div>
                         </div>
                       </div>
-                    )
-                  })}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
           )}
         </div>
 
-        {/* Filters */}
+        {/* Filters for rounds (unchanged) */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-2">
             {[
@@ -724,7 +702,7 @@ ${t.filledLine}`)
           </label>
         </div>
 
-        {/* Cards */}
+        {/* Cards for rounds (unchanged) */}
         {!isConnected ? (
           <div className="text-center text-slate-300 py-16">
             Connect your wallet (top-right) to view your rounds.&nbsp;
@@ -742,11 +720,7 @@ ${t.filledLine}`)
             {viewCards.map((card) => {
               const isPool1 = card.kind === 'pool1'
               const roundUrl = absoluteUrl(`/round/${isPool1 ? card.id : card.originalPool1Id}`)
-              const shareTxt = isPool1
-                ? `Check out my MadFill Round #${card.id}! ${roundUrl}`
-                : `I voted on a MadFill challenger for Round #${card.originalPool1Id}! ${roundUrl}`
               const endsLabel = formatTimeLeft(card.deadline)
-
               return (
                 <Card key={`${card.kind}-${card.id}`} className="relative bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-xl hover:shadow-xl transition-all duration-300 min-w-0 overflow-hidden">
                   <CardHeader className="flex justify-between items-start gap-3 min-w-0">
@@ -771,17 +745,6 @@ ${t.filledLine}`)
                   <CardContent className="space-y-3 text-sm min-w-0">
                     <div className="p-3 rounded bg-slate-800/60 border border-slate-700 leading-relaxed break-words">
                       {isPool1 ? card.preview : card.chPreview}
-                    </div>
-
-                    {/* Minimal share row (replaces ShareBar to avoid crashes) */}
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        className="border-slate-600 text-slate-200"
-                        onClick={() => shareOrCast({ text: capCast(shareTxt, 320), url: roundUrl })}
-                      >
-                        Share
-                      </Button>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 text-xs text-slate-300">
