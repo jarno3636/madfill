@@ -61,8 +61,18 @@ export function TxProvider({ children }) {
   const [pendingTx, setPendingTx] = useState(null) // hash
   const [lastTx, setLastTx] = useState(null)       // receipt
 
-  /** read-only provider (no signer) */
-  const read = useMemo(() => new ethers.JsonRpcProvider(BASE_RPC), [])
+  /** read-only provider (no signer) — recreate if RPC changes & pin network */
+  const read = useMemo(
+    () => new ethers.JsonRpcProvider(BASE_RPC, undefined, { staticNetwork: true }),
+    [BASE_RPC]
+  )
+
+  /** expose read-only helpers */
+  const getReadProvider = useCallback(() => read, [read])
+  const getNftReadContract = useCallback(
+    () => new ethers.Contract(NFT_ADDRESS, nftAbi, read),
+    [read]
+  )
 
   /** contracts (read or write) */
   const getContracts = useCallback(
@@ -199,13 +209,11 @@ export function TxProvider({ children }) {
     }
   }, [getContracts, readPaused, readMintPriceWei])
 
-  /** NEW: Quick-read helpers for gallery/detail pages */
+  /** Quick-read helpers for gallery/detail pages */
   const readTemplateOf = useCallback(async (tokenId) => {
     const { nft } = getContracts(false)
     try {
       const res = await nft.templateOf(ethers.toBigInt(tokenId))
-      // struct layout from ABI:
-      // [title, description, theme, parts[], createdAt(uint64), author(address)]
       return {
         title: String(res?.[0] ?? ''),
         description: String(res?.[1] ?? ''),
@@ -219,6 +227,27 @@ export function TxProvider({ children }) {
       return null
     }
   }, [getContracts])
+
+  /** Batch version (optional) */
+  const readTemplatesBatch = useCallback(async (tokenIds = []) => {
+    if (!Array.isArray(tokenIds) || tokenIds.length === 0) return []
+    const nft = getNftReadContract()
+    const calls = tokenIds.map(async (id) => {
+      try {
+        const r = await nft.templateOf(ethers.toBigInt(id))
+        return {
+          id: Number(id),
+          title: String(r?.[0] ?? ''),
+          description: String(r?.[1] ?? ''),
+          theme: String(r?.[2] ?? ''),
+          parts: Array.isArray(r?.[3]) ? r[3].map(String) : [],
+          createdAt: typeof r?.[4] === 'bigint' ? Number(r[4]) : Number(r?.createdAt ?? 0),
+          author: String(r?.[5] ?? '0x0000000000000000000000000000000000000000'),
+        }
+      } catch { return { id: Number(id), __error: true } }
+    })
+    return await Promise.all(calls)
+  }, [getNftReadContract])
 
   const readTokenURI = useCallback(async (tokenId) => {
     const { nft } = getContracts(false)
@@ -460,8 +489,13 @@ export function TxProvider({ children }) {
     readMintPriceWei,
     readPaused,
     readTemplateOf,
+    readTemplatesBatch,   // NEW (optional)
     readTokenURI,
     readTotalSupply,
+
+    // read-only primitives (optional)
+    getReadProvider,
+    getNftReadContract,
 
     // tx state
     txStatus, pendingTx, lastTx,
@@ -474,7 +508,8 @@ export function TxProvider({ children }) {
     createPool1, joinPool1, claimPool1,
     createPool2, votePool2, claimPool2,
     mintTemplateNFT, readNftLimits, readMintPriceWei, readPaused,
-    readTemplateOf, readTokenURI, readTotalSupply,
+    readTemplateOf, readTemplatesBatch, readTokenURI, readTotalSupply,
+    getReadProvider, getNftReadContract,
     txStatus, pendingTx, lastTx
   ])
 
