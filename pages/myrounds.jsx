@@ -12,13 +12,13 @@ import Layout from '@/components/Layout'
 import SEO from '@/components/SEO'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import ShareBar from '@/components/ShareBar'
+// import ShareBar from '@/components/ShareBar' // ⚠️ remove to avoid crash
 import Countdown from '@/components/Countdown'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useTx } from '@/components/TxProvider'
 import fillAbi from '@/abi/FillInStoryV3_ABI.json'
-import { shareOrCast } from '@/lib/share'   // ✅ robust caster (native compose + fallback)
+import { shareOrCast } from '@/lib/share'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -28,14 +28,18 @@ const toEth = (wei) => { try { return Number(ethers.formatEther(wei ?? 0n)) } ca
 const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(Number(n || 0))
 const needsSpaceBefore = (str) => !!str && !/\s|[.,!?;:)"'\]]/.test(str[0])
 const buildPreviewSingle = (parts, word, blankIndex) => {
-  const n = parts?.length || 0
+  const n = Array.isArray(parts) ? parts.length : 0
   if (!n) return ''
   const blanks = Math.max(0, n - 1)
-  const idx = Math.max(0, Math.min(blanks - 1, Number(blankIndex) || 0))
+  const idx = Math.max(0, Math.min(Math.max(blanks - 1, 0), Number(blankIndex) || 0))
   const out = []
   for (let i = 0; i < n; i++) {
-    out.push(parts[i] || '')
-    if (i < n - 1) out.push(i === idx ? (word ? word + (needsSpaceBefore(parts[i + 1]) ? ' ' : '') : '____') : '____')
+    out.push(String(parts[i] ?? ''))
+    if (i < n - 1) {
+      const isThisBlank = i === idx
+      const sub = isThisBlank ? (word ? String(word) + (needsSpaceBefore(parts[i + 1]) ? ' ' : '') : '____') : '____'
+      out.push(sub)
+    }
   }
   return out.join('')
 }
@@ -94,45 +98,28 @@ const ipfsToHttp = (u) => {
   return u
 }
 
-/* ---------- Template reconstruction helpers (for NFTs) ---------- */
-function partsFromMeta(meta) {
-  if (!meta) return []
-  if (Array.isArray(meta.parts)) return meta.parts.map(String)
-  if (Array.isArray(meta?.properties?.parts)) return meta.properties.parts.map(String)
-
-  const attrParts = (meta.attributes || []).find(a =>
-    (a?.trait_type || a?.traitType || '').toLowerCase() === 'parts'
+/* ------------- tiny UI helpers ------------- */
+function StatCard({ label, value, className = '' }) {
+  return (
+    <div className={`rounded-xl bg-slate-900/60 border border-slate-700 p-4 ${className}`}>
+      <div className="text-slate-400 text-xs">{label}</div>
+      <div className="text-xl font-semibold mt-1">{value}</div>
+    </div>
   )
-  if (attrParts?.value) {
-    try {
-      const parsed = JSON.parse(attrParts.value)
-      if (Array.isArray(parsed)) return parsed.map(String)
-    } catch {}
-  }
-
-  // last-resort heuristic from description/template body
-  const body = String(meta.template || meta.description || '')
-  if (/_+/.test(body)) {
-    const chunks = body.split(/_{4,}/g)
-    if (chunks.length > 1) {
-      const out = []
-      for (let i = 0; i < chunks.length; i++) {
-        out.push(chunks[i])
-        if (i < chunks.length - 1) out.push('')
-      }
-      return out
-    }
-  }
-  return []
 }
-function buildTemplateLine(parts) {
-  if (!Array.isArray(parts) || parts.length === 0) return ''
-  let out = ''
-  for (let i = 0; i < parts.length; i++) {
-    out += String(parts[i] ?? '')
-    if (i < parts.length - 1) out += '____'
+function statusBadge(card) {
+  if (card.kind === 'pool2') {
+    if (card.claimed) return <span className="inline-block px-2 py-0.5 rounded bg-emerald-700/40 text-emerald-200 text-xs">Claimed</span>
+    if (card.challengerWon) return <span className="inline-block px-2 py-0.5 rounded bg-indigo-700/40 text-indigo-200 text-xs">Challenger won</span>
+    return <span className="inline-block px-2 py-0.5 rounded bg-slate-700/40 text-slate-200 text-xs">Voting</span>
   }
-  return out
+  if (card.claimed) return <span className="inline-block px-2 py-0.5 rounded bg-emerald-700/40 text-emerald-200 text-xs">Claimed</span>
+  if (card.ended) {
+    return card.youWon
+      ? <span className="inline-block px-2 py-0.5 rounded bg-yellow-600/40 text-yellow-200 text-xs">You won</span>
+      : <span className="inline-block px-2 py-0.5 rounded bg-slate-700/40 text-slate-200 text-xs">Ended</span>
+  }
+  return <span className="inline-block px-2 py-0.5 rounded bg-cyan-700/40 text-cyan-200 text-xs">Active</span>
 }
 
 /* ------------- component ------------- */
@@ -143,13 +130,11 @@ function MyRoundsPage() {
     address, isConnected, isOnBase, connect, switchToBase,
     claimPool1,
     BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS,
-
-    // Optional read helpers we’ll use to enrich NFT data
-    readTemplateOf, readTokenURI,
   } = useTx()
 
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState('')
+  const [fatal, setFatal] = useState('') // show friendly error instead of Next error overlay
   const [priceUsd, setPriceUsd] = useState(0)
   const [showConfetti, setShowConfetti] = useState(false)
 
@@ -180,11 +165,11 @@ function MyRoundsPage() {
       if (!cacheKey) return
       const j = JSON.parse(localStorage.getItem(cacheKey) || '{}')
       if (!j || !j.data) return
-      setStarted(j.data.started || [])
-      setJoined(j.data.joined || [])
-      setWins((j.data.wins || []))
-      setUnclaimedWins(j.data.unclaimedWins || [])
-      setVoted(j.data.voted || [])
+      setStarted(Array.isArray(j.data.started) ? j.data.started : [])
+      setJoined(Array.isArray(j.data.joined) ? j.data.joined : [])
+      setWins(Array.isArray(j.data.wins) ? j.data.wins : [])
+      setUnclaimedWins(Array.isArray(j.data.unclaimedWins) ? j.data.unclaimedWins : [])
+      setVoted(Array.isArray(j.data.voted) ? j.data.voted : [])
     } catch {}
   }, [cacheKey])
 
@@ -200,7 +185,7 @@ function MyRoundsPage() {
       if (!cacheNftKey) return
       const j = JSON.parse(localStorage.getItem(cacheNftKey) || '{}')
       if (!j || !j.data) return
-      setNfts(j.data || [])
+      setNfts(Array.isArray(j.data) ? j.data : [])
     } catch {}
   }, [cacheNftKey])
 
@@ -253,36 +238,38 @@ function MyRoundsPage() {
     abortRef.current = controller
     const { signal } = controller
 
-    setLoading(true); setStatus('')
+    setLoading(true); setStatus(''); setFatal('')
     try {
       const { ct } = getRead()
 
       let userEntries
       try {
+        if (!ct?.getUserEntries) throw new Error('Contract not ready')
         userEntries = await withRetry(() => ct.getUserEntries(address), { signal })
-      } catch {
+      } catch (e) {
+        console.error('getUserEntries failed:', e)
         setStatus('Network hiccup loading entries — using cached view where available.')
         setLoading(false)
         return
       }
 
-      const ids1 = Array.from(userEntries?.[0] || []).map(Number)
-      const ids2 = Array.from(userEntries?.[1] || []).map(Number)
+      const ids1 = Array.from(userEntries?.[0] || []).map((n) => Number(n)).filter((n) => Number.isFinite(n))
+      const ids2 = Array.from(userEntries?.[1] || []).map((n) => Number(n)).filter((n) => Number.isFinite(n))
 
       const p1CardsRaw = await mapLimit(ids1, CONCURRENCY, async (id) => {
         if (signal.aborted) return null
         try {
           const info = await withRetry(() => ct.getPool1Info(BigInt(id)), { signal })
-          const name = info.name_ ?? info[0]
-          const theme = info.theme_ ?? info[1]
-          const parts = info.parts_ ?? info[2] ?? []
-          const feeBase = info.feeBase_ ?? info[3] ?? 0n
-          const deadline = Number(info.deadline_ ?? info[4] ?? 0)
-          const creator = (info.creator_ ?? info[5] ?? '').toString()
-          const participants = info.participants_ ?? info[6] ?? []
-          const winner = info.winner_ ?? info[7] ?? '0x0000000000000000000000000000000000000000'
-          const claimed = Boolean(info.claimed_ ?? info[8])
-          const poolBalance = info.poolBalance_ ?? info[9] ?? 0n
+          const name = info?.name_ ?? info?.[0] ?? ''
+          const theme = info?.theme_ ?? info?.[1] ?? ''
+          const parts = info?.parts_ ?? info?.[2] ?? []
+          const feeBase = info?.feeBase_ ?? info?.[3] ?? 0n
+          const deadline = Number(info?.deadline_ ?? info?.[4] ?? 0)
+          const creator = (info?.creator_ ?? info?.[5] ?? '').toString()
+          const participants = info?.participants_ ?? info?.[6] ?? []
+          const winner = info?.winner_ ?? info?.[7] ?? '0x0000000000000000000000000000000000000000'
+          const claimed = Boolean(info?.claimed_ ?? info?.[8])
+          const poolBalance = info?.poolBalance_ ?? info?.[9] ?? 0n
 
           const your = await withRetry(
             () => ct.getPool1Submission(BigInt(id), address),
@@ -309,11 +296,11 @@ function MyRoundsPage() {
             poolEth: toEth(poolBalance),
             poolUsd: toEth(poolBalance) * priceUsd,
             deadline, creator,
-            participantsCount: participants?.length || 0,
+            participantsCount: Array.isArray(participants) ? participants.length : 0,
             winner, claimed, ended, youWon,
             isCreator: creator && creator.toLowerCase() === address.toLowerCase(),
           }
-        } catch { return null }
+        } catch (e) { console.warn('pool1 fetch fail', id, e); return null }
       })
       const p1Cards = p1CardsRaw.filter(Boolean)
       const startedCards = p1Cards.filter((c) => c.isCreator)
@@ -324,20 +311,20 @@ function MyRoundsPage() {
         if (signal.aborted) return null
         try {
           const p2 = await withRetry(() => ct.getPool2InfoFull(BigInt(id)), { signal })
-          const originalId = Number(p2.originalPool1Id ?? p2[0])
-          const chWord = p2.challengerWord ?? p2[1]
-          const chUsername = p2.challengerUsername ?? p2[2]
-          const votersOriginalCount = Number(p2.votersOriginalCount ?? p2[4] ?? 0)
-          const votersChallengerCount = Number(p2.votersChallengerCount ?? p2[5] ?? 0)
-          const claimed = Boolean(p2.claimed ?? p2[6])
-          const challengerWon = Boolean(p2.challengerWon ?? p2[7])
-          const poolEth = toEth(p2.poolBalance ?? p2[8] ?? 0n)
-          const feeBase = toEth(p2.feeBase ?? p2[9] ?? 0n)
-          const deadline = Number(p2.deadline ?? p2[10] ?? 0)
+          const originalId = Number(p2?.originalPool1Id ?? p2?.[0] ?? 0)
+          const chWord = p2?.challengerWord ?? p2?.[1] ?? ''
+          const chUsername = p2?.challengerUsername ?? p2?.[2] ?? ''
+          const votersOriginalCount = Number(p2?.votersOriginalCount ?? p2?.[4] ?? 0)
+          const votersChallengerCount = Number(p2?.votersChallengerCount ?? p2?.[5] ?? 0)
+          const claimed = Boolean(p2?.claimed ?? p2?.[6])
+          const challengerWon = Boolean(p2?.challengerWon ?? p2?.[7])
+          const poolEth = toEth(p2?.poolBalance ?? p2?.[8] ?? 0n)
+          const feeBase = toEth(p2?.feeBase ?? p2?.[9] ?? 0n)
+          const deadline = Number(p2?.deadline ?? p2?.[10] ?? 0)
 
           const info = await withRetry(() => ct.getPool1Info(BigInt(originalId)), { signal })
-          const parts = info.parts_ ?? info[2] ?? []
-          const creatorAddr = (info.creator_ ?? info[5] ?? '').toString()
+          const parts = info?.parts_ ?? info?.[2] ?? []
+          const creatorAddr = (info?.creator_ ?? info?.[5] ?? '').toString()
           const creatorSub = await withRetry(
             () => ct.getPool1Submission(BigInt(originalId), creatorAddr),
             { tries: 2, minDelay: 120, maxDelay: 300, signal }
@@ -349,13 +336,13 @@ function MyRoundsPage() {
             id: Number(id),
             originalPool1Id: originalId,
             chUsername, chWord,
-            chPreview: buildPreviewSingle(parts, chWord, creatorBlank),
+            chPreview: buildPreviewSingle(Array.isArray(parts) ? parts : [], chWord, creatorBlank),
             votersOriginal: votersOriginalCount,
             votersChallenger: votersChallengerCount,
             claimed, challengerWon,
             poolEth, poolUsd: poolEth * priceUsd, feeBase, deadline,
           }
-        } catch { return null }
+        } catch (e) { console.warn('pool2 fetch fail', id, e); return null }
       })
       const p2Cards = p2CardsRaw.filter(Boolean)
 
@@ -367,7 +354,8 @@ function MyRoundsPage() {
       if (missed > 0) setStatus(`Loaded ${ids1.length + ids2.length - missed} items (${missed} skipped due to RPC timeouts).`)
     } catch (e) {
       if (String(e?.message).includes('aborted')) return
-      console.error(e)
+      console.error('MyRounds fatal:', e)
+      setFatal('Something went wrong loading your rounds. Please try Refresh.')
       setStatus('Failed to load your rounds. Showing cached view (if any).')
     } finally {
       if (!abortRef.current?.signal?.aborted) setLoading(false)
@@ -399,86 +387,41 @@ function MyRoundsPage() {
     }
   }, [claimPool1])
 
-  /* ------------- NFTs: API first, then enrich from chain/metadata ------------- */
+  /* ------------- NFTs via server API (guarded) ------------- */
   const loadMyNfts = useCallback(async () => {
     if (!address) { setNfts([]); return }
     setNftLoading(true)
     try {
-      // 1) Base list from your API (fast)
       const r = await fetch(`/api/nfts/${address}`)
-      const data = await r.json()
-      const rawArr = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [])
+      if (!r.ok) throw new Error(`NFT API ${r.status}`)
+      let j = null
+      try { j = await r.json() } catch { j = { items: [] } }
 
-      // 2) Enrich reliably
-      const enriched = await Promise.all(
-        rawArr.map(async (raw) => {
-          const id = Number(raw.id)
-          let name = raw.name || raw.title || `Template #${id}`
-          let desc = raw.desc || raw.description || ''
-          let theme = raw.theme || ''
-          let image = raw.image || raw.image_url || ''
-          let tokenURI = raw.tokenURI
-          let meta = raw.meta
-          let parts = Array.isArray(raw.parts) ? raw.parts.map(String) : []
-
-          // tokenURI if missing
-          if (!tokenURI) {
-            try { tokenURI = await withRetry(() => readTokenURI(BigInt(id)), { tries: 3 }) } catch {}
-          }
-
-          // pull metadata if needed
-          if (!meta && tokenURI) {
-            try {
-              const u = tokenURI.startsWith('ipfs://')
-                ? `https://ipfs.io/ipfs/${tokenURI.slice('ipfs://'.length)}`
-                : tokenURI
-              const jr = await fetch(u)
-              meta = await jr.json()
-            } catch {}
-          }
-
-          if (meta) {
-            name  = name  || meta.name || meta.title || name
-            desc  = desc  || meta.description || ''
-            theme = theme || meta.theme || (meta.attributes || []).find(a => (a?.trait_type||a?.traitType) === 'theme')?.value || ''
-            image = image || meta.image || meta.image_url || ''
-            if (parts.length === 0) parts = partsFromMeta(meta)
-          }
-
-          // If still missing, ask on-chain
-          if (parts.length === 0) {
-            try {
-              const tpl = await withRetry(() => readTemplateOf(BigInt(id)), { tries: 3 })
-              if (tpl) {
-                theme = theme || String(tpl.theme || '')
-                parts = Array.isArray(tpl.parts) ? tpl.parts.map(String) : []
-                desc  = desc  || String(tpl.description || '')
-                name  = name  || String(tpl.title || '')
-              }
-            } catch {}
-          }
-
-          // Build final template line for display/casting
-          const templateLine = buildTemplateLine(parts)
-
-          // normalize image gateway
-          if (image && image.startsWith('ipfs://')) {
-            image = `https://ipfs.io/ipfs/${image.slice('ipfs://'.length)}`
-          }
-
-          return { ...raw, id, name, desc, theme, tokenURI, image, meta, parts, templateLine }
-        })
-      )
-
-      setNfts(enriched)
-      persistNftCache(enriched)
+      const raw = Array.isArray(j?.items) ? j.items : []
+      const list = raw.map((t) => {
+        const parts = Array.isArray(t?.parts) ? t.parts : []
+        const templateLine = parts.length
+          ? parts.reduce((acc, part, i) => acc + String(part || '') + (i < parts.length - 1 ? '____' : ''), '')
+          : String(t?.desc || '')
+        return {
+          id: Number(t?.id ?? t?.tokenId ?? 0),
+          name: String(t?.name ?? `Template #${t?.id ?? t?.tokenId ?? ''}`),
+          theme: String(t?.theme ?? ''),
+          desc: String(t?.desc ?? t?.description ?? ''),
+          image: t?.image ? ipfsToHttp(String(t.image)) : '',
+          tokenURI: t?.tokenURI ? String(t.tokenURI) : '',
+          templateLine,
+        }
+      })
+      setNfts(list)
+      persistNftCache(list)
     } catch (e) {
-      console.error(e)
+      console.error('NFT load failed:', e)
+      // keep cache if any
     } finally {
       setNftLoading(false)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [address, persistNftCache, readTemplateOf, readTokenURI])
+  }, [address, persistNftCache])
 
   useEffect(() => { if (address) loadMyNfts() }, [address, loadMyNfts])
 
@@ -588,6 +531,11 @@ function MyRoundsPage() {
               {status}
             </div>
           )}
+          {fatal && (
+            <div className="mt-2 rounded bg-rose-900/50 border border-rose-700 px-3 py-2 text-sm text-rose-100">
+              {fatal}
+            </div>
+          )}
 
           {/* Tabs */}
           <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-slate-800/40 p-2">
@@ -639,23 +587,21 @@ function MyRoundsPage() {
               ) : (
                 <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
                   {nfts.map((t) => {
-                    const castTxt = [
-                      `🎨 “${t.name || `Template #${t.id}` }” — a MadFill Template`,
-                      t.theme ? `Theme: ${t.theme}` : '',
-                      t.templateLine || t.desc || ''
-                    ].filter(Boolean).join('\n')
+                    const castTxt = t.name
+                      ? `🎨 “${t.name}” — a MadFill Template.\n${t.templateLine || ''}`
+                      : `🎨 My MadFill Template.\n${t.templateLine || ''}`
 
                     return (
                       <div key={t.id} className="rounded-2xl bg-slate-900/60 border border-slate-700 overflow-hidden">
-                        {/* Only render image when present (no blank box) */}
-                        {t.image && (
+                        {/* Image (if any) */}
+                        {t.image ? (
                           <div className="aspect-video bg-slate-800 border-b border-slate-700">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={t.image} alt={t.name || `Token #${t.id}`} className="w-full h-full object-cover" loading="lazy" />
+                            <img src={t.image} alt={t.name || `Token #${t.id}`} className="w-full h-full object-cover" />
                           </div>
-                        )}
+                        ) : <div className="aspect-video bg-slate-800 border-b border-slate-700" />}
 
-                        {/* Reconstructed template */}
+                        {/* Reconstructed Template */}
                         <div className="p-4">
                           <div className="text-lg md:text-xl font-bold text-white truncate">
                             {t.name || `Template #${t.id}`}
@@ -666,7 +612,7 @@ function MyRoundsPage() {
 
                           {t.templateLine && (
                             <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4">
-                              <div className="text-xs uppercase tracking-wide text-slate-400">Template</div>
+                              <div className="text-sm uppercase tracking-wide text-slate-400">Template</div>
                               <div className="mt-1 text-base md:text-lg leading-relaxed font-semibold text-white break-words">
                                 {t.templateLine}
                               </div>
@@ -686,15 +632,13 @@ function MyRoundsPage() {
                               BaseScan
                             </a>
                             <Button
-                              onClick={() => shareOrCast({ text: castTxt, embeds: t.image ? [t.image] : [] })}
+                              onClick={() => shareOrCast({ text: castTxt })}
                               className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs"
                             >
                               Cast
                             </Button>
                             <div className="text-[11px] text-slate-500">
-                              {t.tokenURI
-                                ? <a className="underline" href={t.tokenURI.startsWith('ipfs://') ? `https://ipfs.io/ipfs/${t.tokenURI.slice('ipfs://'.length)}` : t.tokenURI} target="_blank" rel="noreferrer">tokenURI</a>
-                                : 'No tokenURI'}
+                              {t.tokenURI ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a> : 'No tokenURI'}
                             </div>
                           </div>
                         </div>
@@ -796,6 +740,17 @@ function MyRoundsPage() {
                       {isPool1 ? card.preview : card.chPreview}
                     </div>
 
+                    {/* Minimal share row (replaces ShareBar to avoid crashes) */}
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        className="border-slate-600 text-slate-200"
+                        onClick={() => shareOrCast({ text: shareTxt, url: roundUrl })}
+                      >
+                        Share
+                      </Button>
+                    </div>
+
                     <div className="grid grid-cols-2 gap-2 text-xs text-slate-300">
                       {isPool1 ? (
                         <>
@@ -813,14 +768,6 @@ function MyRoundsPage() {
                         </>
                       )}
                     </div>
-
-                    {/* ShareBar for rounds */}
-                    <ShareBar
-                      url={roundUrl}
-                      text={shareTxt}
-                      og={{ screen: 'round', roundId: String(isPool1 ? card.id : card.originalPool1Id) }}
-                      small
-                    />
 
                     <div className="flex gap-2 pt-1">
                       {isPool1 ? (
