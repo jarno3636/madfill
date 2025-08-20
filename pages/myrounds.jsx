@@ -385,7 +385,8 @@ function MyRoundsPage() {
     if (!address) { setNfts([]); return }
     setNftLoading(true)
     try {
-      const r = await fetch(`/api/nfts/${address}`)
+      // IMPORTANT: pass the contract address to ensure server and client use the same one
+      const r = await fetch(`/api/nfts/${address}?nft=${encodeURIComponent(NFT_ADDRESS)}`)
       if (!r.ok) throw new Error(`NFT API ${r.status}`)
       let j = null
       try { j = await r.json() } catch { j = { items: [] } }
@@ -424,7 +425,7 @@ function MyRoundsPage() {
     } finally {
       setNftLoading(false)
     }
-  }, [address, persistNftCache])
+  }, [address, persistNftCache, NFT_ADDRESS])
 
   useEffect(() => { if (address) loadMyNfts() }, [address, loadMyNfts])
 
