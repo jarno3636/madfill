@@ -123,3 +123,25 @@ img, video, canvas, svg {
     print-color-adjust: exact;
   }
 }
+
+/* ---------- MadFill readability helpers ---------- */
+
+/* Force light text on a subtree (beats rogue black text) */
+:where(.mf-force-light) { color: hsl(var(--foreground)) !important; }
+:where(.mf-force-light *) { color: inherit !important; }
+
+/* Nice reading defaults */
+.mf-prose {
+  line-height: 1.6;
+  white-space: pre-wrap; /* keep user line breaks */
+  word-wrap: break-word;
+}
+
+/* Optional: consistent blank styling if you ever use this class directly */
+.mf-blank {
+  background: rgba(51, 65, 85, 0.7);  /* slate-700/70 */
+  color: #fbbf24;                     /* amber-400/300 zone */
+  border-radius: 0.375rem;            /* rounded-md */
+  padding: 0 0.25rem;
+  font-weight: 600;
+}
