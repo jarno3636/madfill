@@ -394,17 +394,21 @@ function MyRoundsPage() {
       const list = raw.map((t) => {
         const parts = Array.isArray(t?.parts) ? t.parts : []
         const word = String(t?.word || '')
+
+        // Prefer reconstructed parts; otherwise fall back to story or description
         const templateLine = parts.length
           ? parts.reduce((acc, part, i) => acc + String(part || '') + (i < parts.length - 1 ? '____' : ''), '')
-          : String(t?.desc || t?.description || '')
+          : String(t?.story || t?.description || '')
+
         const filledLine = parts.length
-          ? buildPreviewSingle(parts, word, 0) // default: fill first blank
+          ? buildPreviewSingle(parts, word, 0) // show an example using the first blank
           : (templateLine || '')
+
         return {
           id: Number(t?.id ?? t?.tokenId ?? 0),
           name: String(t?.name ?? `Template #${t?.id ?? t?.tokenId ?? ''}`),
           theme: String(t?.theme ?? ''),
-          desc: String(t?.desc ?? t?.description ?? ''),
+          desc: String(t?.description || t?.story || ''),
           image: t?.image ? ipfsToHttp(String(t.image)) : '',
           tokenURI: t?.tokenURI ? String(t.tokenURI) : '',
           templateLine,
