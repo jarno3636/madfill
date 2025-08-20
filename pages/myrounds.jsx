@@ -12,12 +12,13 @@ import Layout from '@/components/Layout'
 import SEO from '@/components/SEO'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import ShareBar from '@/components/ShareBar'
 import Countdown from '@/components/Countdown'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useTx } from '@/components/TxProvider'
 import fillAbi from '@/abi/FillInStoryV3_ABI.json'
-import { openCast } from '@/lib/share'
+import { shareOrCast } from '@/lib/share' // ✅ new robust caster
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -26,7 +27,6 @@ const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
 const toEth = (wei) => { try { return Number(ethers.formatEther(wei ?? 0n)) } catch { return 0 } }
 const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(Number(n || 0))
 const needsSpaceBefore = (str) => !!str && !/\s|[.,!?;:)"'\]]/.test(str[0])
-
 const buildPreviewSingle = (parts, word, blankIndex) => {
   const n = parts?.length || 0
   if (!n) return ''
@@ -39,18 +39,6 @@ const buildPreviewSingle = (parts, word, blankIndex) => {
   }
   return out.join('')
 }
-
-const buildTemplateLine = (parts) => {
-  const n = parts?.length || 0
-  if (!n) return ''
-  const out = []
-  for (let i = 0; i < n; i++) {
-    out.push(parts[i] || '')
-    if (i < n - 1) out.push('____')
-  }
-  return out.join('')
-}
-
 const formatTimeLeft = (deadlineSec) => {
   const now = Math.floor(Date.now() / 1000)
   const diff = Math.max(0, Number(deadlineSec || 0) - now)
@@ -63,16 +51,16 @@ const formatTimeLeft = (deadlineSec) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /* ------------- retry + concurrency ------------- */
-async function withRetry(fn, { tries = 6, minDelay = 160, maxDelay = 1200, signal } = {}) {
+async function withRetry(fn, { tries = 4, minDelay = 150, maxDelay = 800, signal } = {}) {
   let lastErr
   for (let i = 0; i < tries; i++) {
     if (signal?.aborted) throw new Error('aborted')
     try { return await fn() } catch (e) {
       lastErr = e
       const msg = String(e?.message || e)
-      if (/aborted|revert|CALL_EXCEPTION|UNPREDICTABLE_GAS_LIMIT/i.test(msg)) break
-      const backoff = Math.min(maxDelay, minDelay * Math.pow(1.8, i))
-      const jitter = Math.floor(Math.random() * 120)
+      if (/aborted|revert|CALL_EXCEPTION/i.test(msg)) break
+      const backoff = Math.min(maxDelay, minDelay * Math.pow(2, i))
+      const jitter = Math.floor(Math.random() * 80)
       await sleep(backoff + jitter)
     }
   }
@@ -99,7 +87,7 @@ function mapLimit(items, limit, worker) {
 }
 const CONCURRENCY = 8
 
-/* ------------- NFT read ABI (balance/owner for discovery) ------------- */
+/* ------------- NFT read ABI (for serverless fallback in /api if needed) ------------- */
 const NFT_READ_ABI = [
   'event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)',
   'function balanceOf(address) view returns (uint256)',
@@ -140,97 +128,6 @@ function statusBadge(card) {
   return <span className="inline-block px-2 py-0.5 rounded bg-cyan-700/40 text-cyan-200 text-xs">Active</span>
 }
 
-/* --------- FallbackProvider (multi-RPC for reliability) --------- */
-function makeProvider(primaryRpc, extraRpcs = []) {
-  try {
-    const urls = [primaryRpc, ...extraRpcs].filter(Boolean)
-    if (!urls.length) return new ethers.JsonRpcProvider(primaryRpc)
-    if (urls.length === 1) return new ethers.JsonRpcProvider(urls[0])
-
-    const providers = urls.map((u, i) => ({
-      provider: new ethers.JsonRpcProvider(u, undefined, { staticNetwork: true }),
-      stallTimeout: 900 + i * 200, // stagger
-      priority: i,
-      weight: 1,
-    }))
-    const fp = new ethers.FallbackProvider(providers, /* quorum */ Math.max(1, Math.ceil(providers.length / 2)))
-    return fp
-  } catch {
-    return new ethers.JsonRpcProvider(primaryRpc)
-  }
-}
-
-/* --------- Transfer-log scan for non-enumerable/sparse IDs --------- */
-async function findTokenIdsByLogs({ provider, nft, address, maxBack = 900_000, chunk = 25_000 }) {
-  try {
-    const latest = await provider.getBlockNumber()
-    const start = Math.max(0, latest - maxBack)
-    const iface = new ethers.Interface(NFT_READ_ABI)
-    const topicTransfer = iface.getEvent('Transfer').topicHash
-    const addrTopic = ethers.zeroPadValue(address, 32).toLowerCase()
-
-    const seen = new Set()
-
-    for (let to = latest; to > start; to -= chunk) {
-      const from = Math.max(start, to - chunk + 1)
-      const logs = await provider.getLogs({
-        address: nft.target || nft.address,
-        fromBlock: from,
-        toBlock: to,
-        topics: [topicTransfer, null, addrTopic],
-      })
-      for (const log of logs) {
-        try {
-          const parsed = iface.parseLog(log)
-          const tid = Number(parsed.args.tokenId)
-          seen.add(tid)
-        } catch {}
-      }
-    }
-
-    // Confirm current ownership
-    const tokenIds = Array.from(seen)
-    const confirmed = []
-    for (const tid of tokenIds) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const who = await nft.ownerOf(tid)
-        if (who && who.toLowerCase() === address.toLowerCase()) confirmed.push(tid)
-      } catch {}
-    }
-    return confirmed.sort((a, b) => a - b)
-  } catch {
-    return []
-  }
-}
-
-/* --------- Sharing helpers (Warpcast / Web Share / Compose fallback) --------- */
-function openComposeUrl({ text, embed }) {
-  const base = 'https://warpcast.com/~/compose'
-  const params = new URLSearchParams()
-  if (text) params.set('text', text)
-  if (embed) params.append('embeds[]', embed)
-  const url = `${base}?${params.toString()}`
-  if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer')
-}
-
-function shareText({ text, embed }) {
-  // 1) Mini app / Warpcast openCast
-  try {
-    if (typeof openCast === 'function') {
-      return openCast({ text, embeds: embed ? [embed] : [] })
-    }
-  } catch (e) {
-    console.warn('openCast failed, falling back:', e)
-  }
-  // 2) Browser share sheet
-  if (typeof navigator !== 'undefined' && navigator.share) {
-    try { return navigator.share({ text, url: embed }) } catch {}
-  }
-  // 3) Compose URL fallback
-  openComposeUrl({ text, embed })
-}
-
 /* ------------- component ------------- */
 function MyRoundsPage() {
   useMiniAppReady()
@@ -240,8 +137,8 @@ function MyRoundsPage() {
     claimPool1,
     BASE_RPC, FILLIN_ADDRESS, NFT_ADDRESS,
 
-    // TxProvider read helpers
-    readTemplateOf, readTokenURI, isWarpcast,
+    // Optional read helpers (used elsewhere)
+    readTemplateOf, readTokenURI,
   } = useTx()
 
   const [loading, setLoading] = useState(false)
@@ -258,9 +155,6 @@ function MyRoundsPage() {
   // NFTs
   const [nfts, setNfts] = useState([])
   const [nftLoading, setNftLoading] = useState(false)
-
-  // enriched nfts with last user word/preview
-  const [displayNfts, setDisplayNfts] = useState([])
 
   // filters
   const [filter, setFilter] = useState('all')
@@ -337,14 +231,9 @@ function MyRoundsPage() {
     return () => { dead = true }
   }, [])
 
-  /* --------- Provider / contract with FallbackProvider --------- */
+  // provider/contract (read-only) for rounds
   const getRead = useCallback(() => {
-    const extras = (process.env.NEXT_PUBLIC_BASE_RPCS || '')
-      .split(',')
-      .map(s => s.trim())
-      .filter(Boolean)
-      .filter(u => u !== BASE_RPC)
-    const provider = makeProvider(BASE_RPC, extras)
+    const provider = new ethers.JsonRpcProvider(BASE_RPC, undefined, { staticNetwork: true })
     const ct = new ethers.Contract(FILLIN_ADDRESS, fillAbi, provider)
     return { provider, ct }
   }, [BASE_RPC, FILLIN_ADDRESS])
@@ -390,7 +279,7 @@ function MyRoundsPage() {
 
           const your = await withRetry(
             () => ct.getPool1Submission(BigInt(id), address),
-            { tries: 3, minDelay: 150, maxDelay: 900, signal }
+            { tries: 2, minDelay: 120, maxDelay: 300, signal }
           ).catch(() => null)
 
           const yourUsername = your?.username ?? your?.[0] ?? ''
@@ -444,7 +333,7 @@ function MyRoundsPage() {
           const creatorAddr = (info.creator_ ?? info[5] ?? '').toString()
           const creatorSub = await withRetry(
             () => ct.getPool1Submission(BigInt(originalId), creatorAddr),
-            { tries: 3, minDelay: 150, maxDelay: 900, signal }
+            { tries: 2, minDelay: 120, maxDelay: 300, signal }
           ).catch(() => null)
           const creatorBlank = Number(creatorSub?.blankIndex ?? creatorSub?.[3] ?? 0)
 
@@ -503,141 +392,30 @@ function MyRoundsPage() {
     }
   }, [claimPool1])
 
-  /* ------------- NFTs ------------- */
-  async function fetchJson(uri) {
-    try {
-      if (!uri) return null
-      if (uri.startsWith('data:')) {
-        const[,payload] = uri.split(',', 2)
-        const json = JSON.parse(decodeURIComponent(payload))
-        return json
-      }
-      const res = await fetch(ipfsToHttp(uri))
-      return await res.json()
-    } catch { return null }
-  }
-
+  /* ------------- NFTs via server API (reliable) ------------- */
   const loadMyNfts = useCallback(async () => {
-    if (!address || !NFT_ADDRESS) { setNfts([]); return }
-    if (abortRef.current) abortRef.current.abort()
-    const controller = new AbortController()
-    abortRef.current = controller
-    const { signal } = controller
-
+    if (!address) { setNfts([]); return }
     setNftLoading(true)
     try {
-      const extras = (process.env.NEXT_PUBLIC_BASE_RPCS || '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean)
-        .filter(u => u !== BASE_RPC)
-      const provider = makeProvider(BASE_RPC, extras)
-      const nft = new ethers.Contract(NFT_ADDRESS, NFT_READ_ABI, provider)
-
-      const bal = Number(await withRetry(() => nft.balanceOf(address), { signal }).catch(() => 0n))
-      if (!bal) { setNfts([]); persistNftCache([]); return }
-
-      let tokens = []
-      let enumerableWorked = true
-
-      // 1) Enumerable lookup
-      for (let i = 0; i < bal; i++) {
-        try {
-          const tid = await withRetry(() => nft.tokenOfOwnerByIndex(address, i), { tries: 3, signal })
-          tokens.push(Number(tid))
-        } catch { enumerableWorked = false; break }
-      }
-
-      // 2) Small brute force (for tiny collections)
-      if (!enumerableWorked && tokens.length < bal) {
-        const total = Number(await withRetry(() => nft.totalSupply(), { signal }).catch(() => 0n))
-        const cap = Math.min(total || 0, 400)
-        for (let tid = 1; tokens.length < bal && tid <= cap; tid++) {
-          // eslint-disable-next-line no-await-in-loop
-          const who = await withRetry(() => nft.ownerOf(tid), { tries: 3, signal }).catch(() => null)
-          if (signal.aborted) return
-          if (who && who.toLowerCase() === address.toLowerCase()) tokens.push(tid)
-        }
-      }
-
-      // 3) Transfer logs scan (handles sparse IDs)
-      if (tokens.length < bal) {
-        const viaLogs = await findTokenIdsByLogs({ provider, nft, address })
-        for (const t of viaLogs) if (!tokens.includes(t)) tokens.push(t)
-      }
-
-      tokens = Array.from(new Set(tokens)).sort((a, b) => a - b)
-
-      // Enrich via TxProvider
-      const enriched = await mapLimit(tokens, 6, async (id) => {
-        if (signal.aborted) return { id }
-        try {
-          const [uri, tpl] = await Promise.all([
-            withRetry(() => readTokenURI(BigInt(id)), { tries: 4, signal }).catch(() => null),
-            withRetry(() => readTemplateOf(BigInt(id)), { tries: 4, signal }).catch(() => null),
-          ])
-
-          const meta = await fetchJson(uri)
-          const ipfsImg = meta?.image || meta?.image_url || ''
-          const image =
-            ipfsToHttp(ipfsImg) ||
-            (ipfsImg && `https://cloudflare-ipfs.com/ipfs/${ipfsImg.replace('ipfs://','')}`) ||
-            (ipfsImg && `https://w3s.link/ipfs/${ipfsImg.replace('ipfs://','')}`)
-
-          const name = meta?.name || tpl?.title || `Template #${id}`
-          const desc = meta?.description || tpl?.description || ''
-          const theme = tpl?.theme || meta?.attributes?.find?.(a => (a.trait_type||'').toLowerCase() === 'theme')?.value || ''
-          const parts = Array.isArray(tpl?.parts) ? tpl.parts : []
-          const author = tpl?.author || ''
-          const templateLine = buildTemplateLine(parts)
-
-          return {
-            id,
-            tokenURI: uri,
-            meta, image,
-            name, desc, theme, author, parts, templateLine,
-          }
-        } catch {
-          return { id, tokenURI: null }
-        }
-      })
-
-      if (signal.aborted) return
-      setNfts(enriched)
-      persistNftCache(enriched)
+      const r = await fetch(`/api/nfts/${address}`)
+      const j = await r.json()
+      const list = (j?.items || []).map((t) => ({
+        ...t,
+        // prebuild reconstructed line if parts exist
+        templateLine: Array.isArray(t.parts) && t.parts.length
+          ? t.parts.reduce((acc, part, i, arr) => acc + String(part || '') + (i < arr.length - 1 ? '____' : ''), '')
+          : (t.desc || '')
+      }))
+      setNfts(list)
+      persistNftCache(list)
     } catch (e) {
-      if (!String(e?.message).includes('aborted')) console.error(e)
+      console.error(e)
     } finally {
-      if (!abortRef.current?.signal?.aborted) setNftLoading(false)
+      setNftLoading(false)
     }
-  }, [address, BASE_RPC, NFT_ADDRESS, persistNftCache, readTemplateOf, readTokenURI])
+  }, [address, persistNftCache])
 
   useEffect(() => { if (address) loadMyNfts() }, [address, loadMyNfts])
-
-  /* ---- Merge user word from joined rounds into NFT display ---- */
-  useEffect(() => {
-    // Build quick hash for parts array equality
-    const hashParts = (arr) => JSON.stringify((arr || []).map(String))
-    const latestByParts = new Map()
-    for (const c of joined) {
-      if (!c?.parts?.length) continue
-      const key = hashParts(c.parts)
-      // keep the newest round id as "latest" submission
-      const prev = latestByParts.get(key)
-      if (!prev || c.id > prev.id) latestByParts.set(key, c)
-    }
-
-    const enriched = nfts.map((t) => {
-      const key = hashParts(t.parts || [])
-      const match = latestByParts.get(key)
-      if (match && match.word) {
-        const filled = buildPreviewSingle(t.parts || [], match.word, match.blankIndex ?? 0)
-        return { ...t, lastWord: match.word, lastBlankIndex: match.blankIndex ?? 0, preview: filled }
-      }
-      return { ...t, preview: t.templateLine }
-    })
-    setDisplayNfts(enriched)
-  }, [nfts, joined])
 
   /* ------------- derived ------------- */
   const allCards = useMemo(() => {
@@ -789,101 +567,66 @@ function MyRoundsPage() {
                 <div className="rounded-xl bg-slate-900/60 border border-slate-700 p-4 text-sm text-slate-300">
                   Loading your NFTs…
                 </div>
-              ) : displayNfts.length === 0 ? (
+              ) : nfts.length === 0 ? (
                 <div className="rounded-xl bg-slate-900/60 border border-slate-700 p-4 text-sm text-slate-300">
                   No MadFill NFTs found for <span className="font-mono">{shortAddr(address)}</span>.
                 </div>
               ) : (
                 <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
-                  {displayNfts.map((t) => {
-                    const filledLine = t.preview || t.templateLine || ''
-                    const castText = [
-                      `🎨 MadFill Template #${t.id}${t.name ? ` — “${t.name}”` : ''}`,
-                      t.theme ? `Theme: ${t.theme}` : null,
-                      t.desc ? `${t.desc}` : null,
-                      filledLine ? `\n${filledLine}` : null,
-                      t.lastWord ? `\nMy word: ${t.lastWord}` : null,
-                      '\n#MadFill #Base',
-                    ].filter(Boolean).join('\n')
+                  {nfts.map((t) => {
+                    const castTxt = t.name
+                      ? `🎨 “${t.name}” — a MadFill Template.\n${t.templateLine || ''}`
+                      : `🎨 My MadFill Template.\n${t.templateLine || ''}`
 
                     return (
-                      <div key={t.id} className="rounded-2xl bg-slate-900/70 border border-slate-700 overflow-hidden">
-                        {/* Visual header: title + theme */}
-                        <div className="p-4 border-b border-slate-800 bg-gradient-to-r from-slate-900 to-slate-800">
-                          <div className="flex items-center justify-between gap-3">
-                            <h3 className="text-xl md:text-2xl font-extrabold tracking-tight text-white truncate">
-                              {t.name || `Template #${t.id}`}
-                            </h3>
-                            {t.theme && (
-                              <span className="shrink-0 px-2 py-1 rounded-full text-[11px] md:text-xs bg-indigo-600/90 text-white border border-indigo-400/40">
-                                {t.theme}
-                              </span>
-                            )}
-                          </div>
-                          {t.author && (
-                            <div className="text-[11px] text-slate-400 mt-1">
-                              by <span className="font-mono">{shortAddr(t.author)}</span>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Optional image (if metadata had one) */}
+                      <div key={t.id} className="rounded-2xl bg-slate-900/60 border border-slate-700 overflow-hidden">
+                        {/* Image (if any) */}
                         {t.image ? (
-                          <div className="aspect-video bg-slate-800 border-b border-slate-800">
+                          <div className="aspect-video bg-slate-800 border-b border-slate-700">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img src={t.image} alt={t.name || `Token #${t.id}`} className="w-full h-full object-cover" />
                           </div>
-                        ) : null}
+                        ) : <div className="aspect-video bg-slate-800 border-b border-slate-700" />}
 
-                        {/* Reconstructed template */}
-                        <div className="p-4 space-y-4">
-                          {t.desc && (
-                            <p className="text-slate-200 text-sm md:text-base leading-relaxed">
-                              {t.desc}
-                            </p>
+                        {/* Reconstructed Template */}
+                        <div className="p-4">
+                          <div className="text-lg md:text-xl font-bold text-white truncate">
+                            {t.name || `Template #${t.id}`}
+                          </div>
+                          {t.theme && (
+                            <div className="text-[13px] text-slate-300 mt-0.5">Theme: {t.theme}</div>
                           )}
 
-                          {filledLine && (
-                            <div className="rounded-xl bg-slate-800/90 border border-slate-700 p-4">
-                              <div className="text-white text-lg md:text-xl leading-8 md:leading-9 font-semibold">
-                                {filledLine}
+                          {t.templateLine && (
+                            <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4">
+                              <div className="text-sm uppercase tracking-wide text-slate-400">Template</div>
+                              <div className="mt-1 text-base md:text-lg leading-relaxed font-semibold text-white break-words">
+                                {t.templateLine}
                               </div>
-                              {t.lastWord && (
-                                <div className="text-[11px] text-slate-400 mt-2">
-                                  Your last entry: <span className="font-semibold text-slate-300">{t.lastWord}</span>
-                                </div>
-                              )}
                             </div>
                           )}
 
-                          <div className="flex flex-wrap gap-2 pt-1 items-center">
+                          {t.desc && (
+                            <div className="mt-3 text-sm text-slate-300 leading-relaxed">{t.desc}</div>
+                          )}
+
+                          <div className="flex flex-wrap gap-2 mt-3">
+                            {/* Removed "View Template" (404) */}
                             <a
                               href={`https://basescan.org/token/${NFT_ADDRESS}?a=${t.id}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                              target="_blank" rel="noopener noreferrer"
                               className="px-3 py-2 rounded-md bg-slate-800 border border-slate-600 hover:bg-slate-700 text-xs"
                             >
                               BaseScan
                             </a>
                             <Button
-                              onClick={() => shareText({ text: castText, embed: undefined })}
+                              onClick={() => shareOrCast({ text: castTxt })}
                               className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs"
-                              title="Cast this template"
                             >
                               Cast
                             </Button>
-                            <Button
-                              variant="outline"
-                              className="px-3 py-2 rounded-md border-slate-600 text-slate-200 text-xs"
-                              onClick={() => { try { navigator.clipboard.writeText(castText) } catch {} }}
-                              title="Copy text"
-                            >
-                              Copy text
-                            </Button>
-                            <div className="text-[11px] text-slate-500 mt-2 break-all">
-                              {t.tokenURI
-                                ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a>
-                                : 'No tokenURI'}
+                            <div className="text-[11px] text-slate-500 self-center">
+                              {t.tokenURI ? <a className="underline" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a> : 'No tokenURI'}
                             </div>
                           </div>
                         </div>
@@ -1003,18 +746,20 @@ function MyRoundsPage() {
                       )}
                     </div>
 
+                    {/* ✅ ShareBar restored for rounds */}
+                    <ShareBar
+                      url={roundUrl}
+                      text={shareTxt}
+                      og={{ screen: 'round', roundId: String(isPool1 ? card.id : card.originalPool1Id) }}
+                      small
+                    />
+
                     <div className="flex gap-2 pt-1">
                       {isPool1 ? (
                         <>
                           <Link href={`/round/${card.id}`} className="w-full">
                             <Button className="w-full bg-indigo-600 hover:bg-indigo-500">View Round</Button>
                           </Link>
-                          <Button
-                            className="w-full bg-fuchsia-600 hover:bg-fuchsia-500"
-                            onClick={() => shareText({ text: shareTxt, embed: roundUrl })}
-                          >
-                            Cast
-                          </Button>
                           {card.ended && card.youWon && !card.claimed && (
                             <Button
                               onClick={() => finalizePool1(card.id)}
@@ -1033,12 +778,6 @@ function MyRoundsPage() {
                           <Link href={`/round/${card.originalPool1Id}`} className="w-full">
                             <Button variant="outline" className="w-full border-slate-600 text-slate-200">View Round</Button>
                           </Link>
-                          <Button
-                            className="w-full bg-indigo-600 hover:bg-indigo-500"
-                            onClick={() => shareText({ text: shareTxt, embed: roundUrl })}
-                          >
-                            Cast
-                          </Button>
                         </>
                       )}
                     </div>
