@@ -12,7 +12,7 @@ import Layout from '@/components/Layout'
 import SEO from '@/components/SEO'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-// import ShareBar from '@/components/ShareBar' // ⚠️ keep disabled to avoid crash
+// import ShareBar from '@/components/ShareBar'
 import Countdown from '@/components/Countdown'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
@@ -28,15 +28,16 @@ const toEth = (wei) => { try { return Number(ethers.formatEther(wei ?? 0n)) } ca
 const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(Number(n || 0))
 const needsSpaceBefore = (str) => !!str && !/\s|[.,!?;:)"'\]]/.test(str[0])
 
-// Highlight "____" nicely in dark mode
+// Highlight "____" and force readable text in dark mode
 function HighlightBlanks({ text }) {
   if (!text) return null
   const parts = String(text).split('____')
   return (
-    <span>
+    <span className="whitespace-pre-wrap text-slate-100">
       {parts.map((chunk, i) => (
         <Fragment key={i}>
-          <span className="text-slate-200">{chunk}</span>
+          {/* force readable color on any inherited dark-theme overrides */}
+          <span className="text-slate-100">{chunk}</span>
           {i < parts.length - 1 && (
             <span className="px-1 rounded-md bg-slate-700/70 text-amber-300 font-semibold align-baseline">
               ____{/* blank */}
@@ -174,7 +175,7 @@ function MyRoundsPage() {
   // filters
   const [filter, setFilter] = useState('all')
   const [sortBy, setSortBy] = useState('newest')
-  const [activeTab, setActiveTab] = useState('templates') // default to templates (nicer ux)
+  const [activeTab, setActiveTab] = useState('templates')
 
   // Abort controller for loads
   const abortRef = useRef(null)
@@ -405,23 +406,25 @@ function MyRoundsPage() {
     if (!address) { setNfts([]); return }
     setNftLoading(true)
     try {
-      const r = await fetch(`/api/nfts/${address}`)
+      const origin = typeof window !== 'undefined' ? window.location.origin : ''
+      const url = `${origin}/api/nfts/${address.toLowerCase()}`
+      const r = await fetch(url, { cache: 'no-store', headers: { 'accept': 'application/json' } })
       if (!r.ok) throw new Error(`NFT API ${r.status}`)
       let j = null
       try { j = await r.json() } catch { j = { items: [] } }
 
       const raw = Array.isArray(j?.items) ? j.items : []
       const list = raw.map((t) => {
-        const parts = Array.isArray(t?.parts) ? t.parts : []
+        const partsArr = Array.isArray(t?.parts) ? t.parts : []
+        const parts = partsArr.map((p) => String(p?.value ?? p ?? ''))
         const word = String(t?.word || '')
 
-        // Prefer reconstructed parts; otherwise fall back to story or description
         const templateLine = parts.length
           ? parts.reduce((acc, part, i) => acc + String(part || '') + (i < parts.length - 1 ? '____' : ''), '')
           : String(t?.story || t?.description || '')
 
         const filledLine = parts.length
-          ? buildPreviewSingle(parts, word, 0) // show an example using the first blank
+          ? buildPreviewSingle(parts, word, 0)
           : (templateLine || '')
 
         return {
@@ -613,8 +616,6 @@ function MyRoundsPage() {
                     const filledCast = t.filledLine
                       ? `🧠 Filled example from “${t.name || `Template #${t.id}` }”\n${t.filledLine}`
                       : ''
-
-                    // Shareable route for unfurls:
                     const templateUrl = absoluteUrl(`/template/${t.id}`)
 
                     return (
@@ -637,7 +638,7 @@ function MyRoundsPage() {
                           )}
 
                           {t.templateLine && (
-                            <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4">
+                            <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4 text-slate-100">
                               <div className="text-[11px] tracking-wide text-slate-400 uppercase">Template</div>
                               <div className="mt-1 text-base md:text-lg leading-relaxed font-medium break-words">
                                 <HighlightBlanks text={t.templateLine} />
@@ -646,16 +647,16 @@ function MyRoundsPage() {
                           )}
 
                           {t.filledLine && t.filledLine !== t.templateLine && (
-                            <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4">
+                            <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4 text-slate-100">
                               <div className="text-[11px] tracking-wide text-slate-400 uppercase">Filled Example</div>
-                              <div className="mt-1 text-base md:text-lg leading-relaxed font-semibold text-slate-100 break-words">
+                              <div className="mt-1 text-base md:text-lg leading-relaxed font-semibold break-words">
                                 {t.filledLine}
                               </div>
                             </div>
                           )}
 
                           {t.desc && (
-                            <div className="mt-3 text-sm text-slate-300 leading-relaxed">{t.desc}</div>
+                            <div className="mt-3 text-sm text-slate-200 leading-relaxed">{t.desc}</div>
                           )}
 
                           <div className="flex flex-wrap gap-2 mt-3 items-center">
@@ -786,14 +787,12 @@ function MyRoundsPage() {
                   </CardHeader>
 
                   <CardContent className="space-y-3 text-sm min-w-0">
-                    <div className="p-3 rounded bg-slate-800/60 border border-slate-700 leading-relaxed break-words">
-                      {/* Ensure readable text + highlighted blanks */}
+                    <div className="p-3 rounded bg-slate-800/60 border border-slate-700 leading-relaxed break-words text-slate-100">
                       {isPool1
                         ? <HighlightBlanks text={card.preview} />
                         : <HighlightBlanks text={card.chPreview} />}
                     </div>
 
-                    {/* Minimal share row (replaces ShareBar to avoid crashes) */}
                     <div className="flex items-center gap-2">
                       <Button
                         variant="outline"
