@@ -25,7 +25,7 @@ const NFT_READ_ABI = [
 /** ---------- Helpers ---------- */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-async function withRetry(fn, { tries = 4, minDelay = 120, maxDelay = 800, signal } = {}) {
+async function withRetry(fn, { tries = 4, minDelay = 120, maxDelay = 900, signal } = {}) {
   let last
   for (let i = 0; i < tries; i++) {
     if (signal?.aborted) throw new Error('aborted')
@@ -33,7 +33,7 @@ async function withRetry(fn, { tries = 4, minDelay = 120, maxDelay = 800, signal
       last = e
       const msg = String(e?.message || e)
       if (/aborted|revert|CALL_EXCEPTION/i.test(msg)) break
-      const backoff = Math.min(maxDelay, minDelay * Math.pow(2, i)) + Math.floor(Math.random() * 80)
+      const backoff = Math.min(maxDelay, minDelay * (1 << i)) + Math.floor(Math.random() * 80)
       await sleep(backoff)
     }
   }
@@ -73,18 +73,90 @@ async function fetchJson(uri) {
       const [, payload] = uri.split(',', 2)
       return JSON.parse(decodeURIComponent(payload))
     }
-    const res = await fetch(ipfsToHttp(uri), { cache: 'no-store' })
-    if (!res.ok) return null
-    return await res.json()
+    const urls = [
+      ipfsToHttp(uri),
+      uri.replace('ipfs://', 'https://cloudflare-ipfs.com/ipfs/'),
+      uri.replace('ipfs://', 'https://w3s.link/ipfs/'),
+    ].filter(Boolean)
+
+    for (const u of urls) {
+      try {
+        const res = await fetch(u, { cache: 'no-store' })
+        if (res.ok) return await res.json()
+      } catch {}
+    }
+    return null
   } catch { return null }
 }
 
+/** Try multiple layouts to extract template parts */
+function extractParts(meta, tpl) {
+  // 1) On-chain tuple wins if present
+  if (tpl && Array.isArray(tpl.parts) && tpl.parts.length) {
+    return tpl.parts.map((s) => String(s ?? ''))
+  }
+
+  // 2) Top-level parts
+  if (Array.isArray(meta?.parts) && meta.parts.length) {
+    return meta.parts.map((s) => String(s ?? ''))
+  }
+
+  // 3) properties.parts (common on some mints)
+  if (Array.isArray(meta?.properties?.parts) && meta.properties.parts.length) {
+    return meta.properties.parts.map((s) => String(s ?? ''))
+  }
+
+  // 4) attributes that look like parts: part_0 / Part 0 / etc
+  if (Array.isArray(meta?.attributes)) {
+    const numbered = []
+    const loose = []
+    for (const a of meta.attributes) {
+      const key = String(a?.trait_type || a?.trait || '').toLowerCase()
+      const val = a?.value ?? ''
+      if (!val && typeof a === 'string') {
+        loose.push(String(a))
+        continue
+      }
+      const m = key.match(/part[_\s-]?(\d+)/i)
+      if (m) {
+        numbered.push({ i: Number(m[1]), v: String(val ?? '') })
+      } else if (/^part$/.test(key)) {
+        loose.push(String(val ?? ''))
+      }
+    }
+    if (numbered.length) {
+      return numbered.sort((a,b)=>a.i-b.i).map(x=>x.v)
+    }
+    if (loose.length) return loose
+  }
+
+  // 5) Fallback: split description around blanks “____”
+  const desc = String(meta?.description || tpl?.description || '')
+  if (desc.includes('____')) {
+    // pieces between blanks; make sure last piece is kept
+    const segs = desc.split('____').map((s) => s)
+    // e.g. A ____ B ____ C  -> parts = ["A ", " B ", " C"]
+    // we want exactly N blanks => N+1 parts
+    return segs
+  }
+
+  return []
+}
+
+/** Guess a user-filled word if present in metadata */
+function extractWord(meta) {
+  if (!Array.isArray(meta?.attributes)) return ''
+  const hit = meta.attributes.find(a =>
+    String(a?.trait_type || '').toLowerCase().includes('word')
+  )
+  return String(hit?.value || '')
+}
+
 /** Scan Transfer logs to find tokenIds when ERC721Enumerable is missing/sparse */
-async function findTokenIdsByLogs({ provider, nftAddress, owner, maxBack = 1200000, chunk = 40000 }) {
+async function findTokenIdsByLogs({ provider, nftAddress, owner, maxBack = 1_200_000, chunk = 40_000 }) {
   try {
     const iface = new ethers.Interface(NFT_READ_ABI)
-    // ✅ ethers v6: use getEventTopic
-    const topicTransfer = iface.getEventTopic('Transfer')
+    const topicTransfer = iface.getEventTopic('Transfer') // ethers v6
     const ownerTopic = ethers.zeroPadValue(owner, 32).toLowerCase()
     const latest = await provider.getBlockNumber()
     const start = Math.max(0, latest - maxBack)
@@ -137,14 +209,13 @@ export default async function handler(req, res) {
 
     const controller = new AbortController()
     const { signal } = controller
-    // cancel after 12s to avoid long Vercel lambdas
     const timeout = setTimeout(() => controller.abort(), 12000)
 
     const provider = new ethers.JsonRpcProvider(BASE_RPC, undefined, { staticNetwork: true })
     const nft = new ethers.Contract(NFT_ADDRESS, NFT_READ_ABI, provider)
 
     // balance
-    const balanceRaw = await withRetry(() => nft.balanceOf(owner), { signal }).catch(() => BigInt(0))
+    const balanceRaw = await withRetry(() => nft.balanceOf(owner), { signal }).catch(() => 0n)
     const bal = Number(balanceRaw || 0)
     if (!bal) {
       clearTimeout(timeout)
@@ -165,7 +236,7 @@ export default async function handler(req, res) {
     }
 
     if (!enumerableOk && tokenIds.length < bal) {
-      const total = Number(await withRetry(() => nft.totalSupply(), { signal }).catch(() => BigInt(0)))
+      const total = Number(await withRetry(() => nft.totalSupply(), { signal }).catch(() => 0n))
       const cap = Math.min(total || 0, 400)
       for (let tid = 1; tokenIds.length < bal && tid <= cap; tid++) {
         // eslint-disable-next-line no-await-in-loop
@@ -195,43 +266,21 @@ export default async function handler(req, res) {
         // image (fallbacks)
         const rawImg = meta?.image || meta?.image_url || ''
         const image =
-          ipfsToHttp(rawImg) ||
+          (rawImg && ipfsToHttp(rawImg)) ||
           (rawImg && `https://cloudflare-ipfs.com/ipfs/${rawImg.replace('ipfs://','')}`) ||
           (rawImg && `https://w3s.link/ipfs/${rawImg.replace('ipfs://','')}`) ||
           ''
 
-        // parts (prefer on-chain templateOf)
-        let parts = []
-        if (Array.isArray(tpl?.parts)) {
-          parts = tpl.parts.map((s) => String(s ?? ''))
-        } else if (Array.isArray(meta?.attributes)) {
-          // try to reconstruct parts if metadata stores them
-          // accept {trait_type, value} or plain strings
-          parts = meta.attributes
-            .map((a) => (typeof a === 'string' ? a : (a?.value ?? '')))
-            .map((s) => String(s ?? ''))
-            .filter((s) => s !== '')
-        }
+        const parts = extractParts(meta, tpl)
+        const wordAttr = extractWord(meta)
 
-        // try to find a "word" attribute (optional)
-        const wordAttr = Array.isArray(meta?.attributes)
-          ? String(
-              (meta.attributes.find(
-                (a) => String(a?.trait_type || '').toLowerCase().includes('word')
-              )?.value ?? '')
-            )
-          : ''
-
-        // description / theme
         const name = meta?.name || tpl?.title || `Template #${id}`
         const description = meta?.description || tpl?.description || ''
-        const theme = tpl?.theme || ''
+        const theme = tpl?.theme || meta?.theme || ''
 
-        // Expand a simple story variant (optional placeholder support)
+        // story with optional {{word}} expansion
         let story = description
-        if (story && wordAttr) {
-          story = story.replace(/\{\{word\}\}/gi, wordAttr)
-        }
+        if (story && wordAttr) story = story.replace(/\{\{word\}\}/gi, wordAttr)
 
         return {
           id,
