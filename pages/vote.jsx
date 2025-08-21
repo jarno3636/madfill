@@ -10,7 +10,6 @@ import dynamic from 'next/dynamic'
 
 import Layout from '@/components/Layout'
 import SEO from '@/components/SEO'
-import ShareBar from '@/components/ShareBar'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import abi from '@/abi/FillInStoryV3_ABI.json'
@@ -21,21 +20,31 @@ import { shareOrCast } from '@/lib/share'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
-// ---- Config ----
+/* ---------------- config ---------------- */
 const CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_FILLIN_ADDRESS ||
   '0x18b2d2993fc73407C163Bd32e73B1Eea0bB4088b'
 const BASE_RPC = process.env.NEXT_PUBLIC_BASE_RPC || 'https://mainnet.base.org'
 
-// util
+/* ---------------- utils ---------------- */
 const nowSec = () => Math.floor(Date.now() / 1000)
+const explorer = (path) => `https://basescan.org/${path}`
+const toEth = (wei) => (wei ? Number(ethers.formatEther(wei)) : 0)
+const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
+
 const buildCastUrl = (text, embeds = []) => {
   const qs = new URLSearchParams({ text })
   for (const e of embeds) qs.append('embeds[]', e)
   return `https://warpcast.com/~/compose?${qs.toString()}`
 }
+const shareToX = (text, url) => {
+  const u = new URL('https://twitter.com/intent/tweet')
+  u.searchParams.set('text', text)
+  if (url) u.searchParams.set('url', url)
+  window.open(u.toString(), '_blank', 'noopener,noreferrer')
+}
 
-// countdown pill
+/* ---------------- minor UI ---------------- */
 function formatRemaining(s) {
   if (s <= 0) return '0:00'
   const d = Math.floor(s / 86400)
@@ -69,7 +78,6 @@ function TimeLeft({ deadline }) {
   )
 }
 
-// Highlight blanks nicely in dark mode
 function HighlightBlanks({ text }) {
   if (!text) return null
   const parts = String(text).split('____')
@@ -79,9 +87,7 @@ function HighlightBlanks({ text }) {
         <Fragment key={i}>
           <span className="text-slate-100">{chunk}</span>
           {i < parts.length - 1 && (
-            <span className="px-1 rounded-md bg-slate-700/70 text-amber-300 font-semibold align-baseline">
-              ____{/* blank */}
-            </span>
+            <span className="px-1 rounded-md bg-slate-700/70 text-amber-300 font-semibold align-baseline">____</span>
           )}
         </Fragment>
       ))}
@@ -89,12 +95,35 @@ function HighlightBlanks({ text }) {
   )
 }
 
+function StatusPill({ deadline }) {
+  const ended = deadline > 0 && nowSec() >= deadline
+  if (!ended)
+    return (
+      <span className="px-2 py-1 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 text-xs">
+        Voting
+      </span>
+    )
+  return (
+    <span className="px-2 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs">
+      Finished
+    </span>
+  )
+}
+
+function WinnerBadge() {
+  return (
+    <span className="absolute -top-2 -right-2 px-2 py-1 rounded-md bg-emerald-600 text-white text-[11px] font-semibold shadow">
+      Winner
+    </span>
+  )
+}
+
+/* ---------------- page ---------------- */
 export default function VotePage() {
   useMiniAppReady()
 
   const { address, isOnBase, isWarpcast, connect, switchToBase, votePool2, claimPool2 } = useTx()
 
-  // state
   const [rounds, setRounds] = useState([]) // Pool2 cards
   const [loading, setLoading] = useState(true)
   const [status, setStatus] = useState('')
@@ -107,11 +136,7 @@ export default function VotePage() {
   const { width, height } = useWindowSize()
   const tickRef = useRef(null)
 
-  // utils
-  const toEth = (wei) => (wei ? Number(ethers.formatEther(wei)) : 0)
-  const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
-  const explorer = (path) => `https://basescan.org/${path}`
-
+  // benign RPC/tx errors we treat as success if chain state confirms
   const benignPatterns = [
     /could not coalesce/i, /already known/i, /replacement transaction underpriced/i,
     /nonce .* too low/i, /fee too low/i, /transaction (?:not )?mined/i,
@@ -121,6 +146,7 @@ export default function VotePage() {
     return benignPatterns.some((re) => re.test(msg))
   }
 
+  // preview helpers
   function parseStoredWord(stored) {
     if (!stored) return { index: 0, word: '' }
     const sep = stored.indexOf('::')
@@ -133,7 +159,6 @@ export default function VotePage() {
     return { index: 0, word: stored }
   }
   const needsSpaceBefore = (str) => !( /\s/.test(str?.[0]) || /[.,!?;:)"'\]]/.test(str?.[0]) )
-
   function buildPreviewSingle(parts, word, blankIndex) {
     const n = parts?.length || 0
     if (n === 0) return ''
@@ -158,7 +183,7 @@ export default function VotePage() {
     return buildPreviewSingle(parts, word, index)
   }
 
-  // price + ticker
+  // price + heartbeat
   useEffect(() => {
     ;(async () => {
       try {
@@ -171,7 +196,7 @@ export default function VotePage() {
     return () => clearInterval(tickRef.current)
   }, [])
 
-  // load Pool2 list
+  /* ---------------- load all P2 ---------------- */
   const abortRef = useRef(null)
   const loadAll = useCallback(async () => {
     if (abortRef.current) abortRef.current.abort()
@@ -198,7 +223,7 @@ export default function VotePage() {
     try {
       const p2Count = Number(await retry(() => ct.pool2Count()))
       if (controller.signal.aborted) return
-      if (!p2Count) { setRounds([]); return }
+      if (!p2Count) { setRounds([]); setLoading(false); return }
 
       const ids = Array.from({ length: p2Count }, (_, i) => i + 1)
       const chunk = (arr, n) => arr.length ? [arr.slice(0, n), ...chunk(arr.slice(n), n)] : []
@@ -278,65 +303,7 @@ export default function VotePage() {
 
   useEffect(() => { loadAll() }, [loadAll])
 
-  // actions
-  async function doVote(id, voteChallenger, feeBaseWei) {
-    const before = rounds.find((r) => r.id === id)
-    const beforeVotes = before ? before.totalVotes : 0
-    try {
-      if (!address) await connect()
-      setStatus('Submitting vote…')
-      await votePool2({ id, voteChallenger, feeWei: feeBaseWei })
-      setStatus('✅ Vote recorded!')
-      setSuccess(true)
-      await reloadCard(id)
-      setTimeout(() => setSuccess(false), 1500)
-    } catch (e) {
-      console.error('Vote error:', e)
-      if (isBenignTxError(e)) {
-        setStatus('⏳ Submitted, verifying on-chain…')
-        await reloadCard(id)
-        const after = rounds.find((r) => r.id === id)
-        const afterVotes = after ? after.totalVotes : beforeVotes
-        if (afterVotes > beforeVotes) {
-          setStatus('✅ Vote recorded!')
-          setSuccess(true)
-          setTimeout(() => setSuccess(false), 1500)
-          return
-        }
-      }
-      setStatus('❌ ' + (e?.shortMessage || e?.message || 'Vote failed'))
-      setSuccess(false)
-    }
-  }
-
-  async function doClaim(id) {
-    const before = rounds.find((r) => r.id === id)
-    const wasClaimed = !!before?.claimed
-    try {
-      if (!address) await connect()
-      setStatus('Claiming…')
-      await claimPool2(id)
-      setClaimedId(id)
-      setStatus('✅ Claimed!')
-      await reloadCard(id)
-      setTimeout(() => setClaimedId(null), 1500)
-    } catch (e) {
-      console.error('Claim error:', e)
-      if (isBenignTxError(e)) {
-        setStatus('⏳ Submitted, verifying on-chain…')
-        await reloadCard(id)
-        const after = rounds.find((r) => r.id === id)
-        if (after?.claimed && !wasClaimed) {
-          setClaimedId(id)
-          setStatus('✅ Claimed!')
-          setTimeout(() => setClaimedId(null), 1500)
-          return
-        }
-      }
-      setStatus('❌ ' + (e?.shortMessage || e?.message || 'Error claiming prize'))
-    }
-  }
-
+  /* ---------------- on-chain refresh for one card ---------------- */
   async function reloadCard(id) {
     try {
       const provider = new ethers.JsonRpcProvider(BASE_RPC)
@@ -394,11 +361,75 @@ export default function VotePage() {
     } catch { /* ignore */ }
   }
 
-  // filters / sorts
+  /* ---------------- actions ---------------- */
+  async function doVote(id, voteChallenger, feeBaseWei) {
+    const before = rounds.find((r) => r.id === id)
+    const beforeVotes = before ? before.totalVotes : 0
+    try {
+      if (!address) await connect()
+      setStatus('Submitting vote…')
+      await votePool2({ id, voteChallenger, feeWei: feeBaseWei })
+      setStatus('✅ Vote recorded!')
+      setSuccess(true)
+      await reloadCard(id)
+      setTimeout(() => setSuccess(false), 1500)
+    } catch (e) {
+      console.error('Vote error:', e)
+      if (isBenignTxError(e)) {
+        setStatus('⏳ Submitted, verifying on-chain…')
+        await reloadCard(id)
+        const after = rounds.find((r) => r.id === id)
+        const afterVotes = after ? after.totalVotes : beforeVotes
+        if (afterVotes > beforeVotes) {
+          setStatus('✅ Vote recorded!')
+          setSuccess(true)
+          setTimeout(() => setSuccess(false), 1500)
+          return
+        }
+      }
+      setStatus('❌ ' + (e?.shortMessage || e?.message || 'Vote failed'))
+      setSuccess(false)
+    }
+  }
+
+  async function doClaim(id) {
+    const before = rounds.find((r) => r.id === id)
+    const wasClaimed = !!before?.claimed
+    try {
+      if (!address) await connect()
+      setStatus('Claiming…')
+      // optimistic set while we handle benign RPC errors
+      setRounds((prev) => prev.map((r) => (r.id === id ? { ...r, claimed: true } : r)))
+      await claimPool2(id)
+      setClaimedId(id)
+      setStatus('✅ Claimed!')
+      await reloadCard(id)
+      setTimeout(() => setClaimedId(null), 1500)
+    } catch (e) {
+      console.error('Claim error:', e)
+      if (isBenignTxError(e)) {
+        setStatus('⏳ Submitted, verifying on-chain…')
+        // keep optimistic flag, then confirm on-chain
+        await reloadCard(id)
+        const after = rounds.find((r) => r.id === id)
+        if ((after?.claimed && !wasClaimed) || wasClaimed) {
+          setClaimedId(id)
+          setStatus('✅ Claimed!')
+          setTimeout(() => setClaimedId(null), 1500)
+          return
+        }
+      }
+      // revert optimistic flag if not confirmed
+      setRounds((prev) => prev.map((r) => (r.id === id ? { ...r, claimed: wasClaimed } : r)))
+      setStatus('❌ ' + (e?.shortMessage || e?.message || 'Error claiming prize'))
+    }
+  }
+
+  /* ---------------- filters / sorts ---------------- */
   const filtered = useMemo(() => {
     return rounds.filter((r) => {
       if (filter === 'big') return r.poolUsd > 25
-      if (filter === 'claimed') return r.deadline > 0 && nowSec() >= r.deadline // show finished
+      if (filter === 'claimed') return r.deadline > 0 && nowSec() >= r.deadline
       if (filter === 'active') return r.deadline > 0 && nowSec() < r.deadline
       return true
     })
@@ -411,36 +442,13 @@ export default function VotePage() {
     return arr.sort((a, b) => b.id - a.id)
   }, [filtered, sortBy])
 
-  // SEO (SSR-safe)
+  /* ---------------- SEO (SSR-safe) ---------------- */
   const pageUrl = absoluteUrl('/vote')
   const ogTitle = 'Community Vote — MadFill'
   const ogDesc = 'Pick the punchline. Vote Original vs Challenger and split the pool with the winners on Base.'
   const ogImage = buildOgUrl({ screen: 'vote', title: 'Community Vote' })
 
-  function StatusPill({ deadline }) {
-    const ended = deadline > 0 && nowSec() >= deadline
-    if (!ended)
-      return (
-        <span className="px-2 py-1 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 text-xs">
-          Voting
-        </span>
-      )
-    return (
-      <span className="px-2 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs">
-        Finished
-      </span>
-    )
-  }
-
-  // winner badge overlay
-  function WinnerBadge() {
-    return (
-      <span className="absolute -top-2 -right-2 px-2 py-1 rounded-md bg-emerald-600 text-white text-[11px] font-semibold shadow">
-        Winner
-      </span>
-    )
-  }
-
+  /* ---------------- UI ---------------- */
   return (
     <Layout>
       <SEO
@@ -558,15 +566,14 @@ export default function VotePage() {
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
             {sorted.map((r) => {
               const roundUrl = absoluteUrl(`/round/${r.originalPool1Id}`)
-              const castTextBase = `Vote on MadFill Challenge #${r.id} (Round #${r.originalPool1Id})`
-              const castHref = buildCastUrl(castTextBase, [roundUrl])
+
+              // Dynamic cast texts for card previews
+              const castOriginalText = `😂 Original — Round #${r.originalPool1Id}\n${r.originalPreview}\n\nVote now: ${roundUrl}`
+              const castChallengerText = `😆 Challenger — Round #${r.originalPool1Id}${r.challengerUsername ? ` by @${r.challengerUsername}` : ''}\n${r.challengerPreview}\n\nVote now: ${roundUrl}`
+              const castGenericText = `Vote on MadFill Challenge #${r.id} (Round #${r.originalPool1Id})`
 
               const ended = r.deadline > 0 && nowSec() >= r.deadline
               const winnerIsChallenger = ended ? r.challengerWon : null
-
-              // Dynamic cast texts (Original / Challenger)
-              const castOriginalText = `😂 Original — Round #${r.originalPool1Id}\n${r.originalPreview}\n\nVote now: ${roundUrl}`
-              const castChallengerText = `😆 Challenger — Round #${r.originalPool1Id}${r.challengerUsername ? ` by @${r.challengerUsername}` : ''}\n${r.challengerPreview}\n\nVote now: ${roundUrl}`
 
               return (
                 <Card key={r.id} className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700 min-w-0 overflow-hidden">
@@ -604,6 +611,25 @@ export default function VotePage() {
                         <div className="mt-1 italic leading-relaxed break-words">
                           <HighlightBlanks text={r.originalPreview} />
                         </div>
+                        {/* Share row for Original */}
+                        <div className="mt-3 flex gap-2">
+                          <Button
+                            variant="outline"
+                            className="border-slate-600 text-slate-200 text-xs"
+                            onClick={() => shareOrCast({ text: castOriginalText, url: roundUrl })}
+                            title="Cast Original to Warpcast"
+                          >
+                            Cast Original
+                          </Button>
+                          <Button
+                            variant="outline"
+                            className="border-slate-600 text-slate-200 text-xs"
+                            onClick={() => shareToX(castOriginalText, roundUrl)}
+                            title="Share Original on X"
+                          >
+                            Share on X
+                          </Button>
+                        </div>
                       </div>
 
                       <div id={`ch-${r.id}`} className="relative rounded-lg bg-slate-800/60 border border-slate-700 p-3">
@@ -614,10 +640,29 @@ export default function VotePage() {
                         <div className="mt-1 italic leading-relaxed break-words">
                           <HighlightBlanks text={r.challengerPreview} />
                         </div>
+                        {/* Share row for Challenger */}
+                        <div className="mt-3 flex gap-2">
+                          <Button
+                            variant="outline"
+                            className="border-slate-600 text-slate-200 text-xs"
+                            onClick={() => shareOrCast({ text: castChallengerText, url: roundUrl })}
+                            title="Cast Challenger to Warpcast"
+                          >
+                            Cast Challenger
+                          </Button>
+                          <Button
+                            variant="outline"
+                            className="border-slate-600 text-slate-200 text-xs"
+                            onClick={() => shareToX(castChallengerText, roundUrl)}
+                            title="Share Challenger on X"
+                          >
+                            Share on X
+                          </Button>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Stats: total votes only */}
+                    {/* Stats */}
                     <div className="flex flex-wrap items-center gap-2 text-sm">
                       <span className="px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700">
                         Pool: {fmt(r.poolEth, 6)} ETH (~${fmt(r.poolUsd)})
@@ -654,9 +699,7 @@ export default function VotePage() {
                           <Button
                             onClick={() => doClaim(r.id)}
                             disabled={r.claimed}
-                            className={`${
-                              r.claimed ? 'bg-slate-700 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500'
-                            }`}
+                            className={`${r.claimed ? 'bg-slate-700 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500'}`}
                             title={r.claimed ? 'Already claimed' : 'Claim your share if you were on the winning side'}
                           >
                             {r.claimed ? 'Already Claimed' : 'Claim winnings'}
@@ -664,11 +707,10 @@ export default function VotePage() {
                         </>
                       )}
 
-                      {/* Social: dynamic Warpcast + existing ShareBar */}
+                      {/* Generic social (dynamic OG from /round/:id) */}
                       <div className="ml-auto flex items-center gap-2 min-w-0">
-                        {/* Generic cast */}
                         <a
-                          href={castHref}
+                          href={buildCastUrl(castGenericText, [roundUrl])}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs shrink-0"
@@ -676,31 +718,14 @@ export default function VotePage() {
                         >
                           Cast
                         </a>
-                        {/* Dynamic casts */}
                         <Button
                           variant="outline"
                           className="border-slate-600 text-slate-200 text-xs"
-                          onClick={() => shareOrCast({ text: castOriginalText, url: roundUrl })}
-                          title="Cast Original text"
+                          onClick={() => shareToX(castGenericText, roundUrl)}
+                          title="Share on X"
                         >
-                          Cast Original
+                          Share on X
                         </Button>
-                        <Button
-                          variant="outline"
-                          className="border-slate-600 text-slate-200 text-xs"
-                          onClick={() => shareOrCast({ text: castChallengerText, url: roundUrl })}
-                          title="Cast Challenger text"
-                        >
-                          Cast Challenger
-                        </Button>
-
-                        <ShareBar
-                          url={roundUrl}
-                          text={castTextBase}
-                          small
-                          className="min-w-0"
-                          og={{ screen: 'round', roundId: String(r.originalPool1Id) }}
-                        />
                       </div>
                     </div>
 
