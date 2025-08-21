@@ -168,7 +168,6 @@ function MyRoundsPage() {
   const [voted, setVoted] = useState([])
 
   // NFTs
-  the:
   const [nfts, setNfts] = useState([])
   const [nftLoading, setNftLoading] = useState(false)
 
