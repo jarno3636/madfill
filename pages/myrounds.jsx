@@ -12,7 +12,7 @@ import Layout from '@/components/Layout'
 import SEO from '@/components/SEO'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-// import ShareBar from '@/components/ShareBar'
+// import ShareBar from '@/components/ShareBar' // ⚠️ keep disabled to avoid crash
 import Countdown from '@/components/Countdown'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
@@ -28,15 +28,14 @@ const toEth = (wei) => { try { return Number(ethers.formatEther(wei ?? 0n)) } ca
 const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(Number(n || 0))
 const needsSpaceBefore = (str) => !!str && !/\s|[.,!?;:)"'\]]/.test(str[0])
 
-// Highlight "____" and force readable text in dark mode
+// Highlight "____" nicely in dark mode
 function HighlightBlanks({ text }) {
   if (!text) return null
   const parts = String(text).split('____')
   return (
-    <span className="whitespace-pre-wrap text-slate-100">
+    <span>
       {parts.map((chunk, i) => (
         <Fragment key={i}>
-          {/* force readable color on any inherited dark-theme overrides */}
           <span className="text-slate-100">{chunk}</span>
           {i < parts.length - 1 && (
             <span className="px-1 rounded-md bg-slate-700/70 text-amber-300 font-semibold align-baseline">
@@ -169,13 +168,14 @@ function MyRoundsPage() {
   const [voted, setVoted] = useState([])
 
   // NFTs
+  the:
   const [nfts, setNfts] = useState([])
   const [nftLoading, setNftLoading] = useState(false)
 
   // filters
   const [filter, setFilter] = useState('all')
   const [sortBy, setSortBy] = useState('newest')
-  const [activeTab, setActiveTab] = useState('templates')
+  const [activeTab, setActiveTab] = useState('templates') // default to templates (nicer ux)
 
   // Abort controller for loads
   const abortRef = useRef(null)
@@ -406,25 +406,23 @@ function MyRoundsPage() {
     if (!address) { setNfts([]); return }
     setNftLoading(true)
     try {
-      const origin = typeof window !== 'undefined' ? window.location.origin : ''
-      const url = `${origin}/api/nfts/${address.toLowerCase()}`
-      const r = await fetch(url, { cache: 'no-store', headers: { 'accept': 'application/json' } })
+      const r = await fetch(`/api/nfts/${address}`)
       if (!r.ok) throw new Error(`NFT API ${r.status}`)
       let j = null
       try { j = await r.json() } catch { j = { items: [] } }
 
       const raw = Array.isArray(j?.items) ? j.items : []
       const list = raw.map((t) => {
-        const partsArr = Array.isArray(t?.parts) ? t.parts : []
-        const parts = partsArr.map((p) => String(p?.value ?? p ?? ''))
+        const parts = Array.isArray(t?.parts) ? t.parts : []
         const word = String(t?.word || '')
 
+        // Prefer reconstructed parts; otherwise fall back to story or description
         const templateLine = parts.length
           ? parts.reduce((acc, part, i) => acc + String(part || '') + (i < parts.length - 1 ? '____' : ''), '')
           : String(t?.story || t?.description || '')
 
         const filledLine = parts.length
-          ? buildPreviewSingle(parts, word, 0)
+          ? buildPreviewSingle(parts, word, 0) // show an example using the first blank
           : (templateLine || '')
 
         return {
@@ -616,7 +614,6 @@ function MyRoundsPage() {
                     const filledCast = t.filledLine
                       ? `🧠 Filled example from “${t.name || `Template #${t.id}` }”\n${t.filledLine}`
                       : ''
-                    const templateUrl = absoluteUrl(`/template/${t.id}`)
 
                     return (
                       <div key={t.id} className="rounded-2xl bg-slate-900/60 border border-slate-700 overflow-hidden">
@@ -638,7 +635,7 @@ function MyRoundsPage() {
                           )}
 
                           {t.templateLine && (
-                            <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4 text-slate-100">
+                            <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4 mf-force-light mf-prose text-slate-100">
                               <div className="text-[11px] tracking-wide text-slate-400 uppercase">Template</div>
                               <div className="mt-1 text-base md:text-lg leading-relaxed font-medium break-words">
                                 <HighlightBlanks text={t.templateLine} />
@@ -647,7 +644,7 @@ function MyRoundsPage() {
                           )}
 
                           {t.filledLine && t.filledLine !== t.templateLine && (
-                            <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4 text-slate-100">
+                            <div className="mt-3 rounded-xl bg-slate-800/80 border border-slate-700 p-4 mf-force-light mf-prose text-slate-100">
                               <div className="text-[11px] tracking-wide text-slate-400 uppercase">Filled Example</div>
                               <div className="mt-1 text-base md:text-lg leading-relaxed font-semibold break-words">
                                 {t.filledLine}
@@ -656,7 +653,7 @@ function MyRoundsPage() {
                           )}
 
                           {t.desc && (
-                            <div className="mt-3 text-sm text-slate-200 leading-relaxed">{t.desc}</div>
+                            <div className="mt-3 text-sm text-slate-300 leading-relaxed">{t.desc}</div>
                           )}
 
                           <div className="flex flex-wrap gap-2 mt-3 items-center">
@@ -667,27 +664,20 @@ function MyRoundsPage() {
                             >
                               BaseScan
                             </a>
-
-                            <Link href={`/template/${t.id}`} className="px-3 py-2 rounded-md bg-slate-800 border border-slate-600 hover:bg-slate-700 text-xs text-slate-200">
-                              Open
-                            </Link>
-
                             <Button
-                              onClick={() => shareOrCast({ text: templateCast, url: templateUrl })}
+                              onClick={() => shareOrCast({ text: templateCast })}
                               className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs"
                             >
                               Cast Template
                             </Button>
-
                             {filledCast ? (
                               <Button
-                                onClick={() => shareOrCast({ text: filledCast, url: templateUrl })}
+                                onClick={() => shareOrCast({ text: filledCast })}
                                 className="px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs"
                               >
                                 Cast Filled
                               </Button>
                             ) : null}
-
                             <div className="text-[11px] text-slate-400">
                               {t.tokenURI ? <a className="underline hover:text-slate-200" href={ipfsToHttp(t.tokenURI)} target="_blank" rel="noreferrer">tokenURI</a> : 'No tokenURI'}
                             </div>
@@ -787,12 +777,14 @@ function MyRoundsPage() {
                   </CardHeader>
 
                   <CardContent className="space-y-3 text-sm min-w-0">
-                    <div className="p-3 rounded bg-slate-800/60 border border-slate-700 leading-relaxed break-words text-slate-100">
+                    <div className="p-3 rounded bg-slate-800/60 border border-slate-700 leading-relaxed break-words mf-force-light mf-prose text-slate-100">
+                      {/* Ensure readable text + highlighted blanks */}
                       {isPool1
                         ? <HighlightBlanks text={card.preview} />
                         : <HighlightBlanks text={card.chPreview} />}
                     </div>
 
+                    {/* Minimal share row (replaces ShareBar to avoid crashes) */}
                     <div className="flex items-center gap-2">
                       <Button
                         variant="outline"
