@@ -1,7 +1,7 @@
 // pages/vote.jsx
 'use client'
 
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback, Fragment } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import { ethers } from 'ethers'
@@ -17,6 +17,7 @@ import abi from '@/abi/FillInStoryV3_ABI.json'
 import { absoluteUrl, buildOgUrl } from '@/lib/seo'
 import { useMiniAppReady } from '@/hooks/useMiniAppReady'
 import { useTx } from '@/components/TxProvider'
+import { shareOrCast } from '@/lib/share'
 
 const Confetti = dynamic(() => import('react-confetti'), { ssr: false })
 
@@ -51,13 +52,39 @@ function TimeLeft({ deadline }) {
     const id = setInterval(() => setLeft(Math.max(0, (deadline || 0) - nowSec())), 1000)
     return () => clearInterval(id)
   }, [deadline])
-  if (!deadline || left <= 0) return null
+  if (!deadline) return null
+  if (left <= 0)
+    return (
+      <span className="px-2 py-0.5 rounded-full bg-slate-700/60 border border-slate-600 text-slate-200 text-[11px] font-medium whitespace-nowrap">
+        🏁 Ended
+      </span>
+    )
   return (
     <span
       className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-400/30 text-amber-200 text-[11px] font-medium whitespace-nowrap"
       title={`${left} seconds left`}
     >
       ⏳ {formatRemaining(left)} left
+    </span>
+  )
+}
+
+// Highlight blanks nicely in dark mode
+function HighlightBlanks({ text }) {
+  if (!text) return null
+  const parts = String(text).split('____')
+  return (
+    <span>
+      {parts.map((chunk, i) => (
+        <Fragment key={i}>
+          <span className="text-slate-100">{chunk}</span>
+          {i < parts.length - 1 && (
+            <span className="px-1 rounded-md bg-slate-700/70 text-amber-300 font-semibold align-baseline">
+              ____{/* blank */}
+            </span>
+          )}
+        </Fragment>
+      ))}
     </span>
   )
 }
@@ -198,7 +225,6 @@ export default function VotePage() {
         const feeBase = info.feeBase ?? info[9] ?? info[10]
         const deadline = Number(info.deadline ?? info[10] ?? info[11] ?? 0)
 
-        // We still read counts once (no extra calls) to compute total — not shown by side.
         const votersOriginal = Number(info.votersOriginalCount ?? info[4] ?? 0)
         const votersChallenger = Number(info.votersChallengerCount ?? info[5] ?? 0)
         const totalVotes = Math.max(0, votersOriginal + votersChallenger)
@@ -217,8 +243,7 @@ export default function VotePage() {
         const poolEth = toEth(poolBalance)
         const poolUsd = poolEth * priceUsd
         const feeEth = toEth(feeBase)
-        const remaining = Math.max(0, deadline - nowSec())
-        const totalSeconds = Math.max(1, remaining)
+        const totalSeconds = Math.max(1, Math.max(0, deadline - nowSec()))
 
         return {
           id,
@@ -229,7 +254,6 @@ export default function VotePage() {
           challengerPreview,
           challengerWordRaw,
           challengerUsername,
-          // hide side counts in UI; keep only total
           totalVotes,
           claimed,
           challengerWon,
@@ -370,12 +394,12 @@ export default function VotePage() {
     } catch { /* ignore */ }
   }
 
-  // filters / sorts (no “tight” filter anymore; “votes” uses totalVotes)
+  // filters / sorts
   const filtered = useMemo(() => {
     return rounds.filter((r) => {
       if (filter === 'big') return r.poolUsd > 25
-      if (filter === 'claimed') return r.claimed
-      if (filter === 'active') return !r.claimed
+      if (filter === 'claimed') return r.deadline > 0 && nowSec() >= r.deadline // show finished
+      if (filter === 'active') return r.deadline > 0 && nowSec() < r.deadline
       return true
     })
   }, [rounds, filter])
@@ -393,8 +417,9 @@ export default function VotePage() {
   const ogDesc = 'Pick the punchline. Vote Original vs Challenger and split the pool with the winners on Base.'
   const ogImage = buildOgUrl({ screen: 'vote', title: 'Community Vote' })
 
-  function StatusPill({ claimed, challengerWon }) {
-    if (!claimed)
+  function StatusPill({ deadline }) {
+    const ended = deadline > 0 && nowSec() >= deadline
+    if (!ended)
       return (
         <span className="px-2 py-1 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 text-xs">
           Voting
@@ -402,12 +427,20 @@ export default function VotePage() {
       )
     return (
       <span className="px-2 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs">
-        {challengerWon ? 'Challenger Won' : 'Original Won'}
+        Finished
       </span>
     )
   }
 
-  // UI
+  // winner badge overlay
+  function WinnerBadge() {
+    return (
+      <span className="absolute -top-2 -right-2 px-2 py-1 rounded-md bg-emerald-600 text-white text-[11px] font-semibold shadow">
+        Winner
+      </span>
+    )
+  }
+
   return (
     <Layout>
       <SEO
@@ -525,16 +558,23 @@ export default function VotePage() {
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
             {sorted.map((r) => {
               const roundUrl = absoluteUrl(`/round/${r.originalPool1Id}`)
-              const castText = `Vote on MadFill Challenge #${r.id} (Round #${r.originalPool1Id})`
-              const castHref = buildCastUrl(castText, [roundUrl])
+              const castTextBase = `Vote on MadFill Challenge #${r.id} (Round #${r.originalPool1Id})`
+              const castHref = buildCastUrl(castTextBase, [roundUrl])
+
+              const ended = r.deadline > 0 && nowSec() >= r.deadline
+              const winnerIsChallenger = ended ? r.challengerWon : null
+
+              // Dynamic cast texts (Original / Challenger)
+              const castOriginalText = `😂 Original — Round #${r.originalPool1Id}\n${r.originalPreview}\n\nVote now: ${roundUrl}`
+              const castChallengerText = `😆 Challenger — Round #${r.originalPool1Id}${r.challengerUsername ? ` by @${r.challengerUsername}` : ''}\n${r.challengerPreview}\n\nVote now: ${roundUrl}`
 
               return (
                 <Card key={r.id} className="bg-slate-900/80 text-white shadow-xl ring-1 ring-slate-700 min-w-0 overflow-hidden">
                   <CardHeader className="flex items-start justify-between gap-2 bg-slate-800/60 border-b border-slate-700 min-w-0">
                     <div className="space-y-0.5 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs"><StatusPill claimed={r.claimed} challengerWon={r.challengerWon} /></span>
-                        {!r.claimed && r.deadline > 0 && <TimeLeft deadline={r.deadline} />}
+                        <span className="text-xs"><StatusPill deadline={r.deadline} /></span>
+                        <TimeLeft deadline={r.deadline} />
                         <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800/80 border border-slate-700">
                           Challenge #{r.id}
                         </span>
@@ -555,18 +595,25 @@ export default function VotePage() {
                     </a>
                   </CardHeader>
 
-                  <CardContent className="p-5 space-y-3 min-w-0 overflow-hidden">
+                  <CardContent className="p-5 space-y-4 min-w-0 overflow-hidden">
                     {/* Compare */}
                     <div className="grid grid-cols-1 gap-3">
-                      <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
+                      <div className="relative rounded-lg bg-slate-800/60 border border-slate-700 p-3">
+                        {ended && winnerIsChallenger === false && <WinnerBadge />}
                         <div className="text-slate-300 text-sm">😂 Original</div>
-                        <div className="mt-1 italic leading-relaxed break-words">{r.originalPreview}</div>
+                        <div className="mt-1 italic leading-relaxed break-words">
+                          <HighlightBlanks text={r.originalPreview} />
+                        </div>
                       </div>
-                      <div id={`ch-${r.id}`} className="rounded-lg bg-slate-800/60 border border-slate-700 p-3">
+
+                      <div id={`ch-${r.id}`} className="relative rounded-lg bg-slate-800/60 border border-slate-700 p-3">
+                        {ended && winnerIsChallenger === true && <WinnerBadge />}
                         <div className="text-slate-300 text-sm">
                           😆 Challenger {r.challengerUsername ? <span className="text-slate-400">by @{r.challengerUsername}</span> : null}
                         </div>
-                        <div className="mt-1 italic leading-relaxed break-words">{r.challengerPreview}</div>
+                        <div className="mt-1 italic leading-relaxed break-words">
+                          <HighlightBlanks text={r.challengerPreview} />
+                        </div>
                       </div>
                     </div>
 
@@ -585,7 +632,7 @@ export default function VotePage() {
 
                     {/* Actions */}
                     <div className="flex flex-wrap items-center gap-3 min-w-0">
-                      {!r.claimed ? (
+                      {!ended ? (
                         <>
                           <Button onClick={() => doVote(r.id, true, r.feeBaseWei)} className="bg-blue-600 hover:bg-blue-500">
                             Vote Challenger
@@ -604,14 +651,22 @@ export default function VotePage() {
                       ) : (
                         <>
                           <span className="text-sm text-slate-300">🏁 Voting Ended</span>
-                          <Button onClick={() => doClaim(r.id)} className="bg-indigo-600 hover:bg-indigo-500">
-                            Claim (if you were on the winning side)
+                          <Button
+                            onClick={() => doClaim(r.id)}
+                            disabled={r.claimed}
+                            className={`${
+                              r.claimed ? 'bg-slate-700 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500'
+                            }`}
+                            title={r.claimed ? 'Already claimed' : 'Claim your share if you were on the winning side'}
+                          >
+                            {r.claimed ? 'Already Claimed' : 'Claim winnings'}
                           </Button>
                         </>
                       )}
 
                       {/* Social: dynamic Warpcast + existing ShareBar */}
                       <div className="ml-auto flex items-center gap-2 min-w-0">
+                        {/* Generic cast */}
                         <a
                           href={castHref}
                           target="_blank"
@@ -621,9 +676,27 @@ export default function VotePage() {
                         >
                           Cast
                         </a>
+                        {/* Dynamic casts */}
+                        <Button
+                          variant="outline"
+                          className="border-slate-600 text-slate-200 text-xs"
+                          onClick={() => shareOrCast({ text: castOriginalText, url: roundUrl })}
+                          title="Cast Original text"
+                        >
+                          Cast Original
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="border-slate-600 text-slate-200 text-xs"
+                          onClick={() => shareOrCast({ text: castChallengerText, url: roundUrl })}
+                          title="Cast Challenger text"
+                        >
+                          Cast Challenger
+                        </Button>
+
                         <ShareBar
                           url={roundUrl}
-                          text={castText}
+                          text={castTextBase}
                           small
                           className="min-w-0"
                           og={{ screen: 'round', roundId: String(r.originalPool1Id) }}
