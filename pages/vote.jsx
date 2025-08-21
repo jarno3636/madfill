@@ -32,17 +32,50 @@ const explorer = (path) => `https://basescan.org/${path}`
 const toEth = (wei) => (wei ? Number(ethers.formatEther(wei)) : 0)
 const fmt = (n, d = 2) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n)
 
-const buildCastUrl = (text, embeds = []) => {
-  const qs = new URLSearchParams({ text })
-  for (const e of embeds) qs.append('embeds[]', e)
-  return `https://warpcast.com/~/compose?${qs.toString()}`
-}
 const shareToX = (text, url) => {
-  const u = new URL('https://twitter.com/intent/tweet')
-  u.searchParams.set('text', text)
-  if (url) u.searchParams.set('url', url)
-  window.open(u.toString(), '_blank', 'noopener,noreferrer')
+  try {
+    const u = new URL('https://twitter.com/intent/tweet')
+    u.searchParams.set('text', text)
+    if (url) u.searchParams.set('url', url)
+    window.open(u.toString(), '_blank', 'noopener,noreferrer')
+  } catch {}
 }
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+async function withRetry(fn, { tries = 4, minDelay = 150, maxDelay = 800, signal } = {}) {
+  let lastErr
+  for (let i = 0; i < tries; i++) {
+    if (signal?.aborted) throw new Error('aborted')
+    try { return await fn() } catch (e) {
+      lastErr = e
+      const msg = String(e?.message || e)
+      // don’t hammer on clear reverts
+      if (/aborted|revert|CALL_EXCEPTION/i.test(msg)) break
+      const backoff = Math.min(maxDelay, minDelay * Math.pow(2, i))
+      const jitter = Math.floor(Math.random() * 80)
+      await sleep(backoff + jitter)
+    }
+  }
+  throw lastErr
+}
+function mapLimit(items, limit, worker) {
+  let i = 0, active = 0
+  const out = new Array(items.length)
+  return new Promise((resolve) => {
+    const next = () => {
+      if (i >= items.length && active === 0) return resolve(out)
+      while (active < limit && i < items.length) {
+        const idx = i++, it = items[idx]; active++
+        Promise.resolve(worker(it, idx))
+          .then((res) => { out[idx] = res })
+          .catch((err) => { out[idx] = { __error: err } })
+          .finally(() => { active--; next() })
+      }
+    }
+    next()
+  })
+}
+const CONCURRENCY = 8
 
 /* ---------------- minor UI ---------------- */
 function formatRemaining(s) {
@@ -121,10 +154,9 @@ function WinnerBadge() {
 /* ---------------- page ---------------- */
 export default function VotePage() {
   useMiniAppReady()
-
   const { address, isOnBase, isWarpcast, connect, switchToBase, votePool2, claimPool2 } = useTx()
 
-  const [rounds, setRounds] = useState([]) // Pool2 cards
+  const [rounds, setRounds] = useState([])
   const [loading, setLoading] = useState(true)
   const [status, setStatus] = useState('')
   const [success, setSuccess] = useState(false)
@@ -183,6 +215,21 @@ export default function VotePage() {
     return buildPreviewSingle(parts, word, index)
   }
 
+  // cache keys (vote page doesn’t depend on wallet; cache by contract)
+  const cacheKey = `vote:p2:${CONTRACT_ADDRESS.toLowerCase()}`
+  const hydrateFromCache = useCallback(() => {
+    try {
+      const j = JSON.parse(localStorage.getItem(cacheKey) || '{}')
+      if (Array.isArray(j?.data)) setRounds(j.data)
+      if (j?.status) setStatus(j.status)
+    } catch {}
+  }, [cacheKey])
+  const persistCache = useCallback((data, statusMsg = '') => {
+    try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), data, status: statusMsg })) } catch {}
+  }, [cacheKey])
+
+  useEffect(() => { hydrateFromCache() }, [hydrateFromCache])
+
   // price + heartbeat
   useEffect(() => {
     ;(async () => {
@@ -196,7 +243,7 @@ export default function VotePage() {
     return () => clearInterval(tickRef.current)
   }, [])
 
-  /* ---------------- load all P2 ---------------- */
+  /* ---------------- load all P2 (robust) ---------------- */
   const abortRef = useRef(null)
   const loadAll = useCallback(async () => {
     if (abortRef.current) abortRef.current.abort()
@@ -209,104 +256,101 @@ export default function VotePage() {
     const provider = new ethers.JsonRpcProvider(BASE_RPC, undefined, { staticNetwork: true })
     const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
 
-    const retry = async (fn, tries = 3) => {
-      let lastErr
-      for (let i = 0; i < tries; i++) {
-        try {
-          if (controller.signal.aborted) throw new Error('aborted')
-          return await fn()
-        } catch (e) { lastErr = e; await new Promise(res => setTimeout(res, 200 * (i + 1))) }
-      }
-      throw lastErr
-    }
-
     try {
-      const p2Count = Number(await retry(() => ct.pool2Count()))
+      const total = Number(await withRetry(() => ct.pool2Count(), { signal: controller.signal }))
       if (controller.signal.aborted) return
-      if (!p2Count) { setRounds([]); setLoading(false); return }
+      if (!total) { setRounds([]); persistCache([]); setLoading(false); return }
 
-      const ids = Array.from({ length: p2Count }, (_, i) => i + 1)
-      const chunk = (arr, n) => arr.length ? [arr.slice(0, n), ...chunk(arr.slice(n), n)] : []
-      const chunks = chunk(ids.reverse(), 25)
+      // newest first
+      const ids = Array.from({ length: total }, (_, i) => total - i)
 
-      const results = []
-      for (const group of chunks) {
-        const infos = await Promise.allSettled(
-          group.map((id) =>
-            retry(() => ct.getPool2InfoFull(BigInt(id))).then((info) => ({ id, info }))
-          )
-        )
-        for (const r of infos) if (r.status === 'fulfilled') results.push(r.value)
-        if (controller.signal.aborted) return
-      }
+      // fetch each P2, then enrich with P1 pieces using limited concurrency
+      const rows = await mapLimit(ids, CONCURRENCY, async (id) => {
+        if (controller.signal.aborted) return null
+        try {
+          const info = await withRetry(() => ct.getPool2InfoFull(BigInt(id)), { signal: controller.signal })
+          const originalPool1Id = Number(info.originalPool1Id ?? info[0])
+          const challengerWordRaw = info.challengerWord ?? info[1]
+          const challengerUsername = info.challengerUsername ?? info[2]
+          const votersOriginal = Number(info.votersOriginalCount ?? info[4] ?? 0)
+          const votersChallenger = Number(info.votersChallengerCount ?? info[5] ?? 0)
+          const claimed = Boolean(info.claimed ?? info[6])
+          const challengerWon = Boolean(info.challengerWon ?? info[7])
+          const poolBalance = info.poolBalance ?? info[8]
+          const feeBase = info.feeBase ?? info[9] ?? info[10]
+          const deadline = Number(info.deadline ?? info[10] ?? info[11] ?? 0)
 
-      const enriched = await Promise.all(results.map(async ({ id, info }) => {
-        const originalPool1Id = Number(info.originalPool1Id ?? info[0])
-        const challengerWordRaw = info.challengerWord ?? info[1]
-        const challengerUsername = info.challengerUsername ?? info[2]
-        const claimed = Boolean(info.claimed ?? info[6])
-        const challengerWon = Boolean(info.challengerWon ?? info[7])
-        const poolBalance = info.poolBalance ?? info[8]
-        const feeBase = info.feeBase ?? info[9] ?? info[10]
-        const deadline = Number(info.deadline ?? info[10] ?? info[11] ?? 0)
+          const p1 = await withRetry(() => ct.getPool1Info(BigInt(originalPool1Id)), { signal: controller.signal })
+          const parts = p1.parts_ || p1[2]
+          const creatorAddr = p1.creator_ || p1[5]
+          const p1CreatorSub = await withRetry(
+            () => ct.getPool1Submission(BigInt(originalPool1Id), creatorAddr),
+            { tries: 3, minDelay: 120, maxDelay: 300, signal: controller.signal }
+          ).catch(() => null)
+          const originalWordRaw = p1CreatorSub?.word || p1CreatorSub?.[1] || ''
 
-        const votersOriginal = Number(info.votersOriginalCount ?? info[4] ?? 0)
-        const votersChallenger = Number(info.votersChallengerCount ?? info[5] ?? 0)
-        const totalVotes = Math.max(0, votersOriginal + votersChallenger)
+          const originalPreview = buildPreviewFromStored(parts, originalWordRaw)
+          const challengerPreview = buildPreviewFromStored(parts, challengerWordRaw)
 
-        const p1 = await retry(() => ct.getPool1Info(BigInt(originalPool1Id)))
-        const parts = p1.parts_ || p1[2]
-        const creatorAddr = p1.creator_ || p1[5]
-        const p1CreatorSub = await retry(() =>
-          ct.getPool1Submission(BigInt(originalPool1Id), creatorAddr)
-        )
-        const originalWordRaw = p1CreatorSub.word || p1CreatorSub[1]
+          const poolEth = toEth(poolBalance)
+          const poolUsd = poolEth * priceUsd
+          const feeEth = toEth(feeBase)
+          const totalVotes = Math.max(0, votersOriginal + votersChallenger)
 
-        const originalPreview = buildPreviewFromStored(parts, originalWordRaw)
-        const challengerPreview = buildPreviewFromStored(parts, challengerWordRaw)
-
-        const poolEth = toEth(poolBalance)
-        const poolUsd = poolEth * priceUsd
-        const feeEth = toEth(feeBase)
-        const totalSeconds = Math.max(1, Math.max(0, deadline - nowSec()))
-
-        return {
-          id,
-          originalPool1Id,
-          parts,
-          originalPreview,
-          originalWordRaw,
-          challengerPreview,
-          challengerWordRaw,
-          challengerUsername,
-          totalVotes,
-          claimed,
-          challengerWon,
-          poolEth,
-          poolUsd,
-          feeBaseWei: BigInt(feeBase ?? 0n),
-          feeEth,
-          deadline,
-          totalSeconds,
+          return {
+            id,
+            originalPool1Id,
+            parts,
+            originalPreview,
+            originalWordRaw,
+            challengerPreview,
+            challengerWordRaw,
+            challengerUsername,
+            totalVotes,
+            claimed,
+            challengerWon,
+            poolEth,
+            poolUsd,
+            feeBaseWei: BigInt(feeBase ?? 0n),
+            feeEth,
+            deadline,
+            totalSeconds: Math.max(1, Math.max(0, deadline - nowSec())),
+          }
+        } catch (e) {
+          // mark as skipped; we'll report misses
+          return { __skip: true }
         }
-      }))
+      })
 
-      setRounds(enriched.sort((a, b) => b.id - a.id))
+      const list = rows.filter((r) => r && !r.__skip)
+      const missed = rows.filter((r) => r && (r.__skip || r?.__error)).length
+      const statusMsg = missed > 0
+        ? `Loaded ${list.length} items (${missed} skipped due to RPC timeouts).`
+        : ''
+
+      if (controller.signal.aborted) return
+      setRounds(list)
+      if (statusMsg) setStatus(statusMsg)
+      persistCache(list, statusMsg)
     } catch (e) {
-      console.error('Error loading vote rounds', e)
-      setRounds([])
-      setStatus('Could not load voting rounds. Try Refresh.')
+      if (String(e?.message).includes('aborted')) return
+      console.error('Vote load fatal:', e)
+      setStatus('Failed to load votes. Showing cached view (if any).')
     } finally {
       if (!controller.signal.aborted) setLoading(false)
     }
-  }, [priceUsd])
+  }, [priceUsd, persistCache])
 
   useEffect(() => { loadAll() }, [loadAll])
+  useEffect(() => {
+    const t = setInterval(() => { loadAll() }, 60000) // soft auto-refresh
+    return () => clearInterval(t)
+  }, [loadAll])
 
   /* ---------------- on-chain refresh for one card ---------------- */
   async function reloadCard(id) {
     try {
-      const provider = new ethers.JsonRpcProvider(BASE_RPC)
+      const provider = new ethers.JsonRpcProvider(BASE_RPC, undefined, { staticNetwork: true })
       const ct = new ethers.Contract(CONTRACT_ADDRESS, abi, provider)
       const info = await ct.getPool2InfoFull(BigInt(id))
 
@@ -358,7 +402,7 @@ export default function VotePage() {
             : r
         )
       )
-    } catch { /* ignore */ }
+    } catch {}
   }
 
   /* ---------------- actions ---------------- */
@@ -398,7 +442,7 @@ export default function VotePage() {
     try {
       if (!address) await connect()
       setStatus('Claiming…')
-      // optimistic set while we handle benign RPC errors
+      // optimistic mark claimed to mask benign RPC flakes
       setRounds((prev) => prev.map((r) => (r.id === id ? { ...r, claimed: true } : r)))
       await claimPool2(id)
       setClaimedId(id)
@@ -409,7 +453,6 @@ export default function VotePage() {
       console.error('Claim error:', e)
       if (isBenignTxError(e)) {
         setStatus('⏳ Submitted, verifying on-chain…')
-        // keep optimistic flag, then confirm on-chain
         await reloadCard(id)
         const after = rounds.find((r) => r.id === id)
         if ((after?.claimed && !wasClaimed) || wasClaimed) {
@@ -419,7 +462,7 @@ export default function VotePage() {
           return
         }
       }
-      // revert optimistic flag if not confirmed
+      // revert if not confirmed
       setRounds((prev) => prev.map((r) => (r.id === id ? { ...r, claimed: wasClaimed } : r)))
       setStatus('❌ ' + (e?.shortMessage || e?.message || 'Error claiming prize'))
     }
@@ -617,7 +660,7 @@ export default function VotePage() {
                             variant="outline"
                             className="border-slate-600 text-slate-200 text-xs"
                             onClick={() => shareOrCast({ text: castOriginalText, url: roundUrl })}
-                            title="Cast Original to Warpcast"
+                            title="Cast Original"
                           >
                             Cast Original
                           </Button>
@@ -646,7 +689,7 @@ export default function VotePage() {
                             variant="outline"
                             className="border-slate-600 text-slate-200 text-xs"
                             onClick={() => shareOrCast({ text: castChallengerText, url: roundUrl })}
-                            title="Cast Challenger to Warpcast"
+                            title="Cast Challenger"
                           >
                             Cast Challenger
                           </Button>
@@ -707,17 +750,15 @@ export default function VotePage() {
                         </>
                       )}
 
-                      {/* Generic social (dynamic OG from /round/:id) */}
+                      {/* Generic social using shareOrCast to avoid Warpcast install page */}
                       <div className="ml-auto flex items-center gap-2 min-w-0">
-                        <a
-                          href={buildCastUrl(castGenericText, [roundUrl])}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        <Button
                           className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs shrink-0"
-                          title="Cast on Warpcast"
+                          onClick={() => shareOrCast({ text: castGenericText, url: roundUrl })}
+                          title="Cast"
                         >
                           Cast
-                        </a>
+                        </Button>
                         <Button
                           variant="outline"
                           className="border-slate-600 text-slate-200 text-xs"
